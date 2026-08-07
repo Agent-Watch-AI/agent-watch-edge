@@ -1,0 +1,52 @@
+{
+  "name": "@agentwatch/bridge",
+  "version": "0.1.0",
+  "description": "Telemetry bridge for AI coding agents: native hooks + native OpenTelemetry, normalized events, privacy-first.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "agentwatch": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepack": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agentwatch/bridge.git"
+  },
+  "keywords": [
+    "telemetry",
+    "opentelemetry",
+    "claude-code",
+    "codex",
+    "ai-coding-agents",
+    "observability",
+    "hooks"
+  ],
+  "dependencies": {
+    "smol-toml": "^1.3.1",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.0",
+    "eslint": "^9.17.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.19.0",
+    "vitest": "^2.1.8"
+  }
+}

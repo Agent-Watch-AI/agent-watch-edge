@@ -1,0 +1,87 @@
+import { execFile } from 'node:child_process';
+import path from 'node:path';
+import { normalizeRemote, remoteHash } from './remote-sanitize.js';
+import { debugLog } from '../core/logger.js';
+
+export interface GitContext {
+  repositoryRoot?: string;
+  repository?: string;
+  remote?: string;
+  repositoryHash?: string;
+  branch?: string;
+  commit?: string;
+  workingDirectory?: string;
+  changedFiles?: string[];
+}
+
+export interface GitContextOptions {
+  cwd: string;
+  includeChangedFiles: boolean;
+  timeoutMs?: number;
+  maxChangedFiles?: number;
+}
+
+type GitRunner = (args: string[], cwd: string, timeoutMs: number) => Promise<string | undefined>;
+
+const defaultRunner: GitRunner = (args, cwd, timeoutMs) =>
+  new Promise((resolve) => {
+    execFile('git', args, { cwd, timeout: timeoutMs, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout) => {
+      resolve(error ? undefined : stdout.trim());
+    });
+  });
+
+/**
+ * Collect repository context for event enrichment. Every failure degrades to
+ * "no data" — hooks must not break when git is missing or cwd is not a repo.
+ */
+export async function collectGitContext(options: GitContextOptions, run: GitRunner = defaultRunner): Promise<GitContext> {
+  const timeoutMs = options.timeoutMs ?? 1000;
+  const root = await run(['rev-parse', '--show-toplevel'], options.cwd, timeoutMs);
+  if (!root) return { workingDirectory: options.cwd };
+
+  const [branch, commit, remoteRaw, status] = await Promise.all([
+    run(['branch', '--show-current'], root, timeoutMs),
+    run(['rev-parse', 'HEAD'], root, timeoutMs),
+    run(['config', '--get', 'remote.origin.url'], root, timeoutMs),
+    options.includeChangedFiles ? run(['status', '--porcelain'], root, timeoutMs) : Promise.resolve(undefined)
+  ]);
+
+  const context: GitContext = {
+    repositoryRoot: root,
+    workingDirectory: options.cwd,
+    branch: branch || undefined,
+    commit: commit || undefined
+  };
+
+  if (remoteRaw) {
+    context.remote = normalizeRemote(remoteRaw); // credential-free, normalized form only
+    context.repositoryHash = remoteHash(remoteRaw);
+    context.repository = context.remote;
+  }
+  if (!context.repository) {
+    context.repository = path.basename(root);
+  }
+
+  if (status !== undefined) {
+    const maxFiles = options.maxChangedFiles ?? 50;
+    const files = status
+      .split('\n')
+      .filter(Boolean)
+      .map(parsePorcelainLine)
+      .filter((file): file is string => Boolean(file));
+    context.changedFiles = files.slice(0, maxFiles);
+    if (files.length > maxFiles) {
+      debugLog(`changedFiles truncated: ${files.length} -> ${maxFiles}`);
+    }
+  }
+  return context;
+}
+
+function parsePorcelainLine(line: string): string | undefined {
+  // Format: "XY path" or "XY orig -> renamed"
+  const body = line.slice(3);
+  if (!body) return undefined;
+  const renameSplit = body.split(' -> ');
+  const candidate = renameSplit[renameSplit.length - 1] ?? body;
+  return candidate.replace(/^"|"$/g, '');
+}

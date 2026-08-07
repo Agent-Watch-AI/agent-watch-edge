@@ -120,6 +120,15 @@ describe('Claude provider', () => {
       expect(await fs.readFile(settingsPath, 'utf8')).toBe('{ not json !!!');
     });
 
+    it('preserves restrictive file permissions on rewrite', async () => {
+      const settingsPath = claudeSettingsPath(world.env);
+      await writeJson(settingsPath, { model: 'opus' });
+      await fs.chmod(settingsPath, 0o600);
+      await installClaudeHooks(setupContext());
+      const mode = (await fs.stat(settingsPath)).mode & 0o777;
+      expect(mode).toBe(0o600);
+    });
+
     it('creates a backup before modifying an existing file', async () => {
       const settingsPath = claudeSettingsPath(world.env);
       await writeJson(settingsPath, { model: 'opus' });

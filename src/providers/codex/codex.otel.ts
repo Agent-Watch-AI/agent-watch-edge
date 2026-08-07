@@ -74,7 +74,8 @@ export class CodexOtelConfigurator implements NativeTelemetryConfigurator {
       return { ok: false, changed: false, messages: ['internal error: generated config.toml would not parse; nothing written'] };
     }
     await backupFile(configPath, context.paths.backupsDir, context.env.now());
-    await writeFileAtomic(configPath, next);
+    // The managed block may carry the bearer token: keep the file private.
+    await writeFileAtomic(configPath, next, context.config.token ? 0o600 : undefined);
 
     context.installState.agents['codex'] = {
       ...context.installState.agents['codex'],

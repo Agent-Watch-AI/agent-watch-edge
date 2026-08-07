@@ -170,6 +170,14 @@ describe('Codex provider', () => {
       expect(await fs.readFile(configPath, 'utf8')).toBe('[[[broken');
     });
 
+    it('keeps config.toml private when it carries a token', async () => {
+      const context = setupContext();
+      context.config.token = 'tok-abc';
+      await new CodexOtelConfigurator().configure(context);
+      const mode = (await fs.stat(codexConfigTomlPath(world.env))).mode & 0o777;
+      expect(mode).toBe(0o600);
+    });
+
     it('uninstall removes exactly the managed block', async () => {
       const configPath = codexConfigTomlPath(world.env);
       await fs.mkdir(path.dirname(configPath), { recursive: true });

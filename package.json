@@ -22,6 +22,7 @@
     "lint": "eslint src tests",
     "test": "vitest run",
     "test:watch": "vitest",
+    "example": "node example/server.mjs",
     "prepack": "npm run build"
   },
   "repository": {

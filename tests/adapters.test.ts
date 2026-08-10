@@ -24,8 +24,8 @@ describe('Claude adapter', () => {
     expect(event!.ai?.model).toBe('claude-sonnet-5');
   });
 
-  it('excludes prompt text by default but keeps length+hash evidence', () => {
-    const [event] = parseClaudeHookEvent(claude.claudeUserPromptSubmit, context());
+  it('excludes prompt text when capture.prompts is off but keeps length+hash evidence', () => {
+    const [event] = parseClaudeHookEvent(claude.claudeUserPromptSubmit, context({ prompts: false }));
     const json = JSON.stringify(event);
     expect(event!.event.type).toBe('prompt.submitted');
     expect(json).not.toContain('Refactor the auth middleware');
@@ -34,28 +34,43 @@ describe('Claude adapter', () => {
     expect(prompt.sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('includes prompt text when capture.prompts is enabled', () => {
-    const [event] = parseClaudeHookEvent(claude.claudeUserPromptSubmit, context({ prompts: true }));
+  it('includes prompt text by default', () => {
+    const [event] = parseClaudeHookEvent(claude.claudeUserPromptSubmit, context());
     expect(event!.metadata?.['promptText']).toContain('Refactor the auth middleware');
   });
 
-  it('classifies Bash as shell.started and hides the command by default', () => {
-    const [event] = parseClaudeHookEvent(claude.claudePreToolUseBash, context());
+  it('carries prompt_id as the turn id on every event of the turn', () => {
+    const [prompt] = parseClaudeHookEvent(claude.claudeUserPromptSubmit, context());
+    expect(prompt!.session.turnId).toBe(claude.claudeUserPromptSubmit.prompt_id);
+    const [tool] = parseClaudeHookEvent(claude.claudePostToolUseEdit, context());
+    expect(tool!.session.turnId).toBe(claude.claudePostToolUseEdit.prompt_id);
+    const [stop] = parseClaudeHookEvent(claude.claudeStop, context());
+    expect(stop!.session.turnId).toBe(claude.claudeStop.prompt_id);
+  });
+
+  it('classifies Bash as shell.started and hides the command when capture.toolInput is off', () => {
+    const [event] = parseClaudeHookEvent(claude.claudePreToolUseBash, context({ toolInput: false }));
     expect(event!.event.type).toBe('shell.started');
     expect(event!.tool?.name).toBe('Bash');
     expect(JSON.stringify(event)).not.toContain('npm test');
   });
 
-  it('includes shell command when capture.toolInput is enabled', () => {
-    const [event] = parseClaudeHookEvent(claude.claudePreToolUseBash, context({ toolInput: true }));
+  it('includes shell command by default', () => {
+    const [event] = parseClaudeHookEvent(claude.claudePreToolUseBash, context());
     expect(event!.metadata?.['command']).toBe('npm test');
   });
 
   it('maps Edit PostToolUse to file.edited with the file path', () => {
-    const [event] = parseClaudeHookEvent(claude.claudePostToolUseEdit, context());
+    const [event] = parseClaudeHookEvent(claude.claudePostToolUseEdit, context({ toolInput: false }));
     expect(event!.event.type).toBe('file.edited');
     expect(event!.metadata?.['filePath']).toBe('/Users/dev/acme/src/auth/middleware.ts');
     expect(JSON.stringify(event)).not.toContain('old_string');
+  });
+
+  it('capture.files=false drops per-file paths, not just Git changedFiles', () => {
+    const [event] = parseClaudeHookEvent(claude.claudePostToolUseEdit, context({ files: false, toolInput: false }));
+    expect(event!.event.type).toBe('file.edited');
+    expect(event!.metadata?.['filePath']).toBeUndefined();
   });
 
   it('parses MCP tool names into server/tool', () => {
@@ -67,14 +82,14 @@ describe('Claude adapter', () => {
   });
 
   it('maps failures to tool.failed with hashed error evidence', () => {
-    const [event] = parseClaudeHookEvent(claude.claudePostToolUseFailure, context());
+    const [event] = parseClaudeHookEvent(claude.claudePostToolUseFailure, context({ toolInput: false, toolOutput: false }));
     expect(event!.event.type).toBe('tool.failed');
     expect(event!.tool?.status).toBe('failed');
     expect(JSON.stringify(event)).not.toContain('Command failed');
   });
 
-  it('maps Stop to generation.completed without response text by default', () => {
-    const [event] = parseClaudeHookEvent(claude.claudeStop, context());
+  it('maps Stop to generation.completed without response text when capture.responses is off', () => {
+    const [event] = parseClaudeHookEvent(claude.claudeStop, context({ responses: false }));
     expect(event!.event.type).toBe('generation.completed');
     expect(JSON.stringify(event)).not.toContain('refactored the middleware');
   });
@@ -127,10 +142,11 @@ describe('Codex adapter', () => {
     expect(patch!.metadata?.['filePath']).toBe('/Users/dev/acme/src/users.ts');
   });
 
-  it('excludes prompt and tool output by default', () => {
-    const [prompt] = parseCodexHookEvent(codex.codexUserPromptSubmit, context());
+  it('excludes prompt and tool output when capture is off', () => {
+    const off = { prompts: false, toolInput: false, toolOutput: false };
+    const [prompt] = parseCodexHookEvent(codex.codexUserPromptSubmit, context(off));
     expect(JSON.stringify(prompt)).not.toContain('pagination');
-    const [post] = parseCodexHookEvent(codex.codexPostToolUseShell, context());
+    const [post] = parseCodexHookEvent(codex.codexPostToolUseShell, context(off));
     expect(JSON.stringify(post)).not.toContain('package.json');
   });
 

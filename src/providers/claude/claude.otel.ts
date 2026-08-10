@@ -1,6 +1,6 @@
 import { readJsonFile } from '../../storage/json-file.js';
 import { backupFile, writeFileAtomic } from '../../storage/atomic-file.js';
-import { otlpBaseUrl } from '../../config/config.js';
+import { enabledSignalNames, otelEnabled, otlpBaseUrl } from '../../config/config.js';
 import type { Env } from '../../core/env.js';
 import type { NativeTelemetryConfigurator, NativeTelemetryStatus, SetupContext, SetupOutcome } from '../provider.js';
 import { claudeSettingsPath } from './claude.detect.js';
@@ -9,20 +9,32 @@ import { claudeSettingsPath } from './claude.detect.js';
  * Claude Code native OpenTelemetry (verified: code.claude.com/docs/en/monitoring-usage, 2026-08).
  * Configured through the settings.json `env` block. Bearer auth goes through
  * the documented `otelHeadersHelper` so the token never lands in Claude's
- * settings file. Usage arrives at the backend as claude_code.token.usage /
- * claude_code.api_request keyed by session.id == hook session_id.
+ * settings file. Each claude_code.api_request becomes one llm.call. Enhanced
+ * traces add claude_code.llm_request spans with query_source/agent_id so
+ * child-agent traffic is not folded into the main agent.
+ *
+ * Signal selection comes from config.otel; disabled exporters are written as
+ * an explicit 'none' so a stale ambient OTEL_* default can never re-enable
+ * them. All signals off means no telemetry env at all (undefined).
  */
 export function desiredClaudeOtelEnv(context: SetupContext): Record<string, string> | undefined {
   const otlpBase = otlpBaseUrl(context.config);
   if (!otlpBase) return undefined;
-  return {
+  const signals = context.config.otel;
+  if (!otelEnabled(context.config)) return undefined;
+  const env: Record<string, string> = {
     CLAUDE_CODE_ENABLE_TELEMETRY: '1',
-    OTEL_METRICS_EXPORTER: 'otlp',
-    OTEL_LOGS_EXPORTER: 'otlp',
-    // No default protocol exists; must be explicit.
-    OTEL_EXPORTER_OTLP_PROTOCOL: 'http/protobuf',
+    OTEL_METRICS_EXPORTER: signals.metrics ? 'otlp' : 'none',
+    OTEL_LOGS_EXPORTER: signals.logs ? 'otlp' : 'none',
+    OTEL_TRACES_EXPORTER: signals.traces ? 'otlp' : 'none',
+    // No default protocol exists; must be explicit. JSON so the backend
+    // receives one wire format everywhere.
+    OTEL_EXPORTER_OTLP_PROTOCOL: 'http/json',
     OTEL_EXPORTER_OTLP_ENDPOINT: otlpBase
   };
+  // The beta flag only adds the llm_request spans; keep it tied to traces.
+  if (signals.traces) env['CLAUDE_CODE_ENHANCED_TELEMETRY_BETA'] = '1';
+  return env;
 }
 
 const HEADERS_HELPER_KEY = 'otelHeadersHelper';
@@ -33,12 +45,24 @@ export class ClaudeOtelConfigurator implements NativeTelemetryConfigurator {
   }
 
   async inspect(context: SetupContext): Promise<NativeTelemetryStatus> {
+    const disabled = !otelEnabled(context.config);
     const settingsPath = claudeSettingsPath(context.env);
     const read = await readJsonFile(settingsPath);
     if (read.state !== 'ok' || !isRecord(read.value)) {
+      if (disabled && read.state === 'missing') return { supported: true, configured: true, detail: 'disabled in config (otel)' };
       return { supported: true, configured: false, detail: read.state === 'invalid' ? 'settings unparseable' : 'no settings file' };
     }
-    const env = isRecord(read.value['env']) ? (read.value['env'] as Record<string, unknown>) : {};
+    const settings = read.value as Record<string, unknown>;
+    const env = isRecord(settings['env']) ? (settings['env'] as Record<string, unknown>) : {};
+    if (disabled) {
+      // Desired state is "no AgentWatch telemetry": configured unless keys
+      // from a previous setup are still in place.
+      const recorded = context.installState.agents['claude']?.otelOwnedKeys ?? [];
+      const leftover = recorded.some((key) => (key === HEADERS_HELPER_KEY ? settings[key] !== undefined : env[key] !== undefined));
+      return leftover
+        ? { supported: true, configured: false, detail: 'disabled in config, but previous telemetry env vars remain — run `agentwatch setup`' }
+        : { supported: true, configured: true, detail: 'disabled in config (otel)' };
+    }
     const desired = desiredClaudeOtelEnv(context);
     if (!desired) return { supported: true, configured: false, detail: 'no backend endpoint configured' };
 
@@ -55,7 +79,18 @@ export class ClaudeOtelConfigurator implements NativeTelemetryConfigurator {
 
   async configure(context: SetupContext): Promise<SetupOutcome> {
     const desired = desiredClaudeOtelEnv(context);
-    if (!desired) return { ok: false, changed: false, messages: ['no backend endpoint configured'] };
+    if (!desired) {
+      if (!otelEnabled(context.config)) {
+        const removed = await this.uninstall(context);
+        if (!removed.ok) return removed;
+        return {
+          ok: true,
+          changed: removed.changed,
+          messages: [removed.changed ? 'native OpenTelemetry disabled in config; previous configuration removed' : 'native OpenTelemetry disabled in config (otel: none)']
+        };
+      }
+      return { ok: false, changed: false, messages: ['no backend endpoint configured'] };
+    }
 
     const settingsPath = claudeSettingsPath(context.env);
     const read = await readJsonFile(settingsPath);
@@ -83,6 +118,12 @@ export class ClaudeOtelConfigurator implements NativeTelemetryConfigurator {
     const before = JSON.stringify(settings);
     settings['env'] = envBlock;
     Object.assign(envBlock, desired);
+    // Signals disabled since the previous run leave stale AgentWatch-owned
+    // keys behind (e.g. the enhanced-telemetry flag once traces go off).
+    for (const key of ownedKeys) {
+      if (key === HEADERS_HELPER_KEY) continue;
+      if (desired[key] === undefined) delete envBlock[key];
+    }
 
     const owned = new Set(Object.keys(desired));
     if (context.config.token) {
@@ -116,7 +157,7 @@ export class ClaudeOtelConfigurator implements NativeTelemetryConfigurator {
       ok: true,
       changed,
       messages: changed
-        ? ['native OpenTelemetry configured (token usage & cost export)', 'restart running Claude Code sessions to pick it up']
+        ? [`native OpenTelemetry configured (signals: ${enabledSignalNames(context.config.otel).join(', ')})`, 'restart running Claude Code sessions to pick it up']
         : ['native OpenTelemetry already configured']
     };
   }

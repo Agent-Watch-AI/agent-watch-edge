@@ -1,7 +1,7 @@
 {
   "name": "@agentwatch/bridge",
   "version": "0.1.0",
-  "description": "Telemetry bridge for AI coding agents: native hooks + native OpenTelemetry, normalized events, privacy-first.",
+  "description": "Telemetry bridge for Claude Code and Codex that attributes native OTel token costs to Git branches, Jira tickets and features.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -9,6 +9,13 @@
   },
   "bin": {
     "agentwatch": "./dist/cli.js"
+  },
+  "exports": {
+    "./events": "./dist/events/product-event.js",
+    "./llm-call": "./dist/events/llm-call.js",
+    "./otlp": "./dist/otlp/normalize.js",
+    "./aggregate-turn": "./dist/turns/aggregate-usage.js",
+    "./turn-summary": "./dist/turns/turn-summary.js"
   },
   "files": [
     "dist",
@@ -35,6 +42,9 @@
     "claude-code",
     "codex",
     "ai-coding-agents",
+    "ai-cost",
+    "cost-attribution",
+    "feature-cost",
     "observability",
     "hooks"
   ],

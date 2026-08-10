@@ -5,9 +5,10 @@ import { providers } from '../providers/registry.js';
 import type { SetupContext } from '../providers/provider.js';
 import { ManualEnrollmentProvider } from '../enrollment/manual-enrollment.js';
 import { ensureInstallationId, saveConfig } from '../config/config-store.js';
+import { defaultConfig, enabledSignalNames, eventsUrl, parseOtelSignals } from '../config/config.js';
 import { saveInstallState } from '../storage/install-state.js';
-import { collectGitContext } from '../git/git-context.js';
-import { buildCliContext, buildHookCommand } from './context.js';
+import { collectGitContext, gitUserEmail } from '../git/git-context.js';
+import { buildCliContext, buildHookCommand, buildQueue } from './context.js';
 import { bold, dim, println, symbols } from './ui.js';
 
 export interface SetupOptions {
@@ -15,6 +16,10 @@ export interface SetupOptions {
   setupUrl?: string;
   endpoint?: string;
   token?: string;
+  /** Developer identity for turn summaries; falls back to `git config user.email`. */
+  developerEmail?: string;
+  /** OTLP signal selection: "all", "none" or comma list of logs,traces,metrics. */
+  otel?: string;
   /** Non-interactive: fail instead of prompting. */
   yes?: boolean;
   ask?: (question: string) => Promise<string>;
@@ -30,6 +35,22 @@ export async function runSetup(options: SetupOptions): Promise<number> {
     println(`${symbols.fail} existing config at ${context.paths.configFile} is invalid: ${context.configError}`);
     println('  fix or delete it, then re-run setup');
     return 1;
+  }
+  if (context.configState === 'missing') {
+    // Fresh install: start from the real defaults (full capture), not the
+    // fail-safe metadata-only fallback the hook runtime uses.
+    context.config = defaultConfig();
+  }
+
+  // Validate before any prompt or file write: a typo must fail the whole run.
+  let otel = context.config.otel;
+  if (options.otel !== undefined) {
+    const parsedOtel = parseOtelSignals(options.otel);
+    if (!parsedOtel) {
+      println(`${symbols.fail} invalid --otel value "${options.otel}" (expected "all", "none" or a comma list of logs,traces,metrics)`);
+      return 1;
+    }
+    otel = parsedOtel;
   }
 
   // Step 1 — repository context (informational; never fails).
@@ -70,9 +91,45 @@ export async function runSetup(options: SetupOptions): Promise<number> {
     return 1;
   }
 
-  const config = ensureInstallationId({ ...context.config, endpoint: enrolled.endpoint, token: enrolled.token });
+  // Developer identity for turn summaries: flag > existing config > git; the
+  // interactive prompt only confirms/overrides the detected default.
+  let developerEmail = options.developerEmail ?? context.config.developerEmail ?? (await gitUserEmail(options.env.cwd, { home: options.env.home }));
+  if (!options.developerEmail && !context.config.developerEmail && ask) {
+    const answer = (await ask(`Developer email${developerEmail ? ` [${developerEmail}]` : ''}: `)).trim();
+    if (answer) developerEmail = answer;
+  }
+
+  const config = ensureInstallationId({
+    ...context.config,
+    endpoint: enrolled.endpoint,
+    token: enrolled.token,
+    developerEmail,
+    otel,
+    emit: { ...context.config.emit, llmCalls: true }
+  });
   await saveConfig(context.paths, config);
+  // Backlog queued for the previous backend must not silently expire pinned
+  // to a URL nothing will ever drain again — but moving captured content to a
+  // different backend is a routing decision only the user can make (the
+  // previous URL may belong to another organization). Ask; never assume.
+  const previousEventsUrl = eventsUrl(context.config);
+  const configuredEventsUrl = eventsUrl(config);
+  if (previousEventsUrl && configuredEventsUrl && previousEventsUrl !== configuredEventsUrl) {
+    const queue = buildQueue({ ...context, config });
+    const stranded = await queue.pendingFor(previousEventsUrl);
+    if (stranded > 0) {
+      const answer = ask ? (await ask(`${stranded} offline event(s) are queued for the previous backend (${previousEventsUrl}). Deliver them to the new backend? [y/N]: `)).trim().toLowerCase() : '';
+      if (answer === 'y' || answer === 'yes') {
+        const retargeted = await queue.retarget(configuredEventsUrl, previousEventsUrl);
+        println(retargeted ? `${symbols.ok} offline backlog re-routed to the new backend` : `${symbols.warn} queue busy; backlog not re-routed — re-run setup to retry`);
+      } else {
+        println(`${symbols.warn} keeping ${stranded} offline event(s) pinned to the previous backend; they expire after ${config.delivery.maxEventAgeDays} day(s)`);
+      }
+    }
+  }
   println(`${symbols.ok} backend: ${enrolled.endpoint}`);
+  if (developerEmail) println(`${symbols.ok} developer: ${developerEmail}`);
+  println(`${symbols.ok} otel signals: ${enabledSignalNames(otel).join(', ') || 'none'}`);
   println(dim(`  config: ${context.paths.configFile}`));
   println();
 
@@ -102,7 +159,7 @@ export async function runSetup(options: SetupOptions): Promise<number> {
 
   println(failures === 0 ? `${symbols.ok} setup complete` : `${symbols.warn} setup finished with ${failures} skipped step(s) — see above`);
   println(dim('  run `agentwatch status` anytime, `agentwatch doctor` to diagnose'));
-  return 0;
+  return failures === 0 ? 0 : 1;
 }
 
 function printOutcome(ok: boolean, messages: string[]): void {

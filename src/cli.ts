@@ -16,7 +16,7 @@ interface ParsedArgs {
 
 function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = { positional: [], flags: {} };
-  const valueFlags = new Set(['agent', 'endpoint', 'token']);
+  const valueFlags = new Set(['agent', 'endpoint', 'token', 'developer-email']);
   let index = 0;
   while (index < argv.length) {
     const arg = argv[index]!;
@@ -41,7 +41,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 const HELP = `agentwatch — telemetry bridge for AI coding agents
 
 Usage:
-  agentwatch setup [enrollment-url] [--endpoint <url>] [--token <token>] [--yes]
+  agentwatch setup [enrollment-url] [--endpoint <url>] [--token <token>] [--developer-email <email>] [--otel <signals>] [--yes]
   agentwatch status
   agentwatch doctor [--json]
   agentwatch uninstall [--agent <id>] [--purge]
@@ -51,8 +51,27 @@ Usage:
   agentwatch otel-headers
 
 Flags:
-  --verbose        extra diagnostics on stderr
-  --version        print version
+  --endpoint <url>          backend base URL events are sent to
+  --token <token>           bearer token for the backend
+  --developer-email <email> identity attached to turn summaries (default: git config user.email)
+  --otel <signals>          native OTLP signals agents export to the backend: comma list of
+                            logs,traces,metrics, or "all"/"none" (default: logs — the
+                            per-request usage/cost ledger the backend turns into llm.call)
+  --yes                     non-interactive: never prompt, fail if required values are missing
+                            (alias: --non-interactive)
+  --agent <id>              limit the command to one agent (claude | codex)
+  --purge                   uninstall: also delete ~/.agentwatch and queued local data
+  --dry-run                 hook: print resulting events to stdout instead of sending
+  --json                    doctor: machine-readable output
+  --verbose                 extra diagnostics on stderr
+  --version                 print version
+
+Configuration:
+  global                    ~/.agentwatch/config.json (written by setup)
+  per repository            .agentwatch.json in the repo root — overrides the global
+                            config for work in that repo; "token", "installationId",
+                            "developerEmail", "endpoint", "eventsUrl" and "otlpUrl"
+                            are global-only and ignored there
 `;
 
 async function main(): Promise<number> {
@@ -73,7 +92,9 @@ async function main(): Promise<number> {
         setupUrl: parsed.positional[0],
         endpoint: typeof parsed.flags['endpoint'] === 'string' ? (parsed.flags['endpoint'] as string) : undefined,
         token: typeof parsed.flags['token'] === 'string' ? (parsed.flags['token'] as string) : undefined,
-        yes: parsed.flags['yes'] === true
+        developerEmail: typeof parsed.flags['developer-email'] === 'string' ? (parsed.flags['developer-email'] as string) : undefined,
+        otel: typeof parsed.flags['otel'] === 'string' ? (parsed.flags['otel'] as string) : undefined,
+        yes: parsed.flags['yes'] === true || parsed.flags['non-interactive'] === true
       });
     }
     case 'status': {

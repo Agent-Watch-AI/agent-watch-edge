@@ -1,4 +1,4 @@
-import type { AgentWatchEvent } from '../events/canonical-event.js';
+import type { ProductEvent } from '../events/product-event.js';
 
 export interface DeliveryResult {
   ok: boolean;
@@ -9,5 +9,9 @@ export interface DeliveryResult {
 }
 
 export interface EventTransport {
-  send(events: AgentWatchEvent[]): Promise<DeliveryResult>;
+  send(events: ProductEvent[]): Promise<DeliveryResult>;
+  /** Where events go (events URL). Queued entries are pinned to it so a
+   *  later endpoint change never replays old events to the new backend;
+   *  re-routing the backlog takes the user's explicit consent in setup. */
+  readonly destination?: string;
 }

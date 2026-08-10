@@ -51,7 +51,7 @@ export async function runStatus(env: Env): Promise<number> {
         installState: context.installState
       };
       const otel = await provider.nativeTelemetry.inspect(setupContext);
-      if (otel.configured) println(`${symbols.ok} native OpenTelemetry configured`);
+      if (otel.configured) println(`${symbols.ok} native OpenTelemetry ${otel.detail ?? 'configured'}`);
       else if (otel.conflict) println(`${symbols.warn} native OpenTelemetry: ${otel.conflict}`);
       else println(`${symbols.off} native OpenTelemetry not configured`);
     }

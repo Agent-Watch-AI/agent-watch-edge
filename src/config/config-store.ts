@@ -12,13 +12,25 @@ export type ConfigLoadResult =
 /** Never throws: hooks must run even with a broken config file. */
 export async function loadConfig(paths: AgentWatchPaths): Promise<ConfigLoadResult> {
   const result = await readJsonFile(paths.configFile);
-  if (result.state === 'missing') return { state: 'missing', config: defaultConfig() };
-  if (result.state === 'invalid') return { state: 'invalid', error: result.error, config: defaultConfig() };
+  if (result.state === 'missing') return { state: 'missing', config: fallbackConfig() };
+  if (result.state === 'invalid') return { state: 'invalid', error: result.error, config: fallbackConfig() };
   const parsed = configSchema.safeParse(result.value);
   if (!parsed.success) {
-    return { state: 'invalid', error: parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; '), config: defaultConfig() };
+    return { state: 'invalid', error: parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; '), config: fallbackConfig() };
   }
   return { state: 'ok', config: parsed.data };
+}
+
+/**
+ * Fail-safe runtime fallback for a missing/corrupt config: hooks keep
+ * running, but content capture is OFF — an accidental config wipe must not
+ * silently start collecting prompts and tool I/O. Distinct from
+ * defaultConfig(), which is what setup writes for a deliberate install.
+ */
+function fallbackConfig(): AgentWatchConfig {
+  const config = defaultConfig();
+  config.capture = { ...config.capture, prompts: false, responses: false, toolInput: false, toolOutput: false };
+  return config;
 }
 
 export async function saveConfig(paths: AgentWatchPaths, config: AgentWatchConfig): Promise<void> {

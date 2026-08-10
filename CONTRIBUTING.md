@@ -19,8 +19,8 @@ or modify your real `~/.claude` / `~/.codex` configuration — keep it that way.
 
 1. Create `src/providers/<id>/` with detect / hooks / adapter / otel modules implementing the
    `AgentProvider` interface from `src/providers/provider.ts`.
-2. Translate native event names into canonical types (`src/events/canonical-event.ts`); never
-   leak provider naming into core modules.
+2. Translate hook names into internal canonical types. Public output must remain the two-member
+   `ProductEvent` union: `llm.call | turn.summary`.
 3. Verify the agent's **current official** hook and telemetry documentation — do not copy
    assumptions from other providers. Note doc/source references in code comments with a date.
 4. Config mutation rules (non-negotiable):
@@ -36,6 +36,6 @@ or modify your real `~/.claude` / `~/.codex` configuration — keep it that way.
 
 - The hook path runs inside coding agents' critical path: keep startup lean, avoid new
   dependencies, keep network timeouts short, and never write diagnostics to stdout.
-- Privacy first: new fields must default to metadata-only; content capture is opt-in and must
-  pass through the sanitizer.
+- Everything that leaves the machine must pass through the sanitizer and honor the `capture`
+  flags; the runtime fallback for a missing/corrupt config is metadata-only.
 - No daemons, proxies, or network interception.

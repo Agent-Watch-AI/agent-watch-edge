@@ -112,6 +112,38 @@ describe('Codex provider', () => {
       expect(file.hooks.Stop[0].hooks[0].command).toBe('notify-send done');
       expect(JSON.stringify(file)).not.toContain('agentwatch');
     });
+
+    it('keeps a user handler that shares a group with AgentWatch', async () => {
+      const hooksPath = codexHooksJsonPath(world.env);
+      await writeJson(hooksPath, {
+        hooks: {
+          Stop: [
+            {
+              hooks: [
+                { type: 'command', command: 'agentwatch hook --agent codex', timeout: 30 },
+                { type: 'command', command: 'notify-send done' }
+              ]
+            }
+          ]
+        }
+      });
+      const outcome = await uninstallCodexHooks(setupContext());
+      expect(outcome.changed).toBe(true);
+      const file = await readJson(hooksPath);
+      expect(file.hooks.Stop).toHaveLength(1);
+      expect(file.hooks.Stop[0].hooks).toEqual([{ type: 'command', command: 'notify-send done' }]);
+    });
+
+    it('preserves the top-level description when the last hook is removed', async () => {
+      const hooksPath = codexHooksJsonPath(world.env);
+      await writeJson(hooksPath, { description: 'my hooks file', hooks: {} });
+      const context = setupContext();
+      await installCodexHooks(context);
+      await uninstallCodexHooks(context);
+      const file = await readJson(hooksPath);
+      expect(file.description).toBe('my hooks file');
+      expect(file.hooks).toEqual({});
+    });
   });
 
   describe('native OpenTelemetry', () => {
@@ -132,8 +164,36 @@ describe('Codex provider', () => {
       expect(raw).toContain('>>> agentwatch managed block');
       const parsed = parseToml(raw) as any;
       expect(parsed.otel.exporter['otlp-http'].endpoint).toBe('https://backend.example.com/v1/otlp/v1/logs');
-      expect(parsed.otel.exporter['otlp-http'].protocol).toBe('binary');
+      expect(parsed.otel.exporter['otlp-http'].protocol).toBe('json');
       expect(parsed.otel.exporter['otlp-http'].headers.Authorization).toBe('Bearer tok-abc');
+      // Default signal selection: logs only.
+      expect(parsed.otel.trace_exporter).toBe('none');
+      expect(parsed.otel.metrics_exporter).toBe('none');
+    });
+
+    it('enables the trace exporter when otel.traces is on', async () => {
+      const context = setupContext();
+      context.config.otel = { logs: true, traces: true, metrics: false };
+      await new CodexOtelConfigurator().configure(context);
+      const parsed = parseToml(await fs.readFile(codexConfigTomlPath(world.env), 'utf8')) as any;
+      expect(parsed.otel.trace_exporter['otlp-http'].endpoint).toBe('https://backend.example.com/v1/otlp/v1/traces');
+    });
+
+    it('otel none removes the managed block and reports configured', async () => {
+      const configurator = new CodexOtelConfigurator();
+      const enabled = setupContext();
+      await configurator.configure(enabled);
+
+      const disabled = setupContext();
+      disabled.installState = enabled.installState;
+      disabled.config.otel = { logs: false, traces: false, metrics: false };
+      const outcome = await configurator.configure(disabled);
+      expect(outcome.ok).toBe(true);
+      expect(outcome.changed).toBe(true);
+      expect(await fs.readFile(codexConfigTomlPath(world.env), 'utf8')).not.toContain('[otel]');
+      const status = await configurator.inspect(disabled);
+      expect(status.configured).toBe(true);
+      expect(status.detail).toContain('disabled in config');
     });
 
     it('is idempotent and updates the managed block in place', async () => {
@@ -150,6 +210,19 @@ describe('Codex provider', () => {
       const updated = await fs.readFile(codexConfigTomlPath(world.env), 'utf8');
       expect(updated).toContain('other.example.com');
       expect(updated.match(/\[otel\]/g)).toHaveLength(1);
+    });
+
+    it('reports a stale managed block as incomplete', async () => {
+      const context = setupContext();
+      const configurator = new CodexOtelConfigurator();
+      await configurator.configure(context);
+      const configPath = codexConfigTomlPath(world.env);
+      const raw = await fs.readFile(configPath, 'utf8');
+      await fs.writeFile(configPath, raw.replace(/\ntrace_exporter = .*\n/, '\n'));
+
+      const status = await configurator.inspect(context);
+      expect(status.configured).toBe(false);
+      expect(status.detail).toContain('incomplete or stale');
     });
 
     it('skips when a foreign [otel] section exists', async () => {

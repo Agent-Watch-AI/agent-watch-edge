@@ -1,6 +1,7 @@
 import process from 'node:process';
 import type { Env } from '../core/env.js';
 import { providers } from '../providers/registry.js';
+import { loadEffectiveConfig } from '../config/repo-config.js';
 import { buildCliContext } from './context.js';
 import { bold, dim, println, symbols } from './ui.js';
 
@@ -21,8 +22,13 @@ export async function runAgents(env: Env): Promise<number> {
 /** `agentwatch config` — sanitized configuration dump. */
 export async function runConfig(env: Env): Promise<number> {
   const context = await buildCliContext(env);
-  println(dim(`# ${context.paths.configFile} (${context.configState})`));
-  const sanitized = { ...context.config, token: context.config.token ? '<redacted>' : undefined };
+  println(dim(`# global: ${context.paths.configFile} (${context.configState})`));
+  const effective = await loadEffectiveConfig(context.paths, env.cwd);
+  if (effective.repoConfigFile) {
+    println(dim(`# repo overrides: ${effective.repoConfigFile}`));
+  }
+  for (const warning of effective.warnings) println(dim(`# warning: ${warning}`));
+  const sanitized = { ...effective.config, token: effective.config.token ? '<redacted>' : undefined };
   println(JSON.stringify(sanitized, null, 2));
   return context.configState === 'invalid' ? 1 : 0;
 }

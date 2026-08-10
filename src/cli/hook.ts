@@ -2,8 +2,13 @@ import process from 'node:process';
 import type { Env } from '../core/env.js';
 import { debugLog, warnLog } from '../core/logger.js';
 import { getProvider } from '../providers/registry.js';
+import { loadEffectiveConfig } from '../config/repo-config.js';
 import { enrichEvents } from '../events/enrich.js';
+import { trackTurn } from '../turns/turn-tracker.js';
+import type { TurnSummaryEvent } from '../turns/turn-summary.js';
 import { deliverEvents } from '../transport/delivery.js';
+import { BackendCooldown } from '../transport/cooldown.js';
+import path from 'node:path';
 import { buildCliContext, buildQueue, buildTransport } from './context.js';
 
 const MAX_STDIN_BYTES = 10 * 1024 * 1024;
@@ -59,24 +64,52 @@ export async function runHook(agentId: string, options: HookRunOptions): Promise
 async function processPayload(agentId: string, rawPayload: unknown, options: HookRunOptions): Promise<void> {
   const provider = getProvider(agentId);
   if (!provider) return;
-  const context = await buildCliContext(options.env);
+  const baseContext = await buildCliContext(options.env);
+  const payloadCwd = typeof (rawPayload as Record<string, unknown>)?.['cwd'] === 'string' ? ((rawPayload as Record<string, unknown>)['cwd'] as string) : options.env.cwd;
+  // Repository-level .agentwatch.json overrides the global config for
+  // content capture derived from this payload; identity, endpoints, emission
+  // toggles and delivery tuning stay global-only.
+  const effective = await loadEffectiveConfig(baseContext.paths, payloadCwd);
+  const context = { ...baseContext, config: effective.config };
+
   const events = await provider.parseHookEvent(rawPayload, { env: options.env, config: context.config });
   if (events.length === 0) {
     debugLog('no canonical events produced');
     return;
   }
-  const payloadCwd = typeof (rawPayload as Record<string, unknown>)?.['cwd'] === 'string' ? ((rawPayload as Record<string, unknown>)['cwd'] as string) : options.env.cwd;
-  const enriched = await enrichEvents(events, { config: context.config, cwd: payloadCwd });
+  const enriched = await enrichEvents(events, { config: context.config, cwd: payloadCwd, home: options.env.home });
+
+  // Lifecycle events are internal assembly state. Only turn.summary leaves
+  // this path; llm.call records arrive through the native OTLP path.
+  const outbound: TurnSummaryEvent[] = [];
+  // Turn tracking always runs: besides producing the summary it resolves
+  // token usage and mirrors it onto the raw generation.completed event.
+  try {
+    const summary = await trackTurn({
+      agentId,
+      rawPayload,
+      events: enriched,
+      config: context.config,
+      turnsDir: context.paths.turnsDir,
+      locksDir: context.paths.locksDir,
+      env: options.env,
+      cwd: payloadCwd,
+      readOnly: options.dryRun === true
+    });
+    if (summary && context.config.emit.turnSummaries) outbound.push(summary);
+  } catch (error) {
+    debugLog('turn summary failed:', error);
+  }
 
   if (options.dryRun) {
     const writeStdout = options.writeStdout ?? ((text: string) => process.stdout.write(text));
-    writeStdout(JSON.stringify({ events: enriched }, null, 2) + '\n');
+    writeStdout(JSON.stringify({ events: outbound }, null, 2) + '\n');
     return;
   }
-
   const queue = buildQueue(context);
   const transport = buildTransport(context);
-  const outcome = await deliverEvents(enriched, transport, queue, context.config.delivery.drainBatchSize);
+  const cooldown = new BackendCooldown(path.join(context.paths.dataDir, 'backend-cooldown.json'), options.env.now);
+  const outcome = await deliverEvents(outbound, transport, queue, context.config.delivery.drainBatchSize, cooldown);
   debugLog(`delivery: sent=${outcome.delivered} queued=${outcome.queued} drained=${outcome.drained}`);
 }
 

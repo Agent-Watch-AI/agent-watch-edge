@@ -123,6 +123,9 @@ function baseEvent(payload: ClaudePayload, providerEventType: string, _context: 
     session: {
       id: payload.session_id,
       providerId: payload.session_id,
+      // prompt_id groups every event of one prompt→response turn and matches
+      // OTel prompt.id, which is what makes cost joins possible downstream.
+      turnId: payload.prompt_id,
       agentId: payload.agent_id
     },
     metadata: {
@@ -170,7 +173,8 @@ function applyToolFields(event: AgentWatchEvent, payload: ClaudePayload, provide
     if (typeof command === 'string') event.metadata = { ...event.metadata, command };
   }
   const filePath = extractFilePath(payload.tool_input);
-  if (filePath && (kind === 'file-read' || kind === 'file-edit')) {
+  // capture.files gates every per-file signal, not just Git changedFiles.
+  if (filePath && (kind === 'file-read' || kind === 'file-edit') && context.config.capture.files) {
     // Absolute for now; the enrichment stage relativizes against the repo root.
     event.metadata = { ...event.metadata, filePath };
   }

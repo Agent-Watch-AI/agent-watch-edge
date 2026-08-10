@@ -110,7 +110,7 @@ export function parseCodexHookEvent(rawPayload: unknown, context: HookContext): 
         if (command !== undefined) event.metadata = { ...event.metadata, command };
       }
       const filePath = extractFilePath(payload.tool_input);
-      if (filePath && (kind === 'file-read' || kind === 'file-edit')) {
+      if (filePath && (kind === 'file-read' || kind === 'file-edit') && context.config.capture.files) {
         event.metadata = { ...event.metadata, filePath };
       }
       if (context.config.capture.toolInput && payload.tool_input !== undefined) {

@@ -9,6 +9,8 @@ export interface EnrichOptions {
   config: AgentWatchConfig;
   /** Working directory reported by the agent's hook payload. */
   cwd: string;
+  /** Developer home directory; rewritten to `~` inside captured content. */
+  home?: string;
   gitTimeoutMs?: number;
 }
 
@@ -58,8 +60,53 @@ export async function enrichEvents(events: AgentWatchEvent[], options: EnrichOpt
     if (typeof filePath === 'string') {
       enriched.metadata = { ...enriched.metadata, filePath: toSafePath(filePath, git.repositoryRoot) };
     }
+    if (enriched.metadata) {
+      enriched.metadata = rewritePathsDeep(enriched.metadata, git.repositoryRoot, options.home) as Record<string, unknown>;
+    }
     return sanitizeValue(enriched);
   });
+}
+
+/**
+ * Rewrite path prefixes inside captured content (tool input/output, shell
+ * commands): repo-rooted paths become repo-relative, and the home directory
+ * becomes `~`, so usernames and machine layout don't leak. Textual and
+ * best-effort by design — arbitrary strings can still embed paths we cannot
+ * recognize.
+ */
+function rewritePathsDeep(value: unknown, repositoryRoot: string | undefined, home: string | undefined): unknown {
+  if (typeof value === 'string') {
+    let out = value;
+    // Boundary-aware: `/x/repo` must not fire inside `/x/repository`.
+    if (repositoryRoot) {
+      out = out.replace(pathPrefixPattern(repositoryRoot + path.sep), '');
+      out = out.replace(pathExactPattern(repositoryRoot), '.');
+    }
+    if (home) {
+      out = out.replace(pathPrefixPattern(home + path.sep), '~' + path.sep);
+      out = out.replace(pathExactPattern(home), '~');
+    }
+    return out;
+  }
+  if (Array.isArray(value)) return value.map((item) => rewritePathsDeep(item, repositoryRoot, home));
+  if (typeof value === 'object' && value !== null) {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, rewritePathsDeep(entry, repositoryRoot, home)]));
+  }
+  return value;
+}
+
+/** The prefix itself ends with a separator, so it is already boundary-safe. */
+function pathPrefixPattern(prefix: string): RegExp {
+  return new RegExp(escapeRegExp(prefix), 'g');
+}
+
+/** A bare directory reference: only when followed by a non-path-name character. */
+function pathExactPattern(dir: string): RegExp {
+  return new RegExp(escapeRegExp(dir) + `(?=[\\s"'\`)\\]}>,;:]|$)`, 'g');
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function relativize(root: string, target: string): string {

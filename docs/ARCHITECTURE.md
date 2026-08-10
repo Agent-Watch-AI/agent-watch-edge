@@ -42,13 +42,13 @@ No source code is ported; ideas only. Attribution given in README.
 
 Two telemetry sources, deliberately kept distinct:
 
-- **Source A — hooks**: agent invokes `agentwatch hook --agent <id>` with JSON on stdin. The
-  process parses via a provider adapter into canonical `AgentWatchEvent`s, enriches with Git
-  context, sanitizes, attempts one fast HTTP delivery (short timeout), falls back to a bounded
-  on-disk queue, writes the provider-safe response to stdout, exits. No daemon.
+- **Source A — hooks**: agent invokes `agentwatch hook --agent <id>` with JSON on stdin. Hook
+  lifecycle events are an internal assembly format used to build `turn.summary`; raw
+  session/tool/subagent events are never product records.
 - **Source B — native OTel**: `agentwatch setup` writes each agent's *official* telemetry
-  configuration so the agent itself exports OTLP (tokens/cost/model) straight to the backend. The
-  Bridge never re-derives token usage.
+  configuration so the agent exports per-request logs and multi-agent traces. The backend
+  normalizes completed requests to `llm.call`, durably upserts them, and finalizes the token,
+  cost and per-agent fields of `turn.summary`. Claude transcript totals are provisional only.
 
 Correlation happens downstream: both streams carry the provider session ID
 (Claude: hook `session_id` == OTel `session.id` **[docs]**; Codex: hook `thread_id`/`session_id` ==
@@ -65,29 +65,40 @@ paths and environment access flow through an injectable `Env` object so tests ne
 src/
   cli.ts                     # bin entry; fast-path dispatch for `hook`
   cli/                       # setup, status, doctor, uninstall, hook, agents, config, otel-headers
-  core/                      # env.ts (injectable HOME/env/exec), logger.ts (stderr-only), version.ts
-  events/                    # canonical-event.ts (types+zod), event-id.ts, canonical-types.ts
-  providers/                 # provider.ts (interfaces), registry.ts
+  core/                      # env.ts (injectable HOME/env), logger.ts (stderr-only), version.ts, which.ts
+  events/                    # canonical-event.ts (types), event-id.ts, enrich.ts (git + path rewrite)
+  providers/                 # provider.ts (interfaces), registry.ts, shared/ (tool classification)
     claude/                  # detect, hooks install/uninstall, adapter, otel configurator
     codex/                   # detect, hooks install/uninstall, adapter, otel configurator
-  git/                       # git-context.ts (execFile git, timeouts), remote-sanitize.ts
+  turns/                     # turn-state.ts, turn-tracker.ts, turn-summary.ts, claude-transcript.ts
+  billing/                   # billing-mode.ts (subscription vs api detection)
+  git/                       # git-context.ts (execFile git, timeouts)
   feature/                   # ticket-candidates.ts (branch → ticket evidence)
   privacy/                   # sanitizer.ts, secret-patterns.ts
-  transport/                 # transport.ts (interface), http-transport.ts, queue.ts, delivery.ts
-  config/                    # config.ts (schema), config-store.ts
+  transport/                 # transport.ts, http-transport.ts, queue.ts, delivery.ts, cooldown.ts
+  config/                    # config.ts (schema), config-store.ts, repo-config.ts (.agentwatch.json)
   enrollment/                # enrollment-provider.ts, manual-enrollment.ts
   storage/                   # paths.ts (XDG), atomic-file.ts, lock.ts, json-file.ts, install-state.ts
-  diagnostics/               # doctor-checks.ts
 tests/                       # vitest; fixtures/ with realistic provider payloads
 ```
 
-## 4. Canonical event schema (v1)
+## 4. Public product schema (v1)
+
+Exactly two public discriminators exist:
+
+- `llm.call`: one physical provider request/completion with stable call id, model, usage, cost,
+  session/turn/agent links, and joined Git/feature attribution.
+- `turn.summary`: one prompt→final-response aggregate with `llm_calls`, final totals,
+  `agent_usage[]`, and `usage_status`.
+
+All canonical lifecycle types below are internal. The queue and transport accept only the
+`ProductEvent = LlmCallEvent | TurnSummaryEvent` union.
 
 As specified in the product brief, with these refinements:
 
 - `session.providerId` preserved verbatim alongside a normalized `session.id` (same value for
   Claude/Codex; never invented).
-- `ai.usage.source: "native_otel" | "hook_payload" | "unknown"` and
+- `ai.usage.source: "native_otel" | "hook_payload" | "transcript" | "unknown"` and
   `ai.billingMode: "api" | "subscription" | "unknown"`.
 - `event.providerEventType` keeps the native name (`PostToolUse`, …).
 - `metadata.provider.*` namespaces raw provider identifiers we cannot normalize
@@ -118,14 +129,15 @@ As specified in the product brief, with these refinements:
 - **Response contract**: exit 0 + empty stdout is the safe passive no-op for every event (stdout
   on UserPromptSubmit/SessionStart is *injected into model context*, so we emit nothing).
   Diagnostics go to stderr only. Non-zero non-2 exit codes are non-blocking.
-- **Native OTel**: enabled via env vars in the settings.json `env` block:
+- **Native OTel**: mandatory via the settings.json `env` block:
   `CLAUDE_CODE_ENABLE_TELEMETRY=1`, `OTEL_METRICS_EXPORTER=otlp`, `OTEL_LOGS_EXPORTER=otlp`,
-  `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` (no default — must be explicit),
+  `OTEL_TRACES_EXPORTER=otlp`, `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1`,
+  `OTEL_EXPORTER_OTLP_PROTOCOL=http/json` (no default — must be explicit; JSON so the whole
+  wire is one format),
   `OTEL_EXPORTER_OTLP_ENDPOINT=<otlp base>`. Bearer auth via the documented `otelHeadersHelper`
   settings key pointing at `agentwatch otel-headers` — the token stays in `~/.agentwatch`, never
-  in Claude's settings. Usage arrives as `claude_code.token.usage` metrics and
-  `claude_code.api_request` log events (input/output/cacheRead/cacheCreation tokens, cost, model),
-  all carrying `session.id`.
+  in Claude's settings. Each `claude_code.api_request` becomes one `llm.call`; `query_source`
+  identifies main/subagent origin and `llm_request` traces add `agent_id` when available.
 
 ## 6. Codex integration **[docs]** (openai/codex @ main, developers.openai.com, 2026-08-07)
 
@@ -143,11 +155,10 @@ As specified in the product brief, with these refinements:
   `notify` (argv-JSON, `agent-turn-complete` only) is treated as legacy and not used.
 - Passive response: empty stdout + exit 0 is explicitly treated as success by Codex's
   output parser **[docs]**.
-- **Native OTel**: `[otel]` table in `~/.codex/config.toml` —
-  `exporter = { otlp-http = { endpoint, protocol = "binary", headers } }`. Defaults: log/trace
-  export off. Exported log events include `codex.sse_event` (`response.completed` carries
-  input/output/cached/reasoning token counts) and every event carries `conversation.id`,
-  `auth_mode` (`ApiKey`/`Chatgpt` → our `billingMode`), `model` — the correlation keys.
+- **Native OTel**: `[otel]` contains both `exporter` (logs) and `trace_exporter`; aggregate
+  metrics are disabled. `codex.sse_event`/`response.completed` and `codex.api_request` carry
+  per-request usage. Traces carry `thread.id`, `turn.id` and multi-agent spawn links, so child
+  thread usage remains separate from the root agent.
   Project-level `.codex/config.toml` ignores `otel`/`notify` keys, so we only write the user-level
   file. TOML editing strategy: never rewrite the user's file through parse→stringify (comments
   would be lost). We append a fenced, marker-delimited block
@@ -160,8 +171,9 @@ As specified in the product brief, with these refinements:
 
 `NativeTelemetryConfigurator` per provider (`supported/inspect/configure/uninstall`). Setup asks
 once for the backend base URL; derived endpoints (all overridable in `~/.agentwatch/config.json`):
-`<base>/v1/events` for hook events, `<base>/v1/otlp` as the OTLP base (standard OTLP/HTTP path
-appending yields `/v1/otlp/v1/metrics` etc. — kept configurable because collectors differ).
+`<base>/v1/events` for turn summaries, `<base>/v1/otlp` as the OTLP base (standard OTLP/HTTP
+paths append `/v1/metrics`, `/v1/logs` and `/v1/traces`; Claude aggregate metrics remain enabled
+as a compatibility path, while Codex aggregate metrics are disabled in its `[otel]` block).
 The Bridge does not convert or proxy OTLP; agents export directly. Ownership tracking: everything
 we write is recorded in `~/.agentwatch/install-state.json` so uninstall removes exactly what we
 added (with match-by-marker fallbacks).
@@ -171,11 +183,11 @@ added (with match-by-marker fallbacks).
 | stream | Claude Code | Codex |
 |---|---|---|
 | hook | `session_id`, `prompt_id`, `tool_use_id`, `agent_id` | `session_id`/`thread_id`, `turn_id`, `call_id` |
-| native OTel | `session.id`, `prompt.id`, `tool_use_id` | `conversation.id`, `turn` attrs |
+| native OTel | `request_id`, `session.id`, `prompt.id`, `query_source`, trace `agent_id` | response/request id, `conversation.id`, `thread.id`, `turn.id`, spawn edges |
 
-Canonical events carry these verbatim (`session.providerId`, `session.turnId`,
-`metadata.provider.*`). The Bridge never fabricates missing IDs; absent fields stay absent. The
-backend joins hook lifecycle + OTLP usage + Git/feature evidence.
+The backend never drops usage because an agent instance id is absent: the call stays in the turn
+total and degrades only to an agent-type or `unattributed` group. Calls are idempotent by
+`(provider, call_id)`; summaries by `id`.
 
 ## 9. Setup flow
 
@@ -187,7 +199,8 @@ backend joins hook lifecycle + OTLP usage + Git/feature evidence.
    future `RemoteEnrollmentProvider` (`agentwatch setup <enrollment-url>`) slots in without
    changing setup.
 4. Per detected agent: install hooks (merge, idempotent, backup + atomic write + post-write
-   validation) and configure native OTel.
+   validation) and configure mandatory native OTel. A conflict or incomplete exporter makes
+   setup fail instead of silently creating an accounting gap.
 5. Print summary + any manual steps (e.g. Codex hook approval, restarting agents).
 
 ## 10. Risks & unknowns
@@ -204,7 +217,11 @@ backend joins hook lifecycle + OTLP usage + Git/feature evidence.
 5. Claude OTel export goes to *one* endpoint per env-var set; if the user already exports
    telemetry elsewhere we must not clobber it → configurator skips + reports when foreign
    `OTEL_*` values exist.
-6. `claude_code.*` metric names and Codex `[otel]` shape are current today but explicitly
-   versioned nowhere — pinned in per-provider modules, covered by doctor, documented in README.
+6. Claude request-log attributes and Codex `[otel]` request/span shapes are current today but
+   explicitly versioned nowhere — pinned in per-provider modules, covered by doctor, documented
+   in README.
+8. End-to-end no-loss depends on the external OTLP receiver persisting each request before it
+   acknowledges the exporter. The bridge can require and diagnose export, but cannot make a
+   non-durable receiver lossless.
 7. Windows support: paths module isolates XDG/APPDATA decisions; hooks themselves are
    shell-command based and untested on Windows in this MVP (documented limitation).

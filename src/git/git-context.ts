@@ -21,12 +21,18 @@ export interface GitContextOptions {
   maxChangedFiles?: number;
 }
 
-type GitRunner = (args: string[], cwd: string, timeoutMs: number) => Promise<string | undefined>;
+type GitRunner = (args: string[], cwd: string, timeoutMs: number, home?: string) => Promise<string | undefined>;
 
-const defaultRunner: GitRunner = (args, cwd, timeoutMs) =>
+const defaultRunner: GitRunner = (args, cwd, timeoutMs, home) =>
   new Promise((resolve) => {
-    execFile('git', args, { cwd, timeout: timeoutMs, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout) => {
-      resolve(error ? undefined : stdout.trim());
+    // Honor the injected home so global git config (identity!) is read from
+    // it, not from the real $HOME — tests and sandboxes must stay isolated.
+    const env = home ? { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config') } : undefined;
+    execFile('git', args, { cwd, timeout: timeoutMs, maxBuffer: 1024 * 1024, windowsHide: true, env }, (error, stdout) => {
+      // Trailing-only trim: `status --porcelain` lines carry a significant
+      // leading space (" M file"); a full trim() would eat the first
+      // character of the first filename.
+      resolve(error ? undefined : stdout.replace(/\s+$/, ''));
     });
   });
 
@@ -75,6 +81,16 @@ export async function collectGitContext(options: GitContextOptions, run: GitRunn
     }
   }
   return context;
+}
+
+/** `git config user.email`, or undefined outside git / when unset. */
+export async function gitUserEmail(
+  cwd: string,
+  options: { timeoutMs?: number; home?: string; run?: GitRunner } = {}
+): Promise<string | undefined> {
+  const run = options.run ?? defaultRunner;
+  const email = await run(['config', '--get', 'user.email'], cwd, options.timeoutMs ?? 1000, options.home);
+  return email || undefined;
 }
 
 function parsePorcelainLine(line: string): string | undefined {

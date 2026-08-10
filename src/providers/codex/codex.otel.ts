@@ -1,17 +1,16 @@
 import fs from 'node:fs/promises';
 import { parse as parseToml } from 'smol-toml';
 import { backupFile, writeFileAtomic } from '../../storage/atomic-file.js';
-import { joinUrl, otlpBaseUrl } from '../../config/config.js';
+import { joinUrl, otlpBaseUrl, type AgentWatchConfig, type OtelConfig } from '../../config/config.js';
 import type { Env } from '../../core/env.js';
 import type { NativeTelemetryConfigurator, NativeTelemetryStatus, SetupContext, SetupOutcome } from '../provider.js';
 import { codexConfigTomlPath } from './codex.detect.js';
 
 /**
  * Codex native OpenTelemetry (verified against openai/codex source, 2026-08):
- * [otel] table in ~/.codex/config.toml; log export is opt-in via
- * `exporter = { otlp-http = { endpoint, protocol, headers } }`. Token usage
- * arrives as codex.sse_event log events keyed by conversation.id, which also
- * carry auth_mode (ApiKey/Chatgpt) for billing-mode attribution.
+ * [otel] table in ~/.codex/config.toml. Logs provide one response.completed /
+ * codex.api_request usage record per provider request; traces carry thread.id,
+ * turn.id and multi-agent linkage. The backend normalizes those into llm.call.
  *
  * Project-level .codex/config.toml ignores the `otel` key, so only the
  * user-level file works. We never rewrite the user's TOML through a parser
@@ -27,11 +26,28 @@ export class CodexOtelConfigurator implements NativeTelemetryConfigurator {
   }
 
   async inspect(context: SetupContext): Promise<NativeTelemetryStatus> {
+    const disabled = !codexOtelEnabled(context.config);
     const configPath = codexConfigTomlPath(context.env);
     const raw = await readFileOrUndefined(configPath);
-    if (raw === undefined) return { supported: true, configured: false, detail: 'no config.toml' };
+    if (raw === undefined) {
+      if (disabled) return { supported: true, configured: true, detail: 'disabled in config (otel)' };
+      return { supported: true, configured: false, detail: 'no config.toml' };
+    }
     const hasBlock = raw.includes(BLOCK_START);
-    if (hasBlock) return { supported: true, configured: true };
+    if (disabled) {
+      return hasBlock
+        ? { supported: true, configured: false, detail: 'disabled in config, but the AgentWatch [otel] block remains — run `agentwatch setup`' }
+        : { supported: true, configured: true, detail: 'disabled in config (otel)' };
+    }
+    if (hasBlock) {
+      const otlpBase = otlpBaseUrl(context.config);
+      if (!otlpBase) return { supported: true, configured: false, detail: 'no backend endpoint configured' };
+      const actual = extractBlock(raw);
+      const expected = renderBlock(otlpBase, context.config.token, context.config.otel).trim();
+      return actual === expected
+        ? { supported: true, configured: true }
+        : { supported: true, configured: false, detail: 'AgentWatch [otel] block is incomplete or stale — run `agentwatch setup`' };
+    }
     const parsed = tryParseToml(raw);
     if (parsed === undefined) return { supported: true, configured: false, detail: 'config.toml unparseable' };
     if (parsed['otel'] !== undefined) {
@@ -41,12 +57,21 @@ export class CodexOtelConfigurator implements NativeTelemetryConfigurator {
   }
 
   async configure(context: SetupContext): Promise<SetupOutcome> {
+    if (!codexOtelEnabled(context.config)) {
+      const removed = await this.uninstall(context);
+      if (!removed.ok) return removed;
+      return {
+        ok: true,
+        changed: removed.changed,
+        messages: [removed.changed ? 'native OpenTelemetry disabled in config; previous configuration removed' : 'native OpenTelemetry disabled in config (otel: none)']
+      };
+    }
     const otlpBase = otlpBaseUrl(context.config);
     if (!otlpBase) return { ok: false, changed: false, messages: ['no backend endpoint configured'] };
 
     const configPath = codexConfigTomlPath(context.env);
     const raw = (await readFileOrUndefined(configPath)) ?? '';
-    const block = renderBlock(otlpBase, context.config.token);
+    const block = renderBlock(otlpBase, context.config.token, context.config.otel);
 
     let next: string;
     if (raw.includes(BLOCK_START)) {
@@ -88,7 +113,7 @@ export class CodexOtelConfigurator implements NativeTelemetryConfigurator {
     return {
       ok: true,
       changed: true,
-      messages: ['native OpenTelemetry configured (token usage export)', 'restart running Codex sessions to pick it up']
+      messages: [`native OpenTelemetry configured (signals: ${codexSignalNames(context.config.otel).join(', ')})`, 'restart running Codex sessions to pick it up']
     };
   }
 
@@ -113,14 +138,31 @@ export class CodexOtelConfigurator implements NativeTelemetryConfigurator {
   }
 }
 
-function renderBlock(otlpBase: string, token: string | undefined): string {
-  // OTLP/HTTP log endpoint is the full path (docs example: .../v1/logs).
-  const endpoint = joinUrl(otlpBase, '/v1/logs');
+/** Codex exports logs and traces only; otel.metrics has no effect here. */
+function codexOtelEnabled(config: AgentWatchConfig): boolean {
+  return config.otel.logs || config.otel.traces;
+}
+
+function codexSignalNames(signals: OtelConfig): string[] {
+  return (['logs', 'traces'] as const).filter((name) => signals[name]);
+}
+
+function renderBlock(otlpBase: string, token: string | undefined, signals: OtelConfig): string {
+  // OTLP/HTTP signal endpoints are full paths.
+  const logsEndpoint = joinUrl(otlpBase, '/v1/logs');
+  const tracesEndpoint = joinUrl(otlpBase, '/v1/traces');
   const headers = token ? `, headers = { "Authorization" = "Bearer ${escapeTomlString(token)}" }` : '';
   return [
     BLOCK_START,
     '[otel]',
-    `exporter = { otlp-http = { endpoint = "${escapeTomlString(endpoint)}", protocol = "binary"${headers} } }`,
+    signals.logs
+      ? `exporter = { otlp-http = { endpoint = "${escapeTomlString(logsEndpoint)}", protocol = "json"${headers} } }`
+      : 'exporter = "none"',
+    signals.traces
+      ? `trace_exporter = { otlp-http = { endpoint = "${escapeTomlString(tracesEndpoint)}", protocol = "json"${headers} } }`
+      : 'trace_exporter = "none"',
+    // Codex has no useful OTLP metrics; stays off regardless of otel.metrics.
+    'metrics_exporter = "none"',
     BLOCK_END,
     ''
   ].join('\n');
@@ -138,6 +180,13 @@ function replaceBlock(raw: string, block: string | undefined): string | undefine
     return head.replace(/\n+$/, '\n') + tail;
   }
   return head + block + tail;
+}
+
+function extractBlock(raw: string): string | undefined {
+  const startIndex = raw.indexOf(BLOCK_START);
+  const endIndex = raw.indexOf(BLOCK_END);
+  if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) return undefined;
+  return raw.slice(startIndex, endIndex + BLOCK_END.length).trim();
 }
 
 function escapeTomlString(value: string): string {

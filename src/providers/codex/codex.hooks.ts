@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import { parse as parseToml } from 'smol-toml';
 import { readJsonFile } from '../../storage/json-file.js';
 import { backupFile, writeFileAtomic } from '../../storage/atomic-file.js';
-import { HOOK_COMMAND_MARKER, type SetupContext, type SetupOutcome } from '../provider.js';
+import { isAgentWatchHookCommand, type SetupContext, type SetupOutcome } from '../provider.js';
 import { codexConfigTomlPath, codexHooksJsonPath } from './codex.detect.js';
 
 /**
@@ -21,7 +21,9 @@ export const CODEX_HOOK_EVENTS = [
   'PermissionRequest',
   'Stop',
   'SubagentStart',
-  'SubagentStop'
+  'SubagentStop',
+  'PreCompact',
+  'PostCompact'
 ] as const;
 
 const HOOK_TIMEOUT_SECONDS = 30;
@@ -32,10 +34,26 @@ interface MatcherGroup {
   [key: string]: unknown;
 }
 
-function isAgentWatchGroup(group: unknown): group is MatcherGroup {
-  if (typeof group !== 'object' || group === null) return false;
-  const hooks = (group as MatcherGroup).hooks;
-  return Array.isArray(hooks) && hooks.some((hook) => typeof hook?.command === 'string' && hook.command.includes(HOOK_COMMAND_MARKER));
+function isAgentWatchHandler(hook: unknown): boolean {
+  return typeof hook === 'object' && hook !== null && typeof (hook as { command?: unknown }).command === 'string' && isAgentWatchHookCommand((hook as { command: string }).command);
+}
+
+/**
+ * Remove AgentWatch HANDLERS from every group, preserving user handlers that
+ * share a group with ours; drop groups left empty.
+ */
+function withoutAgentWatchHandlers(groups: unknown[]): unknown[] {
+  const out: unknown[] = [];
+  for (const group of groups) {
+    if (typeof group !== 'object' || group === null || !Array.isArray((group as MatcherGroup).hooks)) {
+      out.push(group);
+      continue;
+    }
+    const kept = (group as MatcherGroup).hooks.filter((hook) => !isAgentWatchHandler(hook));
+    if (kept.length === (group as MatcherGroup).hooks.length) out.push(group);
+    else if (kept.length > 0) out.push({ ...(group as MatcherGroup), hooks: kept });
+  }
+  return out;
 }
 
 export async function installCodexHooks(context: SetupContext): Promise<SetupOutcome> {
@@ -62,20 +80,16 @@ export async function installCodexHooks(context: SetupContext): Promise<SetupOut
   file['hooks'] = hooks;
 
   for (const eventName of CODEX_HOOK_EVENTS) {
-    const groups: unknown[] = Array.isArray(hooks[eventName]) ? (hooks[eventName] as unknown[]) : [];
+    const existing: unknown[] = Array.isArray(hooks[eventName]) ? (hooks[eventName] as unknown[]) : [];
+    const groups = withoutAgentWatchHandlers(existing);
+    groups.push({ hooks: [{ type: 'command', command: context.hookCommand, timeout: HOOK_TIMEOUT_SECONDS }] } satisfies MatcherGroup);
     hooks[eventName] = groups;
-    const desired: MatcherGroup = {
-      hooks: [{ type: 'command', command: context.hookCommand, timeout: HOOK_TIMEOUT_SECONDS }]
-    };
-    const existingIndex = groups.findIndex(isAgentWatchGroup);
-    if (existingIndex >= 0) groups[existingIndex] = desired;
-    else groups.push(desired);
   }
   for (const [eventName, value] of Object.entries(hooks)) {
     if ((CODEX_HOOK_EVENTS as readonly string[]).includes(eventName) || !Array.isArray(value)) continue;
-    const filtered = value.filter((group) => !isAgentWatchGroup(group));
+    const filtered = withoutAgentWatchHandlers(value);
     if (filtered.length === 0) delete hooks[eventName];
-    else if (filtered.length !== value.length) hooks[eventName] = filtered;
+    else if (JSON.stringify(filtered) !== JSON.stringify(value)) hooks[eventName] = filtered;
   }
 
   const changed = JSON.stringify(file) !== before;
@@ -119,8 +133,8 @@ export async function uninstallCodexHooks(context: SetupContext): Promise<SetupO
   let changed = false;
   for (const [eventName, value] of Object.entries(hooks)) {
     if (!Array.isArray(value)) continue;
-    const filtered = value.filter((group) => !isAgentWatchGroup(group));
-    if (filtered.length !== value.length) {
+    const filtered = withoutAgentWatchHandlers(value);
+    if (JSON.stringify(filtered) !== JSON.stringify(value)) {
       changed = true;
       if (filtered.length === 0) delete hooks[eventName];
       else hooks[eventName] = filtered;
@@ -129,12 +143,9 @@ export async function uninstallCodexHooks(context: SetupContext): Promise<SetupO
 
   if (changed) {
     await backupFile(hooksPath, context.paths.backupsDir, context.env.now());
-    if (Object.keys(hooks).length === 0 && Object.keys(file).every((key) => key === 'hooks' || key === 'description')) {
-      // File only ever contained hook config; leave an empty-but-valid file.
-      await writeFileAtomic(hooksPath, JSON.stringify({ hooks: {} }, null, 2) + '\n');
-    } else {
-      await writeFileAtomic(hooksPath, JSON.stringify(file, null, 2) + '\n');
-    }
+    // Preserve every top-level field Codex accepts (description); only the
+    // hook entries we own are gone.
+    await writeFileAtomic(hooksPath, JSON.stringify(file, null, 2) + '\n');
   }
   const codexState = context.installState.agents['codex'];
   if (codexState) {

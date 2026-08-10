@@ -1,4 +1,4 @@
-import type { AgentWatchEvent } from '../events/canonical-event.js';
+import type { ProductEvent } from '../events/product-event.js';
 import type { DeliveryResult, EventTransport } from './transport.js';
 
 export interface HttpTransportOptions {
@@ -20,7 +20,11 @@ export class HttpTransport implements EventTransport {
     this.fetchFn = options.fetchFn ?? fetch;
   }
 
-  async send(events: AgentWatchEvent[]): Promise<DeliveryResult> {
+  get destination(): string {
+    return this.options.eventsUrl;
+  }
+
+  async send(events: ProductEvent[]): Promise<DeliveryResult> {
     if (events.length === 0) return { ok: true, retryable: false };
     const headers: Record<string, string> = {
       'content-type': 'application/json',

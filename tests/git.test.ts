@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { collectGitContext } from '../src/git/git-context.js';
+import { collectGitContext, gitUserEmail } from '../src/git/git-context.js';
 import { normalizeRemote, remoteHash, stripRemoteCredentials } from '../src/git/remote-sanitize.js';
 import { makeTempEnv, type TempWorld } from './helpers.js';
 
@@ -21,6 +21,21 @@ describe('remote sanitization', () => {
 
   it('hashes remotes deterministically', () => {
     expect(remoteHash('https://github.com/acme/repo.git')).toBe(remoteHash('git@github.com:acme/repo.git'));
+  });
+});
+
+describe('gitUserEmail isolation', () => {
+  let world: TempWorld;
+  beforeEach(async () => {
+    world = await makeTempEnv();
+  });
+  afterEach(() => world.cleanup());
+
+  it('honors the injected home and never reads the real global gitconfig', async () => {
+    // The temp home has no .gitconfig; whatever the developer's real global
+    // user.email is, it must not leak into a run with an injected home.
+    const email = await gitUserEmail(world.home, { home: world.home });
+    expect(email).toBeUndefined();
   });
 });
 
@@ -56,6 +71,15 @@ describe('collectGitContext', () => {
     expect(context.remote).toBe('github.com/acme/backend');
     expect(JSON.stringify(context)).not.toContain('s3cret');
     expect(context.changedFiles).toContain('dirty.txt');
+  });
+
+  it('keeps the first porcelain line intact when it starts with a space (unstaged modification)', async () => {
+    // `git status --porcelain` for an unstaged edit is " M file" — a leading
+    // space. If the runner trims it away, the parser eats the first character
+    // of the first filename ("CHANGELOG.md" -> "HANGELOG.md").
+    await fs.writeFile(path.join(repoDir, 'committed.txt'), 'modified');
+    const context = await collectGitContext({ cwd: repoDir, includeChangedFiles: true });
+    expect(context.changedFiles).toContain('committed.txt');
   });
 
   it('degrades gracefully outside a repository', async () => {

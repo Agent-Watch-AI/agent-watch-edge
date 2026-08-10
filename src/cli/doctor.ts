@@ -6,8 +6,15 @@ import type { Env } from '../core/env.js';
 import { providers } from '../providers/registry.js';
 import type { SetupContext } from '../providers/provider.js';
 import { eventsUrl, otlpBaseUrl } from '../config/config.js';
+import { loadEffectiveConfig } from '../config/repo-config.js';
+import { findExecutable } from '../core/which.js';
+import { parseVersion, meetsMinVersion } from '../core/version.js';
 import { buildCliContext, buildHookCommand, buildQueue } from './context.js';
 import { bold, dim, println, symbols } from './ui.js';
+
+/** prompt_id (== OTel prompt.id) appeared in this Claude Code release; older
+ *  versions fall back to session-scoped turn tracking with empty turn_id. */
+const CLAUDE_MIN_VERSION_FOR_PROMPT_ID = '2.1.196';
 
 type Level = 'ok' | 'warn' | 'fail';
 
@@ -82,6 +89,9 @@ export async function runDoctor(env: Env, options: { json?: boolean } = {}): Pro
       continue;
     }
     checks.push({ name: `${provider.displayName} detected`, level: 'ok', detail: detection.evidence.join('; ') });
+    if (provider.id === 'claude') {
+      checks.push(await claudeVersionCheck(env));
+    }
     checks.push({
       name: `${provider.displayName} hooks`,
       level: detection.hooksInstalled ? 'ok' : 'warn',
@@ -98,8 +108,10 @@ export async function runDoctor(env: Env, options: { json?: boolean } = {}): Pro
       const otelStatus = await provider.nativeTelemetry.inspect(setupContext);
       checks.push({
         name: `${provider.displayName} native OpenTelemetry`,
-        level: otelStatus.configured ? 'ok' : otelStatus.conflict ? 'warn' : 'warn',
-        detail: otelStatus.configured ? 'configured' : (otelStatus.conflict ?? otelStatus.detail ?? 'not configured')
+        level: otelStatus.configured ? 'ok' : 'fail',
+        detail: otelStatus.configured
+          ? (otelStatus.detail ?? 'configured (llm.call ledger enabled)')
+          : (otelStatus.conflict ?? otelStatus.detail ?? 'not configured — llm.call records would be lost')
       });
     }
   }
@@ -116,13 +128,29 @@ export async function runDoctor(env: Env, options: { json?: boolean } = {}): Pro
   checks.push(await writableCheck('data directory writable', context.paths.dataDir));
   checks.push(await writableCheck('config directory writable', context.paths.configDir));
 
-  // Privacy posture
-  const capture = context.config.capture;
-  const contentFlags = (['prompts', 'responses', 'toolInput', 'toolOutput'] as const).filter((flag) => capture[flag]);
+  // Repository overrides for the current directory; privacy posture is
+  // reported from the EFFECTIVE config so it matches what hooks actually do
+  // here.
+  let effectiveCapture = context.config.capture;
+  try {
+    const effective = await loadEffectiveConfig(context.paths, env.cwd);
+    effectiveCapture = effective.config.capture;
+    if (effective.repoConfigFile) {
+      checks.push({
+        name: 'repo config',
+        level: effective.warnings.length > 0 ? 'warn' : 'ok',
+        detail: effective.warnings.length > 0 ? `${effective.repoConfigFile}: ${effective.warnings.join('; ')}` : effective.repoConfigFile
+      });
+    }
+  } catch {
+    // Repo overrides are best-effort; their absence is not a finding.
+  }
+
+  const contentFlags = (['prompts', 'responses', 'toolInput', 'toolOutput'] as const).filter((flag) => effectiveCapture[flag]);
   checks.push({
     name: 'privacy',
     level: 'ok',
-    detail: contentFlags.length === 0 ? 'content capture disabled (metadata only)' : `content capture ENABLED for: ${contentFlags.join(', ')}`
+    detail: contentFlags.length === 0 ? 'content capture disabled (metadata only)' : `content capture ENABLED for: ${contentFlags.join(', ')} (effective for this directory)`
   });
 
   if (options.json) {
@@ -149,6 +177,23 @@ async function writableCheck(name: string, dir: string): Promise<Check> {
   } catch (error) {
     return { name, level: 'fail', detail: `${dir}: ${(error as Error).message}` };
   }
+}
+
+async function claudeVersionCheck(env: Env): Promise<Check> {
+  const name = 'Claude Code version';
+  const bin = findExecutable(env, 'claude');
+  if (!bin) return { name, level: 'warn', detail: `claude not on PATH; cannot verify >= ${CLAUDE_MIN_VERSION_FOR_PROMPT_ID} (needed for turn correlation)` };
+  const output = await new Promise<string | undefined>((resolve) => {
+    execFile(bin, ['--version'], { timeout: 5000 }, (error, stdout) => resolve(error ? undefined : stdout));
+  });
+  const version = output ? parseVersion(output) : undefined;
+  if (!version) return { name, level: 'warn', detail: `could not determine version (need >= ${CLAUDE_MIN_VERSION_FOR_PROMPT_ID} for turn correlation)` };
+  const ok = meetsMinVersion(version, CLAUDE_MIN_VERSION_FOR_PROMPT_ID);
+  return {
+    name,
+    level: ok ? 'ok' : 'warn',
+    detail: ok ? version : `${version} — prompt_id turn correlation needs >= ${CLAUDE_MIN_VERSION_FOR_PROMPT_ID}; turn_id will be empty`
+  };
 }
 
 function execGitVersion(): Promise<string | undefined> {

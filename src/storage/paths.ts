@@ -12,6 +12,8 @@ export interface AgentWatchPaths {
   queueDir: string;
   locksDir: string;
   backupsDir: string;
+  /** Per-session accumulator state for turn summaries. */
+  turnsDir: string;
 }
 
 export function resolvePaths(env: Env): AgentWatchPaths {
@@ -24,7 +26,8 @@ export function resolvePaths(env: Env): AgentWatchPaths {
     dataDir,
     queueDir: path.join(dataDir, 'queue'),
     locksDir: path.join(dataDir, 'locks'),
-    backupsDir: path.join(dataDir, 'backups')
+    backupsDir: path.join(dataDir, 'backups'),
+    turnsDir: path.join(dataDir, 'turns')
   };
 }
 

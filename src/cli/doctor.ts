@@ -92,6 +92,18 @@ export async function runDoctor(env: Env, options: { json?: boolean } = {}): Pro
     if (provider.id === 'claude') {
       checks.push(await claudeVersionCheck(env));
     }
+    if (provider.id === 'cursor') {
+      checks.push({
+        name: 'Cursor token usage',
+        level: 'warn',
+        detail: 'Cursor transcripts carry no token usage yet — Cursor turn summaries stay usage_status=pending until Cursor enriches them'
+      });
+      checks.push({
+        name: 'Cursor CLI hooks',
+        level: 'warn',
+        detail: 'cursor-agent (CLI) currently emits only shell hook events (known Cursor issue); IDE sessions are fully covered'
+      });
+    }
     checks.push({
       name: `${provider.displayName} hooks`,
       level: detection.hooksInstalled ? 'ok' : 'warn',

@@ -11,7 +11,9 @@ export interface ContentEvidence {
 
 export type TurnRecord =
   | { kind: 'prompt'; at: string; turnId?: string; text?: string; evidence?: ContentEvidence }
-  | { kind: 'tool'; at: string; turnId?: string; tool?: string; filePath?: string };
+  | { kind: 'tool'; at: string; turnId?: string; tool?: string; filePath?: string; access?: 'read' | 'edit' }
+  /** Response text delivered outside the Stop event (Cursor's afterAgentResponse). */
+  | { kind: 'response'; at: string; turnId?: string; text?: string; evidence?: ContentEvidence };
 
 export interface TurnStateEntry {
   file: string;
@@ -143,5 +145,5 @@ function safeName(recordId: string): string {
 function isRecord(value: unknown): value is TurnRecord {
   if (typeof value !== 'object' || value === null) return false;
   const record = value as Record<string, unknown>;
-  return (record['kind'] === 'prompt' || record['kind'] === 'tool') && typeof record['at'] === 'string';
+  return (record['kind'] === 'prompt' || record['kind'] === 'tool' || record['kind'] === 'response') && typeof record['at'] === 'string';
 }

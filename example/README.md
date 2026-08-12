@@ -1,8 +1,9 @@
 # Example backend
 
 A zero-dependency logging server for trying AgentWatch Bridge locally. It accepts
-`turn.summary` on `/v1/events` and native agent OTLP on `/v1/otlp/v1/*`. A production receiver
-must normalize completed requests to `llm.call` and durably upsert before acknowledging OTLP.
+`turn.summary` on `/v1/events` and native agent OTLP on
+`/v1/otlp/v1/{logs,traces,metrics}`. A production receiver must normalize completed requests
+to `llm.call` and durably upsert before acknowledging OTLP.
 
 ## Try it end to end
 
@@ -21,10 +22,9 @@ node dist/cli.js setup --endpoint http://127.0.0.1:8787 --yes
 # or, with a global install/npm link: agentwatch setup --endpoint http://127.0.0.1:8787 --yes
 ```
 
-Then open a **new** Claude Code (or Codex) session in any repository and do something — ask it
-to read a file or run a command. Terminal 1 prints one `TURN.SUMMARY` for each completed turn,
-one normalized `LLM.CALL` for each completed provider request, and `OTLP:*` diagnostics for the
-native log/trace batches. Hook lifecycle events are internal and are not product records.
+Then open a **new** Claude Code, Codex or Cursor session in any repository and do something.
+Terminal 1 prints a `TURN.SUMMARY` for each completed turn. Claude Code and Codex also produce
+normalized `LLM.CALL` records and `OTLP:*` diagnostics; Cursor has no native OTel export.
 
 For Codex, remember the one-time trust step: run `codex`, type `/hooks`, trust the AgentWatch
 entries.

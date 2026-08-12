@@ -20,7 +20,16 @@ export async function writeFileAtomic(filePath: string, contents: string, mode?:
   }
   const tmp = path.join(dir, `.${path.basename(filePath)}.${crypto.randomBytes(6).toString('hex')}.tmp`);
   try {
-    await fs.writeFile(tmp, contents, effectiveMode !== undefined ? { mode: effectiveMode } : {});
+    // fsync before rename: without it a crash/power loss shortly after the
+    // rename can leave the new name pointing at zero-length or partial data —
+    // rename alone orders metadata, not file contents.
+    const handle = await fs.open(tmp, 'w', effectiveMode);
+    try {
+      await handle.writeFile(contents);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     await fs.rename(tmp, filePath);
   } catch (error) {
     await fs.rm(tmp, { force: true });

@@ -86,7 +86,7 @@ export function isAgentWatchHookCommand(command: string): boolean {
   const hookIndex = tokens.indexOf('hook');
   if (hookIndex < 1 || tokens[hookIndex + 1] !== '--agent') return false;
   const agent = tokens[hookIndex + 2];
-  if (agent !== 'claude' && agent !== 'codex') return false;
+  if (agent !== 'claude' && agent !== 'codex' && agent !== 'cursor') return false;
   // Installed commands contain no trailing shell fragments or extra argv.
   if (hookIndex + 3 !== tokens.length) return false;
 

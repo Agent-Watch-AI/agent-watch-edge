@@ -2,15 +2,24 @@ import type { LlmCallEvent } from '../events/llm-call.js';
 import type { AgentUsageSummary, TurnSummaryEvent, TurnUsageStatus } from './turn-summary.js';
 
 export interface AggregateTurnUsageOptions {
-  /** False while the backend still expects late OTLP batches. */
+  /**
+   * True only when the backend has decided no further OTLP batches can arrive
+   * for this turn (watermark / quiet period / session end). OTLP delivery is
+   * asynchronous and retried, so the first non-empty batch proves nothing
+   * about completeness — without this explicit terminal signal the summary is
+   * finalized as 'partial', never 'complete'.
+   */
   complete?: boolean;
   /**
    * All turn summaries of the same session, including the one being
    * finalized. With this context every window-joined call is attributed to
    * exactly one summary of the session — the best-matching owner — so
    * overlapping windows cannot double-count and degraded summaries without
-   * a started_at can still be finalized. Without it the window join stays
-   * conservative: it requires a lower time bound and may undercount.
+   * a started_at can still be finalized. Without it there is no window join
+   * at all: per-summary containment alone cannot arbitrate overlapping
+   * windows, and letting each summary claim every contained call would
+   * double-count usage and cost across successive finalizations. Calls then
+   * match only through an exact turn id.
    */
   sessionSummaries?: readonly TurnSummaryEvent[];
 }
@@ -66,9 +75,11 @@ export function aggregateTurnUsage(
   // The call ledger is authoritative only once it actually carries usage.
   // Matched calls without any token/cost data (failed requests, token-less
   // telemetry) must not erase provisional transcript totals or stamp a
-  // completeness the ledger cannot back.
+  // completeness the ledger cannot back. 'complete' additionally requires the
+  // caller's explicit terminal signal — a first batch says nothing about
+  // whether more are coming.
   const ledgerHasUsage = Object.keys(totals).length > 0;
-  const usageStatus: TurnUsageStatus = options.complete === false ? 'partial' : ledgerHasUsage ? 'complete' : summary.usage_status;
+  const usageStatus: TurnUsageStatus = ledgerHasUsage ? (options.complete === true ? 'complete' : 'partial') : options.complete === false ? 'partial' : summary.usage_status;
   const usageOverride = ledgerHasUsage
     ? {
         // Replace provisional transcript totals wholesale; mixing sources
@@ -94,25 +105,20 @@ export function aggregateTurnUsage(
 /**
  * Decide whether `summary` is the turn a window-joined call belongs to.
  *
- * With the session's full summary set, the owner is the containing summary
- * with the latest start — matching the transcript path, which attributes an
- * ambiguous overlap to the newer prompt — and summaries without a lower
- * bound only claim calls no bounded summary contains. Without the set, a
- * finite lower bound is mandatory: claiming every earlier session call would
- * double-count it across successive finalizations.
+ * The owner is the containing summary with the latest start — matching the
+ * transcript path, which attributes an ambiguous overlap to the newer
+ * prompt — and summaries without a lower bound only claim calls no bounded
+ * summary contains. Ownership can only be arbitrated across the session's
+ * full summary set: a lone summary claiming every call its window contains
+ * would double-count overlapping turns, so without `sessionSummaries` the
+ * window join is disabled entirely.
  */
 function ownsWindowJoin(summary: TurnSummaryEvent, call: LlmCallEvent, sessionSummaries?: readonly TurnSummaryEvent[]): boolean {
+  if (!sessionSummaries || sessionSummaries.length === 0) return false;
   const callAt = Date.parse(call.ended_at);
   // A call with an unusable timestamp cannot be placed in any window; it can
   // still reach a summary through an exact turn_id match.
   if (!Number.isFinite(callAt)) return false;
-
-  if (!sessionSummaries || sessionSummaries.length === 0) {
-    const startedAt = summary.started_at ? Date.parse(summary.started_at) : NaN;
-    if (!Number.isFinite(startedAt) || callAt < startedAt) return false;
-    const endedAt = Date.parse(summary.ended_at);
-    return !Number.isFinite(endedAt) || callAt <= endedAt;
-  }
 
   if (!containsCall(summary, callAt)) return false;
   const pool = sessionSummaries.some((candidate) => candidate.id === summary.id) ? sessionSummaries : [...sessionSummaries, summary];

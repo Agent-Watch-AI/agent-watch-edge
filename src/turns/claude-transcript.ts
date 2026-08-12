@@ -124,15 +124,37 @@ async function readTurnUsageOnce(
   if (byMessageId.size === 0) return undefined;
 
   const result: TurnUsage = {};
+  // A turn's window can mix models (subagents, title generation). Report the
+  // model that produced the most tokens — last-write-wins would let a tiny
+  // side-call mislabel the whole turn and misprice it downstream.
+  const modelTokens = new Map<string, number>();
   for (const { model, usage } of byMessageId.values()) {
-    if (model) result.model = model;
     result.inputTokens = add(result.inputTokens, usage['input_tokens']);
     result.outputTokens = add(result.outputTokens, usage['output_tokens']);
     result.cachedInputTokens = add(result.cachedInputTokens, usage['cache_read_input_tokens']);
     result.cacheCreationInputTokens = add(result.cacheCreationInputTokens, usage['cache_creation_input_tokens']);
+    if (model) {
+      const weight =
+        finiteOrZero(usage['input_tokens']) +
+        finiteOrZero(usage['output_tokens']) +
+        finiteOrZero(usage['cache_read_input_tokens']) +
+        finiteOrZero(usage['cache_creation_input_tokens']);
+      modelTokens.set(model, (modelTokens.get(model) ?? 0) + weight);
+    }
+  }
+  let dominantTokens = -1;
+  for (const [model, tokens] of modelTokens) {
+    if (tokens > dominantTokens) {
+      result.model = model;
+      dominantTokens = tokens;
+    }
   }
   result.messageIds = [...byMessageId.keys()];
   return result;
+}
+
+function finiteOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 function add(current: number | undefined, value: unknown): number | undefined {

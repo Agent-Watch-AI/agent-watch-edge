@@ -19,6 +19,13 @@ export interface GitContextOptions {
   includeChangedFiles: boolean;
   timeoutMs?: number;
   maxChangedFiles?: number;
+  /**
+   * Resolve only the repository root (one git process) and skip
+   * branch/commit/remote/status. Hooks on the agent's critical path need the
+   * root for path rewriting but none of the expensive details — those are
+   * only consumed when a turn closes.
+   */
+  rootOnly?: boolean;
 }
 
 type GitRunner = (args: string[], cwd: string, timeoutMs: number, home?: string) => Promise<string | undefined>;
@@ -32,7 +39,18 @@ const defaultRunner: GitRunner = (args, cwd, timeoutMs, home) =>
       // Trailing-only trim: `status --porcelain` lines carry a significant
       // leading space (" M file"); a full trim() would eat the first
       // character of the first filename.
-      resolve(error ? undefined : stdout.replace(/\s+$/, ''));
+      if (!error) {
+        resolve(stdout.replace(/\s+$/, ''));
+        return;
+      }
+      // maxBuffer overflow (huge dirty tree): keep the truncated output minus
+      // its partial last line — callers cap the list anyway, and dropping
+      // everything would lose changedFiles exactly in the busiest sessions.
+      if ((error as NodeJS.ErrnoException).code === 'ERR_CHILD_PROCESS_STDOUT_MAXBUFFER' && typeof stdout === 'string' && stdout.includes('\n')) {
+        resolve(stdout.slice(0, stdout.lastIndexOf('\n')).replace(/\s+$/, ''));
+        return;
+      }
+      resolve(undefined);
     });
   });
 
@@ -44,9 +62,15 @@ export async function collectGitContext(options: GitContextOptions, run: GitRunn
   const timeoutMs = options.timeoutMs ?? 1000;
   const root = await run(['rev-parse', '--show-toplevel'], options.cwd, timeoutMs);
   if (!root) return { workingDirectory: options.cwd };
+  if (options.rootOnly) {
+    return { repositoryRoot: root, workingDirectory: options.cwd, repository: path.basename(root) };
+  }
 
   const [branch, commit, remoteRaw, status] = await Promise.all([
-    run(['branch', '--show-current'], root, timeoutMs),
+    // Not `branch --show-current`: that flag needs git >= 2.22 and its absence
+    // would silently drop branch (and ticket) attribution on older machines.
+    // symbolic-ref works everywhere and exits 1 (-> undefined) on detached HEAD.
+    run(['symbolic-ref', '--short', '-q', 'HEAD'], root, timeoutMs),
     run(['rev-parse', 'HEAD'], root, timeoutMs),
     run(['config', '--get', 'remote.origin.url'], root, timeoutMs),
     options.includeChangedFiles ? run(['status', '--porcelain'], root, timeoutMs) : Promise.resolve(undefined)
@@ -99,5 +123,38 @@ function parsePorcelainLine(line: string): string | undefined {
   if (!body) return undefined;
   const renameSplit = body.split(' -> ');
   const candidate = renameSplit[renameSplit.length - 1] ?? body;
-  return candidate.replace(/^"|"$/g, '');
+  if (candidate.length >= 2 && candidate.startsWith('"') && candidate.endsWith('"')) {
+    return unquotePorcelainPath(candidate);
+  }
+  return candidate;
+}
+
+/**
+ * Decode git's C-style path quoting (core.quotePath): `"r\303\251sum\303\251.txt"`
+ * is the on-the-wire form of `résumé.txt`. Octal escapes are UTF-8 bytes, so
+ * they are collected as bytes first and decoded once at the end.
+ */
+function unquotePorcelainPath(quoted: string): string {
+  const inner = quoted.slice(1, -1);
+  const bytes: number[] = [];
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i]!;
+    if (ch !== '\\') {
+      bytes.push(...Buffer.from(ch, 'utf8'));
+      continue;
+    }
+    const next = inner[++i];
+    if (next === undefined) break;
+    if (next >= '0' && next <= '7') {
+      let octal = next;
+      while (octal.length < 3 && inner[i + 1] !== undefined && inner[i + 1]! >= '0' && inner[i + 1]! <= '7') {
+        octal += inner[++i];
+      }
+      bytes.push(parseInt(octal, 8));
+    } else {
+      const escapes: Record<string, string> = { n: '\n', t: '\t', r: '\r', a: '\x07', b: '\b', f: '\f', v: '\v', '"': '"', '\\': '\\' };
+      bytes.push(...Buffer.from(escapes[next] ?? next, 'utf8'));
+    }
+  }
+  return Buffer.from(bytes).toString('utf8');
 }

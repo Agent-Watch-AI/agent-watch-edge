@@ -172,7 +172,7 @@ describe('Claude provider', () => {
       expect(isAgentWatchHookCommand('/Users/dev/.local/bin/agentwatch hook --agent claude')).toBe(true);
       expect(isAgentWatchHookCommand('"/usr/bin/node" "/Users/dev/Projects/agentwatch/dist/cli.js" hook --agent claude')).toBe(true);
       expect(isAgentWatchHookCommand('"/Applications/Node JS/node" "/Users/dev/My Projects/agentwatch/dist/cli.js" hook --agent claude')).toBe(true);
-      expect(isAgentWatchHookCommand('node /opt/@agentwatch/bridge/dist/cli.js hook --agent codex')).toBe(true);
+      expect(isAgentWatchHookCommand('node /opt/@agentwatch-ai/bridge/dist/cli.js hook --agent codex')).toBe(true);
       expect(isAgentWatchHookCommand('node /Users/dev/Projects/renamed-checkout/dist/cli.js hook --agent claude')).toBe(true);
       // Hooks written by earlier installs embed process.execPath, which may
       // be any Node-compatible runtime; a .ps1 shim is still our binary.

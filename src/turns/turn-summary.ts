@@ -39,6 +39,8 @@ export interface TurnSummaryEvent extends AgentWatchEvent<'turn.summary'> {
   files_changed?: string[];
   /** Files edited by the agent's tools during this turn (repo-relative). */
   files_touched?: string[];
+  /** Files the agent's tools only read during this turn (repo-relative). */
+  files_read?: string[];
   prompt?: string;
   prompt_evidence?: ContentEvidence;
   response?: string;
@@ -86,16 +88,23 @@ export interface BuildTurnSummaryInput {
 
 const PROVIDER_LABELS: Record<string, string> = {
   claude: 'claude-code',
-  codex: 'codex'
+  codex: 'codex',
+  cursor: 'cursor'
 };
 
 export function buildTurnSummary(input: BuildTurnSummaryInput): TurnSummaryEvent {
   const toolsUsed: Record<string, number> = {};
   const filesTouched = new Set<string>();
+  const filesRead = new Set<string>();
   for (const tool of input.tools) {
     const name = tool.tool ?? 'unknown';
     toolsUsed[name] = (toolsUsed[name] ?? 0) + 1;
-    if (tool.filePath) filesTouched.add(tool.filePath);
+    if (!tool.filePath) continue;
+    // files_touched is documented as files the agent MODIFIED; pure reads get
+    // their own list. Legacy records without an access marker stay in
+    // files_touched (the historical behavior) rather than being dropped.
+    if (tool.access === 'read') filesRead.add(tool.filePath);
+    else filesTouched.add(tool.filePath);
   }
 
   const promptText = joinDefined(input.prompts.map((prompt) => prompt.text));
@@ -116,7 +125,7 @@ export function buildTurnSummary(input: BuildTurnSummaryInput): TurnSummaryEvent
     }),
     timestamp: input.endedAt,
     event: { type: 'turn.summary', providerEventType: 'turn.summary' },
-    agent: { provider: input.provider, name: provider },
+    agent: { provider, name: provider },
     session: { id: input.sessionId, providerId: input.sessionId, turnId },
     developer: input.installationId ? { installationId: input.installationId } : undefined,
 
@@ -131,6 +140,7 @@ export function buildTurnSummary(input: BuildTurnSummaryInput): TurnSummaryEvent
     jira_ids: jiraIds.length > 0 ? jiraIds : undefined,
     files_changed: input.git?.changedFiles,
     files_touched: filesTouched.size > 0 ? [...filesTouched] : undefined,
+    files_read: filesRead.size > 0 ? [...filesRead] : undefined,
     prompt: promptText,
     prompt_evidence: input.prompts[0]?.evidence,
     response: input.response?.text,

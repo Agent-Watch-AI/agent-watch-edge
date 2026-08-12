@@ -19,6 +19,18 @@ describe('remote sanitization', () => {
     expect(normalizeRemote('https://user:tok3n@github.com/acme/repo.git')).toBe('github.com/acme/repo');
   });
 
+  it('normalizes userless scp-like remotes instead of parsing the host as a URL scheme', () => {
+    expect(normalizeRemote('github.com:acme/repo.git')).toBe('github.com/acme/repo');
+  });
+
+  it('never leaks an scp userinfo password into the normalized remote', () => {
+    expect(normalizeRemote('user:s3cret@github.com:acme/repo.git')).toBe('github.com/acme/repo');
+  });
+
+  it('does not mistake Windows drive paths for scp remotes', () => {
+    expect(normalizeRemote('C:\\repos\\project')).toBeUndefined();
+  });
+
   it('hashes remotes deterministically', () => {
     expect(remoteHash('https://github.com/acme/repo.git')).toBe(remoteHash('git@github.com:acme/repo.git'));
   });
@@ -82,11 +94,31 @@ describe('collectGitContext', () => {
     expect(context.changedFiles).toContain('committed.txt');
   });
 
+  it('decodes git-quoted paths so non-ASCII file names arrive as real paths', async () => {
+    // With default core.quotePath=true, git emits "r\303\251sum\303\251.txt"
+    // for résumé.txt; the escapes must be decoded, not passed through.
+    await fs.writeFile(path.join(repoDir, 'résumé.txt'), 'unicode name');
+    const context = await collectGitContext({ cwd: repoDir, includeChangedFiles: true });
+    expect(context.changedFiles).toContain('résumé.txt');
+  });
+
   it('degrades gracefully outside a repository', async () => {
     const outside = path.join(world.home, 'not-a-repo');
     await fs.mkdir(outside);
     const context = await collectGitContext({ cwd: outside, includeChangedFiles: true });
     expect(context.repositoryRoot).toBeUndefined();
     expect(context.workingDirectory).toBe(outside);
+  });
+
+  it('rootOnly resolves the repository root without branch/commit/remote/status', async () => {
+    // Hooks on the agent's critical path use this mode: one git process
+    // instead of five, keeping tool-heavy sessions cheap.
+    const context = await collectGitContext({ cwd: repoDir, includeChangedFiles: true, rootOnly: true });
+    expect(context.repositoryRoot).toBeDefined();
+    expect(context.repository).toBe('repo');
+    expect(context.branch).toBeUndefined();
+    expect(context.commit).toBeUndefined();
+    expect(context.remote).toBeUndefined();
+    expect(context.changedFiles).toBeUndefined();
   });
 });

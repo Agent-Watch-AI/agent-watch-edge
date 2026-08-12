@@ -62,7 +62,14 @@ export function normalizeOtlpLogs(payload: unknown, options: NormalizeOtlpOption
         const logRecord = asRecord(log);
         if (!logRecord) continue;
         const attrs = { ...resourceAttributes, ...attributes(logRecord['attributes']) };
-        const normalized = normalizeLogRecord(logRecord, attrs, options);
+        // One malformed record must never abort the batch: every other call's
+        // usage and cost would silently vanish from the ledger with it.
+        let normalized: LlmCallEvent | undefined;
+        try {
+          normalized = normalizeLogRecord(logRecord, attrs, options);
+        } catch {
+          normalized = undefined;
+        }
         if (normalized) calls.push(normalized);
       }
     }
@@ -121,7 +128,9 @@ function normalizeLogRecord(log: Attributes, attrs: Attributes, options: Normali
     },
     costUsd: firstNumber(attrs, ['cost_usd', 'cost.usd']),
     durationMs,
-    startedAt: durationMs !== undefined ? new Date(Date.parse(endedAt) - durationMs).toISOString() : undefined,
+    // endedAt can be an unparseable attribute string; NaN arithmetic would
+    // make toISOString() throw, so startedAt is derived only from a real time.
+    startedAt: durationMs !== undefined && Number.isFinite(Date.parse(endedAt)) ? new Date(Date.parse(endedAt) - durationMs).toISOString() : undefined,
     endedAt,
     git: correlated?.git,
     featureCandidates: correlated?.featureCandidates

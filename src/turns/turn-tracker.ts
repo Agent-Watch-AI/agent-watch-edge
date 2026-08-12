@@ -9,6 +9,7 @@ import { acquireLock } from '../storage/lock.js';
 import { sha256Hex } from '../events/event-id.js';
 import { TurnStateStore, type ContentEvidence, type TurnRecord, type TurnStateEntry } from './turn-state.js';
 import { readTurnUsage, type TurnUsage } from './claude-transcript.js';
+import { readCursorTurnUsage } from './cursor-transcript.js';
 import { buildTurnSummary, type TurnSummaryEvent } from './turn-summary.js';
 
 const TOOL_COMPLETION_TYPES = new Set(['tool.completed', 'tool.failed', 'shell.completed', 'mcp.completed', 'file.read', 'file.edited']);
@@ -53,9 +54,17 @@ export async function trackTurn(options: TrackTurnOptions): Promise<TurnSummaryE
         continue;
       }
       if (type === 'prompt.submitted') {
-        await store.append(sessionId, event.id, promptRecord(event));
+        // Event ids are payload-derived, so on old Claude versions without
+        // prompt_id two identical prompts share an id. The record file must
+        // still be distinct per submission, or the second append overwrites
+        // the first and the second turn closes with no state at all.
+        await store.append(sessionId, `${event.id}-${event.timestamp}`, promptRecord(event));
       } else if (TOOL_COMPLETION_TYPES.has(type)) {
         await store.append(sessionId, event.id, toolRecord(event));
+      } else if (type === 'agent.other' && responseFromStop(event) !== undefined) {
+        // Cursor delivers the response text in its own hook (afterAgentResponse)
+        // instead of on Stop; keep it as turn state until the turn closes.
+        await store.append(sessionId, `${event.id}-${event.timestamp}`, responseRecord(event));
       } else if (type === 'generation.completed') {
         summary = await closeTurn(store, sessionId, event, options);
         await store.sweep(TURN_STATE_TTL_MS);
@@ -157,6 +166,11 @@ async function closeTurnLocked(
   const records = mine.map((entry) => entry.record);
   const prompts = records.filter((record): record is Extract<TurnRecord, { kind: 'prompt' }> => record.kind === 'prompt');
   const tools = records.filter((record): record is Extract<TurnRecord, { kind: 'tool' }> => record.kind === 'tool');
+  // A Stop-supplied response (Claude) wins; otherwise the turn's last recorded
+  // response event (Cursor's afterAgentResponse) is the answer the user saw.
+  const responseRecords = records.filter((record): record is Extract<TurnRecord, { kind: 'response' }> => record.kind === 'response');
+  const lastResponse = responseRecords.at(-1);
+  const response = responseFromStop(stopEvent) ?? (lastResponse ? { text: lastResponse.text, evidence: lastResponse.evidence } : undefined);
 
   // Mirror usage onto the raw Stop event so the event stream carries token
   // cost on its own; session.id + provider.promptId correlate it with the
@@ -176,7 +190,7 @@ async function closeTurnLocked(
     featureCandidates: stopEvent.feature?.candidates,
     prompts,
     tools,
-    response: responseFromStop(stopEvent),
+    response,
     usage,
     model: stopEvent.ai?.model,
     billingMode,
@@ -205,6 +219,20 @@ const USAGE_RETRY = { attempts: 6, delayMs: 250, minSettleMs: 500 };
  * If the bounded wait expires we omit best-effort transcript usage rather
  * than risk double attribution; native OTel remains authoritative.
  */
+/**
+ * Providers whose transcript can be read for token usage. Claude windows by
+ * message timestamps; Cursor rows carry none, so its reader relies solely on
+ * the exactly-once message-id ledger (today Cursor rows also carry no usage —
+ * the reader returns undefined and the summary stays pending).
+ */
+const TRANSCRIPT_READERS: Record<
+  string,
+  (transcriptPath: string, startedAt: string, untilIso: string, excludeMessageIds: ReadonlySet<string>) => Promise<TurnUsage | undefined>
+> = {
+  claude: (transcriptPath, startedAt, untilIso, excludeMessageIds) => readTurnUsage(transcriptPath, startedAt, USAGE_RETRY, untilIso, excludeMessageIds),
+  cursor: (transcriptPath, _startedAt, _untilIso, excludeMessageIds) => readCursorTurnUsage(transcriptPath, USAGE_RETRY, excludeMessageIds)
+};
+
 async function resolveAndClaimUsage(
   store: TurnStateStore,
   sessionId: string,
@@ -214,7 +242,7 @@ async function resolveAndClaimUsage(
   untilIso: string,
   readOnly: boolean
 ): Promise<TurnUsage | undefined> {
-  if (options.agentId !== 'claude' || !startedAt) return undefined;
+  if (!TRANSCRIPT_READERS[options.agentId] || !startedAt) return undefined;
   if (readOnly) {
     const claimed = await store.claimedMessageIds(sessionId);
     return resolveUsage(options, startedAt, untilIso, claimed);
@@ -260,12 +288,13 @@ async function resolveUsage(
   untilIso: string,
   excludeMessageIds: ReadonlySet<string>
 ): Promise<TurnUsage | undefined> {
-  if (options.agentId !== 'claude' || !startedAt) return undefined;
+  const reader = TRANSCRIPT_READERS[options.agentId];
+  if (!reader || !startedAt) return undefined;
   const transcriptPath = (options.rawPayload as Record<string, unknown> | undefined)?.['transcript_path'];
   if (typeof transcriptPath !== 'string') return undefined;
   // `until` = the Stop timestamp keeps the next prompt's entries (racing into
   // the same transcript) out of this turn's totals.
-  return readTurnUsage(transcriptPath, startedAt, USAGE_RETRY, untilIso, excludeMessageIds);
+  return reader(transcriptPath, startedAt, untilIso, excludeMessageIds);
 }
 
 function filterTurn(entries: TurnStateEntry[], stopTurnId: string | undefined): TurnStateEntry[] {
@@ -299,12 +328,27 @@ function promptRecord(event: AgentWatchEvent): TurnRecord {
 
 function toolRecord(event: AgentWatchEvent): TurnRecord {
   const filePath = event.metadata?.['filePath'];
+  const type = event.event.type;
   return {
     kind: 'tool',
     at: event.timestamp,
     turnId: event.session.turnId,
     tool: event.tool?.name,
-    filePath: typeof filePath === 'string' ? filePath : undefined
+    filePath: typeof filePath === 'string' ? filePath : undefined,
+    // Reads and edits are different product signals: files the agent merely
+    // read must not appear in the summary's files_touched (modified) list.
+    access: type === 'file.read' ? 'read' : type === 'file.edited' ? 'edit' : undefined
+  };
+}
+
+function responseRecord(event: AgentWatchEvent): TurnRecord {
+  const response = responseFromStop(event);
+  return {
+    kind: 'response',
+    at: event.timestamp,
+    turnId: event.session.turnId,
+    text: response?.text,
+    evidence: response?.evidence
   };
 }
 
@@ -330,6 +374,9 @@ function resolveSurface(provider: string, env: Env): string {
     const entrypoint = env.vars['CLAUDE_CODE_ENTRYPOINT'];
     if (entrypoint) return entrypoint;
   }
+  // Cursor hooks fire from the editor's agent; is_background_agent is only
+  // available on sessionStart, not on Stop, so v1 reports a single surface.
+  if (provider === 'cursor') return 'ide';
   return 'cli';
 }
 

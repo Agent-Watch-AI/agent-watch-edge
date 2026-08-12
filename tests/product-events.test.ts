@@ -141,6 +141,19 @@ describe('two-record product contract', () => {
     expect(calls[0]?.call_id).not.toBe(calls[1]?.call_id);
   });
 
+  it('turn.summary and llm.call agree on the public agent.provider label', () => {
+    const summary = buildTurnSummary({
+      provider: 'claude', surface: 'cli', sessionId: 'sess-1', turnId: 'turn-1',
+      prompts: [], tools: [], endedAt: '2026-08-07T12:00:00.000Z'
+    });
+    const call = buildLlmCall({
+      provider: 'claude-code', surface: 'cli', callId: 'req-1', sessionId: 'sess-1', turnId: 'turn-1',
+      correlation: 'turn', endedAt: summary.ended_at
+    });
+    expect(summary.agent).toEqual({ provider: 'claude-code', name: 'claude-code' });
+    expect(summary.agent.provider).toBe(call.agent.provider);
+  });
+
   it('deduplicates calls and finalizes a separate subagent breakdown', () => {
     const summary = buildTurnSummary({
       provider: 'claude',
@@ -162,7 +175,7 @@ describe('two-record product contract', () => {
       usage: { inputTokens: 50, outputTokens: 5, totalTokens: 55 }, costUsd: 0.005
     });
 
-    const finalized = aggregateTurnUsage(summary, [main, child, child]);
+    const finalized = aggregateTurnUsage(summary, [main, child, child], { complete: true });
     expect(finalized).toMatchObject({
       llm_calls: 2,
       input_tokens: 150,
@@ -191,7 +204,7 @@ describe('two-record product contract', () => {
       correlation: 'turn', endedAt: summary.ended_at, usage: { inputTokens: 10, outputTokens: 2 }
     });
 
-    expect(aggregateTurnUsage(summary, [request, completion])).toMatchObject({
+    expect(aggregateTurnUsage(summary, [request, completion], { complete: true })).toMatchObject({
       llm_calls: 1,
       input_tokens: 10,
       output_tokens: 2,
@@ -215,6 +228,34 @@ describe('two-record product contract', () => {
     expect(normalizeOtlpLogs(payload)[0]?.ended_at).toBe(new Date(1786118400000).toISOString());
   });
 
+  it('a record with an unparseable timestamp + duration no longer aborts the batch', () => {
+    const malformed = {
+      timeUnixNano: '0',
+      attributes: [
+        kv('event.name', 'claude_code.api_request'),
+        kv('session.id', 'sess-bad'),
+        kv('request_id', 'req-bad'),
+        // Numeric epoch-millis attribute: Date.parse yields NaN, which used to
+        // make new Date(NaN - duration).toISOString() throw for the whole batch.
+        kv('timestamp', 1723372800000),
+        kv('duration_ms', 250),
+        kv('input_tokens', 5)
+      ]
+    };
+    const healthy = {
+      timeUnixNano: '1786118400000000000',
+      attributes: [
+        kv('event.name', 'claude_code.api_request'),
+        kv('session.id', 'sess-ok'),
+        kv('request_id', 'req-ok'),
+        kv('input_tokens', 7)
+      ]
+    };
+    const payload = { resourceLogs: [{ scopeLogs: [{ logRecords: [malformed, healthy] }] }] };
+    const calls = normalizeOtlpLogs(payload);
+    expect(calls.some((call) => call.call_id === 'req-ok')).toBe(true);
+  });
+
   it('joins session-correlated calls into the turn through its time window', () => {
     const summary = buildTurnSummary({
       provider: 'claude', surface: 'cli', sessionId: 'sess', turnId: 'turn-1',
@@ -229,12 +270,28 @@ describe('two-record product contract', () => {
       provider: 'claude-code', surface: 'cli', callId: 'before', sessionId: 'sess',
       correlation: 'session', usage: { inputTokens: 999 }, endedAt: '2026-08-07T11:59:00.000Z'
     });
-    expect(aggregateTurnUsage(summary, [inWindow, beforeTurn])).toMatchObject({
+    expect(aggregateTurnUsage(summary, [inWindow, beforeTurn], { sessionSummaries: [summary], complete: true })).toMatchObject({
       llm_calls: 1,
       input_tokens: 40,
       output_tokens: 4,
       usage_status: 'complete'
     });
+  });
+
+  it('performs no window join at all without the session summary set', () => {
+    // A lone summary cannot arbitrate ownership against summaries it cannot
+    // see: claiming every contained call would double-count overlapping
+    // windows across successive finalizations. Only exact turn ids match.
+    const summary = buildTurnSummary({
+      provider: 'claude', surface: 'cli', sessionId: 'sess', turnId: 'turn-1',
+      prompts: [{ kind: 'prompt', at: '2026-08-07T12:00:00.000Z', turnId: 'turn-1' }], tools: [],
+      endedAt: '2026-08-07T12:05:00.000Z'
+    });
+    const inWindow = buildLlmCall({
+      provider: 'claude-code', surface: 'cli', callId: 'in-window', sessionId: 'sess',
+      correlation: 'session', usage: { inputTokens: 40 }, endedAt: '2026-08-07T12:01:00.000Z'
+    });
+    expect(aggregateTurnUsage(summary, [inWindow])).toEqual(summary);
   });
 
   it('never claims earlier session calls for a summary without a lower time bound', () => {
@@ -297,7 +354,7 @@ describe('two-record product contract', () => {
 
     const sessionSummaries = [bounded, degraded];
     expect(aggregateTurnUsage(bounded, [insideBounded, afterBounded], { sessionSummaries })).toMatchObject({ input_tokens: 10, llm_calls: 1 });
-    expect(aggregateTurnUsage(degraded, [insideBounded, afterBounded], { sessionSummaries })).toMatchObject({ input_tokens: 20, llm_calls: 1, usage_status: 'complete' });
+    expect(aggregateTurnUsage(degraded, [insideBounded, afterBounded], { sessionSummaries, complete: true })).toMatchObject({ input_tokens: 20, llm_calls: 1, usage_status: 'complete' });
   });
 
   it('rejects window joins for calls with unparseable timestamps', () => {

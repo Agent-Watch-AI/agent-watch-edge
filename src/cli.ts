@@ -2,41 +2,9 @@
 import process from 'node:process';
 import { realEnv } from './core/env.js';
 import { setVerbose } from './core/logger.js';
-
-/**
- * Hand-rolled argv parsing: the hook subcommand runs on coding agents'
- * critical path, so we keep startup free of CLI-framework imports and load
- * command modules lazily.
- */
-interface ParsedArgs {
-  command?: string;
-  positional: string[];
-  flags: Record<string, string | boolean>;
-}
-
-function parseArgs(argv: string[]): ParsedArgs {
-  const parsed: ParsedArgs = { positional: [], flags: {} };
-  const valueFlags = new Set(['agent', 'endpoint', 'token', 'developer-email']);
-  let index = 0;
-  while (index < argv.length) {
-    const arg = argv[index]!;
-    if (arg.startsWith('--')) {
-      const name = arg.slice(2);
-      if (valueFlags.has(name) && index + 1 < argv.length && !argv[index + 1]!.startsWith('--')) {
-        parsed.flags[name] = argv[index + 1]!;
-        index += 2;
-        continue;
-      }
-      parsed.flags[name] = true;
-      index += 1;
-      continue;
-    }
-    if (!parsed.command) parsed.command = arg;
-    else parsed.positional.push(arg);
-    index += 1;
-  }
-  return parsed;
-}
+// Parsing lives in its own module so tests can import it without executing
+// main(); command modules stay lazily loaded off the hook critical path.
+import { parseArgs } from './cli/args.js';
 
 const HELP = `agentwatch — telemetry bridge for AI coding agents
 
@@ -59,7 +27,7 @@ Flags:
                             per-request usage/cost ledger the backend turns into llm.call)
   --yes                     non-interactive: never prompt, fail if required values are missing
                             (alias: --non-interactive)
-  --agent <id>              limit the command to one agent (claude | codex)
+  --agent <id>              limit the command to one agent (claude | codex | cursor)
   --purge                   uninstall: also delete ~/.agentwatch and queued local data
   --dry-run                 hook: print resulting events to stdout instead of sending
   --json                    doctor: machine-readable output

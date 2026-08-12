@@ -43,6 +43,20 @@ describe('claude transcript usage', () => {
     expect(usage!.outputTokens).toBe(50);
   });
 
+  it('reports the model that produced the most tokens, not the last one written', async () => {
+    const since = '2026-08-06T18:00:00.000Z';
+    const file = await writeTranscript([
+      { type: 'assistant', timestamp: '2026-08-06T18:01:00.000Z', message: { id: 'main', model: 'claude-sonnet-4', usage: { input_tokens: 5000, output_tokens: 800 } } },
+      // A tiny side-call (title generation, subagent) lands last in the window;
+      // it must not relabel — and downstream misprice — the whole turn.
+      { type: 'assistant', timestamp: '2026-08-06T18:02:00.000Z', message: { id: 'side', model: 'claude-haiku', usage: { input_tokens: 20, output_tokens: 5 } } }
+    ]);
+
+    const usage = await readTurnUsage(file, since);
+    expect(usage!.model).toBe('claude-sonnet-4');
+    expect(usage!.inputTokens).toBe(5020);
+  });
+
   it('reads only the tail of an oversized transcript and still finds recent usage', async () => {
     const since = '2026-08-06T18:00:00.000Z';
     const padding = JSON.stringify({ type: 'user', message: { content: 'x'.repeat(1024) } });
@@ -234,6 +248,24 @@ describe('buildTurnSummary', () => {
     expect(summary.ended_at).toBe('2026-08-06T18:24:00.000Z');
     expect(summary.id).toMatch(/^evt_/);
     expect(summary.schemaVersion).toBe('1');
+  });
+
+  it('separates files the agent read from files it modified', () => {
+    const summary = buildTurnSummary({
+      provider: 'claude',
+      surface: 'cli',
+      sessionId: 'sess-1',
+      prompts: [],
+      tools: [
+        { kind: 'tool', at: '2026-08-06T18:01:00.000Z', tool: 'Read', filePath: 'src/auth.ts', access: 'read' },
+        { kind: 'tool', at: '2026-08-06T18:02:00.000Z', tool: 'Edit', filePath: 'src/refund.ts', access: 'edit' },
+        // Legacy record without an access marker keeps the historical meaning.
+        { kind: 'tool', at: '2026-08-06T18:03:00.000Z', tool: 'Write', filePath: 'src/new.ts' }
+      ],
+      endedAt: '2026-08-06T18:24:00.000Z'
+    });
+    expect(summary.files_touched).toEqual(['src/refund.ts', 'src/new.ts']);
+    expect(summary.files_read).toEqual(['src/auth.ts']);
   });
 
   it('omits prompt/response text when not captured but keeps evidence', () => {

@@ -1,7 +1,7 @@
 {
-  "name": "@agentwatch/bridge",
-  "version": "0.1.0",
-  "description": "Telemetry bridge for Claude Code and Codex that attributes native OTel token costs to Git branches, Jira tickets and features.",
+  "name": "@agentwatch-ai/bridge",
+  "version": "0.2.0",
+  "description": "Connect Claude Code, Codex and Cursor telemetry to your backend with turn, Git and ticket-key attribution.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -11,14 +11,30 @@
     "agentwatch": "./dist/cli.js"
   },
   "exports": {
-    "./events": "./dist/events/product-event.js",
-    "./llm-call": "./dist/events/llm-call.js",
-    "./otlp": "./dist/otlp/normalize.js",
-    "./aggregate-turn": "./dist/turns/aggregate-usage.js",
-    "./turn-summary": "./dist/turns/turn-summary.js"
+    "./events": {
+      "types": "./dist/events/product-event.d.ts",
+      "default": "./dist/events/product-event.js"
+    },
+    "./llm-call": {
+      "types": "./dist/events/llm-call.d.ts",
+      "default": "./dist/events/llm-call.js"
+    },
+    "./otlp": {
+      "types": "./dist/otlp/normalize.d.ts",
+      "default": "./dist/otlp/normalize.js"
+    },
+    "./aggregate-turn": {
+      "types": "./dist/turns/aggregate-usage.d.ts",
+      "default": "./dist/turns/aggregate-usage.js"
+    },
+    "./turn-summary": {
+      "types": "./dist/turns/turn-summary.d.ts",
+      "default": "./dist/turns/turn-summary.js"
+    }
   },
   "files": [
     "dist",
+    "example",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
@@ -34,7 +50,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/agentwatch/bridge.git"
+    "url": "git+https://github.com/alexrepetskyi/agentwatch.git"
+  },
+  "homepage": "https://github.com/alexrepetskyi/agentwatch#readme",
+  "bugs": {
+    "url": "https://github.com/alexrepetskyi/agentwatch/issues"
   },
   "keywords": [
     "telemetry",

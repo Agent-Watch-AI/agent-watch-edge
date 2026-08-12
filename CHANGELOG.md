@@ -1,10 +1,90 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+- Package/documentation: public helpers now ship TypeScript declarations, and the
+  README clearly separates sanitized hook summaries from direct native OTLP traffic
+  and provisional summaries from backend-finalized usage.
+- Example backend: malformed OTLP/JSON payloads now return `400` instead of being
+  acknowledged and silently dropped; only the documented logs, traces and metrics
+  endpoints are accepted, and the example is included in the npm package so its
+  published `npm run example` script works.
+- Cursor support: new `cursor` provider — lifecycle hooks in `~/.cursor/hooks.json`
+  (sessions, prompts, tools, shell, MCP, file edits, subagents, compaction, accepted tab
+  edits), `conversation_id`/`generation_id` as session/turn correlation, and turn
+  summaries with prompt, response, tools, files and git context. Cursor has no OTel
+  export and no usage in hooks or transcripts yet, so its summaries stay
+  `usage_status=pending`; the bundled transcript reader picks up tokens automatically
+  once Cursor enriches the format. `agentwatch doctor` reports both limitations (the
+  pending usage and the cursor-agent CLI emitting only shell hook events).
+- Turn state gained a `response` record kind: providers that deliver the response text
+  outside the Stop event (Cursor's `afterAgentResponse`) still produce summaries with
+  the response; a Stop-supplied response keeps priority.
+- BREAKING: `aggregateTurnUsage` marks a turn `usage_status=complete` only when the
+  caller passes `complete: true` — an explicit terminal signal (watermark / quiet
+  period / session end). OTLP batches arrive asynchronously and are retried, so the
+  previous default (`complete` on the first non-empty batch) could stamp completeness
+  while late batches were still in flight; without the signal the result is `partial`.
+- BREAKING/semantics: `turn.summary.files_touched` now contains only files the agent's
+  tools MODIFIED, as documented; files that were only read moved to the new
+  `files_read` field. (Legacy turn-state records without an access marker stay in
+  `files_touched`.)
+- Fixed: `agentwatch setup --otel <signals>` was silently ignored — `--otel` was
+  missing from the CLI's value-flag list, so its value parsed as a stray positional.
+  Argument parsing moved to `src/cli/args.ts` and is covered by tests.
+- Cursor: tool calls covered by dedicated hooks (shell, MCP, file read/edit) are no
+  longer double-counted — Cursor fires both the generic `postToolUse` and the dedicated
+  hook for the same invocation, and only the dedicated hook now produces the completion
+  record; generic completions remain for tools without a dedicated hook, and failures
+  always flow through `postToolUseFailure`.
+- Cursor: the transcript usage reader bails out after one read when the transcript
+  carries no usage rows (today's format), removing ~1.25 s of retry/settle latency
+  from every Cursor Stop; the settle loop still guards flushes once usage rows exist.
+- Cursor: the structured `model_id` now supersedes the legacy `model` slug,
+  `model_params` (thinking/context/effort selections) are preserved as structured
+  `provider.modelParams`, and prompt attachments are recorded (count always, file
+  paths gated by `capture.files`).
+- Performance: hooks on the agent's critical path (tool events) resolve only the git
+  repository root (one git process) for path rewriting; the full git context —
+  branch, commit, remote, and the expensive `status --porcelain` — is collected only
+  when a turn closes, where the summary actually consumes it.
+- Durability: atomic file writes fsync before rename, so a crash right after the
+  rename can no longer leave queue entries, config, or turn state truncated.
 
 - BREAKING: the public model now has exactly two records: atomic `llm.call` and aggregate
   `turn.summary`. Raw hook lifecycle events, telemetry opt-out flags, and offline drop policies
   were removed.
+- BREAKING: `aggregateTurnUsage` performs the time-window join only when
+  `options.sessionSummaries` (the session's full summary set) is provided. Per-summary
+  containment alone cannot arbitrate overlapping turn windows, so the previous no-context join
+  could double-count the same call's tokens and cost across successive finalizations. Without
+  the set, calls now match only through an exact turn id.
+- Fixed `repository`, added `homepage` and `bugs` in `package.json` — now pointing to
+  <https://github.com/alexrepetskyi/agentwatch>.
+- Simplified README; product record examples now use mock data.
+- Correctness: one malformed OTLP log record (e.g. an unparseable timestamp attribute combined
+  with `duration_ms`) no longer throws and aborts normalization of the entire batch — the
+  record is skipped and every other `llm.call` in the batch is still ingested.
+- Correctness: ticket candidates are extracted from the branch name as-is instead of
+  uppercasing it first, which fabricated Jira ids from ordinary words (`bump-node-20` produced
+  `NODE-20`). Only keys that are uppercase in the branch itself are reported.
+- Correctness: `turn.summary.model` now reports the model that produced the most tokens in the
+  turn's transcript window instead of the last one written — a small subagent or
+  title-generation side-call can no longer mislabel (and misprice) the whole turn.
+- Correctness: on old Claude versions without `prompt_id`, two identical prompt submissions no
+  longer collapse into one turn-state record (the second turn used to close with no summary,
+  losing its prompt, tools, and token usage).
+- Git: userless scp-like remotes (`github.com:org/repo.git`) normalize correctly instead of
+  parsing as a URL scheme and being dropped; an scp userinfo with an embedded password is
+  stripped before matching and can never leak into the normalized remote.
+- Git: branch detection uses `symbolic-ref --short -q HEAD` instead of
+  `branch --show-current`, which does not exist before git 2.22 and silently dropped branch
+  and ticket attribution on older machines.
+- Git: a `status --porcelain` output larger than 1 MB now yields a truncated `changedFiles`
+  list (bounded by `maxChangedFiles`) instead of dropping the list entirely.
+- Git: quoted porcelain paths (`core.quotePath`) are C-style-unescaped, so file names with
+  non-ASCII or special characters appear in `files_changed` as real paths instead of
+  `r\303\251sum\303\251.txt`-style escape strings.
 - Native OTLP signal selection is configurable: `otel: {logs, traces, metrics}` in the global
   config, or `agentwatch setup --otel <all|none|logs,traces,metrics>`. The default exports logs
   only — the per-request usage/cost ledger behind `llm.call`; traces (TTFT/subagent attribution)

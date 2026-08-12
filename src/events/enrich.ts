@@ -22,13 +22,20 @@ export interface EnrichOptions {
 export async function enrichEvents(events: AgentWatchEvent[], options: EnrichOptions): Promise<AgentWatchEvent[]> {
   if (events.length === 0) return events;
 
+  // Full git context (branch/commit/remote/status) costs up to five git
+  // processes and is only consumed when a turn closes (the summary reads it
+  // off the Stop event). Every other hook runs on the agent's critical path —
+  // often once per tool call — and needs just the repo root for path
+  // rewriting.
+  const needsFullGit = events.some((event) => event.event.type === 'generation.completed');
   let git: GitContext = {};
   if (options.config.capture.git) {
     try {
       git = await collectGitContext({
         cwd: options.cwd,
-        includeChangedFiles: options.config.capture.files,
-        timeoutMs: options.gitTimeoutMs
+        includeChangedFiles: options.config.capture.files && needsFullGit,
+        timeoutMs: options.gitTimeoutMs,
+        rootOnly: !needsFullGit
       });
     } catch {
       git = {};

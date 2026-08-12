@@ -35,9 +35,14 @@ describe('feature candidates', () => {
     ]);
   });
 
-  it('handles lowercase and multiple tickets, deduplicated', () => {
+  it('keeps only uppercase keys, deduplicated', () => {
     const candidates = featureCandidatesFromBranch('fix/abc-12-and-ABC-12-plus-XY-9');
     expect(candidates.map((candidate) => candidate.value)).toEqual(['ABC-12', 'XY-9']);
+  });
+
+  it('does not fabricate tickets from ordinary lowercase words', () => {
+    expect(featureCandidatesFromBranch('bump-node-20')).toEqual([]);
+    expect(featureCandidatesFromBranch('chore/sha256-2')).toEqual([]);
   });
 
   it('returns nothing for plain branches', () => {

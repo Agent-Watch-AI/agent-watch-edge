@@ -16,6 +16,7 @@
  *   GET  /                        health check
  */
 import http from 'node:http';
+import { decodeOtlpJson, otlpSignalFromPath } from '../dist/otlp/http.js';
 import { normalizeOtlpLogs } from '../dist/otlp/normalize.js';
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -55,8 +56,12 @@ function describeEvent(event) {
     const cached = usage.cachedInputTokens !== undefined ? ` cached=${usage.cachedInputTokens}` : '';
     parts.push(paint('33', `tokens[in=${usage.inputTokens ?? 0} out=${usage.outputTokens}${cached}]`));
   }
-  if (event.git?.branch) parts.push(dim(`${event.git.repository ?? ''}@${event.git.branch}`));
-  if (event.feature?.candidates?.length) parts.push(paint('33', `ticket=${event.feature.candidates.map((c) => c.value).join(',')}`));
+  // Product events (llm.call, turn.summary) carry flat git/ticket fields;
+  // other canonical events still use the nested git/feature envelope.
+  const branch = event.branch ?? event.git?.branch;
+  if (branch) parts.push(dim(`${event.repository ?? event.git?.repository ?? ''}@${branch}`));
+  const tickets = event.jira_ids ?? event.feature?.candidates?.map((c) => c.value);
+  if (tickets?.length) parts.push(paint('33', `ticket=${tickets.join(',')}`));
   return parts.join(' ');
 }
 
@@ -143,33 +148,37 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'POST' && url.startsWith('/v1/otlp/')) {
-    otlpCount += 1;
-    const signal = url.split('/').pop();
+  const otlpSignal = otlpSignalFromPath(url);
+  if (req.method === 'POST' && otlpSignal) {
+    const signal = otlpSignal;
     const contentType = req.headers['content-type'] ?? '';
     let detail = `${body.length} bytes (${contentType})`;
     let recordLines = [];
     if (contentType.includes('json')) {
-      try {
-        const payload = JSON.parse(body.toString('utf8'));
-        recordLines = describeOtlpJson(signal, payload);
-        if (signal === 'logs') {
-          const calls = normalizeOtlpLogs(payload, { receivedAt: new Date().toISOString() });
-          llmCallCount += calls.length;
-          for (const call of calls) {
-            log('LLM.CALL', '36', describeEvent(call) + ` call=${shortId(call.call_id)}` + auth);
-            if (PRINT_JSON) console.log(dim(JSON.stringify(call, null, 2)));
-          }
-        }
-        // Raw OTLP payloads are never dumped: the two product events
-        // (llm.call, turn.summary) are the only JSON worth reading.
-      } catch {
-        detail += ' ' + dim('(unparseable JSON)');
+      const decoded = decodeOtlpJson(body);
+      if (!decoded.ok) {
+        log(`OTLP:${signal}`, '31', `${detail} ${dim('(invalid JSON payload)')}` + auth);
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ code: 3, message: 'invalid OTLP JSON payload' }));
+        return;
       }
+      const payload = decoded.payload;
+      recordLines = describeOtlpJson(signal, payload);
+      if (signal === 'logs') {
+        const calls = normalizeOtlpLogs(payload, { receivedAt: new Date().toISOString() });
+        llmCallCount += calls.length;
+        for (const call of calls) {
+          log('LLM.CALL', '36', describeEvent(call) + ` call=${shortId(call.call_id)}` + auth);
+          if (PRINT_JSON) console.log(dim(JSON.stringify(call, null, 2)));
+        }
+      }
+      // Raw OTLP payloads are never dumped: the two product events
+      // (llm.call, turn.summary) are the only JSON worth reading.
     } else {
       const names = sniffOtlpNames(body);
       if (names.length > 0) detail += ' ' + paint('33', names.join(' '));
     }
+    otlpCount += 1;
     // Logs batches are already shown as LLM.CALL lines above; raw OTLP output is noise.
     if (signal !== 'logs') {
       log(`OTLP:${signal}`, '35', detail + auth);
@@ -200,7 +209,7 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, '127.0.0.1', () => {
   console.log(paint('1', `AgentWatch example backend listening on http://127.0.0.1:${PORT}`));
   console.log(dim('  summary: POST /v1/events'));
-  console.log(dim(`  otlp:    POST /v1/otlp/v1/{logs,traces}`));
+  console.log(dim(`  otlp:    POST /v1/otlp/v1/{logs,traces,metrics}`));
   console.log(dim(`  connect the bridge:  agentwatch setup --endpoint http://127.0.0.1:${PORT} --yes`));
   console.log();
 });

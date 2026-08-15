@@ -1,4 +1,6 @@
+import path from 'node:path';
 import type { Env } from '../core/env.js';
+import { DeliveryStats } from '../transport/delivery-stats.js';
 import { providers } from '../providers/registry.js';
 import type { SetupContext } from '../providers/provider.js';
 import { collectGitContext } from '../git/git-context.js';
@@ -60,17 +62,22 @@ export async function runStatus(env: Env): Promise<number> {
 
   println(bold('Delivery'));
   const queue = buildQueue(context);
+  const deliveryStats = new DeliveryStats(path.join(context.paths.dataDir, 'delivery-stats.json'), env.now);
   let pending = await queue.pendingCount();
   if (pending > 0 && eventsUrl(context.config)) {
     // Reasonable moment to retry: we're already out of any agent's critical path.
     const transport = buildTransport(context, 3000);
     if (transport) {
-      const drained = await queue.drain(transport, context.config.delivery.drainBatchSize);
+      const drained = await queue.drain(transport, context.config.delivery.drainBatchSize, deliveryStats);
       if (drained.sent > 0) println(dim(`  retried: ${drained.sent} event(s) delivered`));
       pending = await queue.pendingCount();
     }
   }
   println(pending === 0 ? `${symbols.ok} healthy` : `${symbols.warn} backlog`);
   println(`${pending} pending event(s)`);
+  const rejectedStats = await deliveryStats.read();
+  if (rejectedStats && rejectedStats.totalRejected > 0) {
+    println(`${symbols.warn} ${rejectedStats.totalRejected} event(s) permanently rejected by the backend (last ${rejectedStats.lastRejectedCount} at ${rejectedStats.lastRejectedAt})`);
+  }
   return 0;
 }

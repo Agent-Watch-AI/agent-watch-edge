@@ -40,7 +40,9 @@ export class HttpTransport implements EventTransport {
         body: JSON.stringify({ events }),
         signal: AbortSignal.timeout(this.options.timeoutMs)
       });
-      if (response.ok) return { ok: true, status: response.status, retryable: false };
+      if (response.ok) {
+        return { ok: true, status: response.status, retryable: false, counters: await readCounters(response) };
+      }
       return {
         ok: false,
         status: response.status,
@@ -51,6 +53,26 @@ export class HttpTransport implements EventTransport {
       // Never include response/request bodies in errors: they may carry event content.
       return { ok: false, retryable: true, error: (error as Error).name || 'network error' };
     }
+  }
+}
+
+/**
+ * A 202 can still carry per-event rejections; the batch "succeeding" while
+ * events inside it were dropped is exactly the case the caller must see.
+ * A backend that returns no JSON body is treated as counter-less, not failed.
+ */
+async function readCounters(response: Response): Promise<DeliveryResult['counters']> {
+  try {
+    const body = (await response.json()) as Record<string, unknown>;
+    const numeric = (key: string): number => (typeof body[key] === 'number' ? (body[key] as number) : 0);
+    return {
+      accepted: numeric('accepted'),
+      duplicate: numeric('duplicate'),
+      rejected: numeric('rejected'),
+      failed: numeric('failed')
+    };
+  } catch {
+    return undefined;
   }
 }
 

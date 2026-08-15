@@ -39,6 +39,8 @@ export interface DrainStats {
   sent: number;
   failed: number;
   dropped: number;
+  /** Events the backend accepted the batch for but rejected individually. */
+  rejected: number;
   skipped: boolean;
 }
 
@@ -102,11 +104,15 @@ export class EventQueue {
    * Send due queued events through the transport. Serialized by a lock so
    * concurrent hook invocations don't double-send; bounded by maxBatch.
    */
-  async drain(transport: EventTransport, maxBatch: number): Promise<DrainStats> {
+  async drain(
+    transport: EventTransport,
+    maxBatch: number,
+    statsRecorder?: { recordRejected(count: number): Promise<void> }
+  ): Promise<DrainStats> {
     const release = await acquireLock(this.options.locksDir, 'queue-drain', this.now);
-    if (!release) return { sent: 0, failed: 0, dropped: 0, skipped: true };
+    if (!release) return { sent: 0, failed: 0, dropped: 0, rejected: 0, skipped: true };
     try {
-      const stats: DrainStats = { sent: 0, failed: 0, dropped: 0, skipped: false };
+      const stats: DrainStats = { sent: 0, failed: 0, dropped: 0, rejected: 0, skipped: false };
       const nowMs = this.now().getTime();
       const due: { file: string; entry: z.infer<typeof queueEntrySchema> }[] = [];
 
@@ -147,6 +153,12 @@ export class EventQueue {
       if (result.ok) {
         await Promise.all(due.map(({ file }) => fs.rm(file, { force: true })));
         stats.sent = due.length;
+        const rejected = result.counters?.rejected ?? 0;
+        if (rejected > 0) {
+          stats.rejected += rejected;
+          debugLog(`backend permanently rejected ${rejected} event(s) from the drained batch`);
+          await statsRecorder?.recordRejected(rejected);
+        }
         return stats;
       }
 
@@ -169,6 +181,12 @@ export class EventQueue {
           if (single.ok) {
             await fs.rm(file, { force: true });
             stats.sent++;
+            const rejected = single.counters?.rejected ?? 0;
+            if (rejected > 0) {
+              stats.rejected += rejected;
+              debugLog(`backend permanently rejected ${rejected} event(s) from an isolation probe`);
+              await statsRecorder?.recordRejected(rejected);
+            }
           } else {
             await this.recordFailure(file, entry, nowMs, stats);
           }

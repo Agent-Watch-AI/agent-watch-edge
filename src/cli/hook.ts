@@ -7,6 +7,7 @@ import { enrichEvents } from '../events/enrich.js';
 import { trackTurn } from '../turns/turn-tracker.js';
 import type { TurnSummaryEvent } from '../turns/turn-summary.js';
 import { deliverEvents } from '../transport/delivery.js';
+import { DeliveryStats } from '../transport/delivery-stats.js';
 import { BackendCooldown } from '../transport/cooldown.js';
 import path from 'node:path';
 import { buildCliContext, buildQueue, buildTransport } from './context.js';
@@ -109,8 +110,9 @@ async function processPayload(agentId: string, rawPayload: unknown, options: Hoo
   const queue = buildQueue(context);
   const transport = buildTransport(context);
   const cooldown = new BackendCooldown(path.join(context.paths.dataDir, 'backend-cooldown.json'), options.env.now);
-  const outcome = await deliverEvents(outbound, transport, queue, context.config.delivery.drainBatchSize, cooldown);
-  debugLog(`delivery: sent=${outcome.delivered} queued=${outcome.queued} drained=${outcome.drained}`);
+  const stats = new DeliveryStats(path.join(context.paths.dataDir, 'delivery-stats.json'), options.env.now);
+  const outcome = await deliverEvents(outbound, transport, queue, context.config.delivery.drainBatchSize, cooldown, stats);
+  debugLog(`delivery: sent=${outcome.delivered} queued=${outcome.queued} drained=${outcome.drained} rejected=${outcome.rejected}`);
 }
 
 function readStdin(): Promise<string> {

@@ -39,8 +39,9 @@ export async function writeFileAtomic(filePath: string, contents: string, mode?:
 
 /** Copy the current file (if any) into backupsDir before we mutate it. */
 export async function backupFile(filePath: string, backupsDir: string, now: Date): Promise<string | undefined> {
+  let sourceMode: number;
   try {
-    await fs.access(filePath);
+    sourceMode = (await fs.stat(filePath)).mode & 0o777;
   } catch {
     return undefined;
   }
@@ -48,5 +49,8 @@ export async function backupFile(filePath: string, backupsDir: string, now: Date
   const stamp = now.toISOString().replace(/[:.]/g, '-');
   const target = path.join(backupsDir, `${path.basename(filePath)}.${stamp}.bak`);
   await fs.copyFile(filePath, target);
+  // A backup of a credential-bearing file must never be more readable than
+  // the file it copies, whatever the platform's copy semantics.
+  await fs.chmod(target, sourceMode);
   return target;
 }

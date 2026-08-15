@@ -83,7 +83,7 @@ describe('rejected-event accounting', () => {
     }
   });
 
-  it('lock-serialized records accumulate the running total', async () => {
+  it('sequential records accumulate the running total', async () => {
     const dirs = tempDirs();
     try {
       const stats = new DeliveryStats(dirs.statsFile, undefined, dirs.locksDir);
@@ -91,6 +91,56 @@ describe('rejected-event accounting', () => {
       await stats.recordRejected(1);
       await stats.recordRejected(2);
 
+      const snapshot = await stats.read();
+      expect(snapshot?.totalRejected).toBe(3);
+      expect(snapshot?.lastRejectedCount).toBe(2);
+    } finally {
+      await fs.rm(path.dirname(dirs.queueDir), { recursive: true, force: true });
+    }
+  });
+
+  it('waits for a held lock and records once it frees', async () => {
+    const dirs = tempDirs();
+    try {
+      const stats = new DeliveryStats(dirs.statsFile, undefined, dirs.locksDir);
+      await stats.recordRejected(1);
+
+      // Simulate another hook holding the lock; free it mid-wait.
+      const lockFile = path.join(dirs.locksDir, 'delivery-stats.lock');
+      await fs.mkdir(dirs.locksDir, { recursive: true });
+      await fs.writeFile(lockFile, JSON.stringify({ pid: 0, at: new Date().toISOString() }));
+      const started = Date.now();
+      const pending = stats.recordRejected(2);
+      setTimeout(() => {
+        void fs.rm(lockFile, { force: true });
+      }, 60);
+      await pending;
+
+      // It genuinely waited for the lock instead of falling straight through
+      // to the unlocked write.
+      expect(Date.now() - started).toBeGreaterThanOrEqual(50);
+      const snapshot = await stats.read();
+      expect(snapshot?.totalRejected).toBe(3);
+      expect(snapshot?.lastRejectedCount).toBe(2);
+    } finally {
+      await fs.rm(path.dirname(dirs.queueDir), { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to a best-effort unlocked write when the lock never frees', async () => {
+    const dirs = tempDirs();
+    try {
+      const stats = new DeliveryStats(dirs.statsFile, undefined, dirs.locksDir);
+      await stats.recordRejected(1);
+
+      // Lock held for the whole bounded wait (fresh enough to not be stale-broken).
+      const lockFile = path.join(dirs.locksDir, 'delivery-stats.lock');
+      await fs.mkdir(dirs.locksDir, { recursive: true });
+      await fs.writeFile(lockFile, JSON.stringify({ pid: 0, at: new Date().toISOString() }));
+
+      await stats.recordRejected(2);
+
+      // The record still lands: bounded wait expired, then unlocked best-effort.
       const snapshot = await stats.read();
       expect(snapshot?.totalRejected).toBe(3);
       expect(snapshot?.lastRejectedCount).toBe(2);

@@ -8,6 +8,10 @@ export interface DeliveryStatsSnapshot {
   lastRejectedAt: string;
 }
 
+const LOCK_POLL_MS = 25;
+/** Bounded: recordRejected runs on the hook path and must never stall it. */
+const LOCK_MAX_WAIT_MS = 300;
+
 /**
  * Persisted tally of events the backend accepted the batch for but rejected
  * individually. Rejected events are never resent — the schema refused them —
@@ -40,17 +44,13 @@ export class DeliveryStats {
   async recordRejected(count: number): Promise<void> {
     if (count <= 0) return;
     // Two hooks can finish sends concurrently; without the lock one
-    // increment of the read-modify-write below is silently lost. When the
-    // lock cannot be acquired (or locking itself fails), still record
-    // best-effort: a rare lost increment beats losing the record entirely.
-    let release: (() => Promise<void>) | undefined;
-    if (this.locksDir) {
-      try {
-        release = await acquireLock(this.locksDir, 'delivery-stats', this.now);
-      } catch {
-        // fall through to an unlocked best-effort write
-      }
-    }
+    // increment of the read-modify-write below is silently lost. The lock is
+    // polled for a bounded interval (the hook path must never stall); when it
+    // still cannot be acquired — or locking itself fails — the write proceeds
+    // unlocked best-effort: a rare lost increment beats losing the record
+    // entirely. The guarantee is bounded-wait serialization, not mutual
+    // exclusion under arbitrary contention.
+    const release = await this.waitForLock();
     try {
       const current = await this.read();
       const next: DeliveryStatsSnapshot = {
@@ -69,6 +69,23 @@ export class DeliveryStats {
           // The stale-lock breaker reclaims an unreleased lock after 30s.
         }
       }
+    }
+  }
+
+  /** Poll for the lock up to LOCK_MAX_WAIT_MS; undefined means write unlocked. */
+  private async waitForLock(): Promise<(() => Promise<void>) | undefined> {
+    if (!this.locksDir) return undefined;
+    // Real-time deadline on purpose: an injected test clock may be frozen.
+    const deadline = Date.now() + LOCK_MAX_WAIT_MS;
+    for (;;) {
+      try {
+        const release = await acquireLock(this.locksDir, 'delivery-stats', this.now);
+        if (release) return release;
+      } catch {
+        return undefined; // locking machinery failed; fall back to unlocked
+      }
+      if (Date.now() >= deadline) return undefined;
+      await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS));
     }
   }
 }

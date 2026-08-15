@@ -103,6 +103,10 @@ export class EventQueue {
   /**
    * Send due queued events through the transport. Serialized by a lock so
    * concurrent hook invocations don't double-send; bounded by maxBatch.
+   *
+   * `statsRecorder.recordRejected` must not throw; failures must be swallowed
+   * by the implementation — drain runs on the coding agent's hook critical
+   * path and is not wrapped against recorder errors.
    */
   async drain(
     transport: EventTransport,

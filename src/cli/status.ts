@@ -1,11 +1,9 @@
-import path from 'node:path';
 import type { Env } from '../core/env.js';
-import { DeliveryStats } from '../transport/delivery-stats.js';
 import { providers } from '../providers/registry.js';
 import type { SetupContext } from '../providers/provider.js';
 import { collectGitContext } from '../git/git-context.js';
 import { eventsUrl } from '../config/config.js';
-import { buildCliContext, buildHookCommand, buildQueue, buildTransport } from './context.js';
+import { buildCliContext, buildDeliveryStats, buildHookCommand, buildQueue, buildTransport } from './context.js';
 import { bold, dim, println, symbols } from './ui.js';
 
 export async function runStatus(env: Env): Promise<number> {
@@ -62,7 +60,7 @@ export async function runStatus(env: Env): Promise<number> {
 
   println(bold('Delivery'));
   const queue = buildQueue(context);
-  const deliveryStats = new DeliveryStats(path.join(context.paths.dataDir, 'delivery-stats.json'), env.now);
+  const deliveryStats = buildDeliveryStats(context);
   let pending = await queue.pendingCount();
   if (pending > 0 && eventsUrl(context.config)) {
     // Reasonable moment to retry: we're already out of any agent's critical path.
@@ -77,7 +75,8 @@ export async function runStatus(env: Env): Promise<number> {
   println(`${pending} pending event(s)`);
   const rejectedStats = await deliveryStats.read();
   if (rejectedStats && rejectedStats.totalRejected > 0) {
-    println(`${symbols.warn} ${rejectedStats.totalRejected} event(s) permanently rejected by the backend (last ${rejectedStats.lastRejectedCount} at ${rejectedStats.lastRejectedAt})`);
+    const last = rejectedStats.lastRejectedAt ? ` (last ${rejectedStats.lastRejectedCount} at ${rejectedStats.lastRejectedAt})` : '';
+    println(`${symbols.warn} ${rejectedStats.totalRejected} event(s) permanently rejected by the backend${last}`);
   }
   return 0;
 }

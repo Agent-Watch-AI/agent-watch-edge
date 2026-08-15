@@ -53,30 +53,49 @@ describe('rejected-event accounting', () => {
 
   it('deliverEvents persists a running rejected tally', async () => {
     const dirs = tempDirs();
-    const queue = new EventQueue({
-      queueDir: dirs.queueDir,
-      locksDir: dirs.locksDir,
-      maxEvents: 100,
-      maxAttempts: 5,
-      maxEventAgeDays: 7
-    });
-    const transport = new HttpTransport({
-      eventsUrl: 'https://backend.example/v1/events',
-      timeoutMs: 1000,
-      fetchFn: async () =>
-        new Response(JSON.stringify({ accepted: 0, duplicate: 0, rejected: 1, failed: 0 }), {
-          status: 202,
-          headers: { 'content-type': 'application/json' }
-        })
-    });
-    const stats = new DeliveryStats(dirs.statsFile);
+    try {
+      const queue = new EventQueue({
+        queueDir: dirs.queueDir,
+        locksDir: dirs.locksDir,
+        maxEvents: 100,
+        maxAttempts: 5,
+        maxEventAgeDays: 7
+      });
+      const transport = new HttpTransport({
+        eventsUrl: 'https://backend.example/v1/events',
+        timeoutMs: 1000,
+        fetchFn: async () =>
+          new Response(JSON.stringify({ accepted: 0, duplicate: 0, rejected: 1, failed: 0 }), {
+            status: 202,
+            headers: { 'content-type': 'application/json' }
+          })
+      });
+      const stats = new DeliveryStats(dirs.statsFile);
 
-    const outcome = await deliverEvents([summary('evt_b')], transport, queue, 25, undefined, stats);
+      const outcome = await deliverEvents([summary('evt_b')], transport, queue, 25, undefined, stats);
 
-    expect(outcome.rejected).toBe(1);
-    const snapshot = await stats.read();
-    expect(snapshot?.totalRejected).toBe(1);
-    expect(snapshot?.lastRejectedCount).toBe(1);
-    await fs.rm(path.dirname(dirs.queueDir), { recursive: true, force: true });
+      expect(outcome.rejected).toBe(1);
+      const snapshot = await stats.read();
+      expect(snapshot?.totalRejected).toBe(1);
+      expect(snapshot?.lastRejectedCount).toBe(1);
+    } finally {
+      await fs.rm(path.dirname(dirs.queueDir), { recursive: true, force: true });
+    }
+  });
+
+  it('lock-serialized records accumulate the running total', async () => {
+    const dirs = tempDirs();
+    try {
+      const stats = new DeliveryStats(dirs.statsFile, undefined, dirs.locksDir);
+
+      await stats.recordRejected(1);
+      await stats.recordRejected(2);
+
+      const snapshot = await stats.read();
+      expect(snapshot?.totalRejected).toBe(3);
+      expect(snapshot?.lastRejectedCount).toBe(2);
+    } finally {
+      await fs.rm(path.dirname(dirs.queueDir), { recursive: true, force: true });
+    }
   });
 });

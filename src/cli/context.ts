@@ -8,6 +8,7 @@ import { loadInstallState, type InstallState } from '../storage/install-state.js
 import { eventsUrl, type AgentWatchConfig } from '../config/config.js';
 import { EventQueue } from '../transport/queue.js';
 import { HttpTransport } from '../transport/http-transport.js';
+import { DeliveryStats } from '../transport/delivery-stats.js';
 import type { EventTransport } from '../transport/transport.js';
 
 export interface CliContext {
@@ -42,6 +43,10 @@ export function buildQueue(context: CliContext): EventQueue {
     maxEventAgeDays: context.config.delivery.maxEventAgeDays,
     now: env0(context).now
   });
+}
+
+export function buildDeliveryStats(context: CliContext): DeliveryStats {
+  return new DeliveryStats(path.join(context.paths.dataDir, 'delivery-stats.json'), context.env.now, context.paths.locksDir);
 }
 
 export function buildTransport(context: CliContext, timeoutMs?: number): EventTransport | undefined {

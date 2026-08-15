@@ -1,5 +1,6 @@
 import type { AgentWatchEvent, FeatureCandidate, UsageBillingMode } from '../events/canonical-event.js';
 import { deriveEventId, sha256Hex } from '../events/event-id.js';
+import { contentEvidence } from '../providers/shared/tooling.js';
 import type { ContentEvidence, TurnRecord } from './turn-state.js';
 import type { TurnUsage } from './claude-transcript.js';
 
@@ -158,6 +159,22 @@ export function buildTurnSummary(input: BuildTurnSummaryInput): TurnSummaryEvent
     ended_at: input.endedAt
   };
   return compact(summary);
+}
+
+/**
+ * Recompute content evidence from the text that is actually transmitted.
+ *
+ * Evidence is captured before sanitization, but the sanitizer truncates and
+ * redacts; a backend verifying length or hash against the received text would
+ * then reject honest events. When the text is absent (capture disabled), the
+ * capture-time evidence still describes the content the developer saw, and is
+ * kept as the only description there is.
+ */
+export function alignContentEvidence(summary: TurnSummaryEvent): TurnSummaryEvent {
+  const aligned = { ...summary };
+  if (typeof aligned.prompt === 'string') aligned.prompt_evidence = contentEvidence(aligned.prompt);
+  if (typeof aligned.response === 'string') aligned.response_evidence = contentEvidence(aligned.response);
+  return aligned;
 }
 
 function joinDefined(texts: (string | undefined)[]): string | undefined {

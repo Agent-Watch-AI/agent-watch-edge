@@ -1,11 +1,20 @@
 import type { ProductEvent } from '../events/product-event.js';
 
+export interface DeliveryCounters {
+  accepted: number;
+  duplicate: number;
+  rejected: number;
+  failed: number;
+}
+
 export interface DeliveryResult {
   ok: boolean;
   status?: number;
   /** Whether a failure is worth retrying later (network error, 5xx, 429...). */
   retryable: boolean;
   error?: string;
+  /** Per-event outcome counters from an accepted batch, when the backend sent them. */
+  counters?: DeliveryCounters;
 }
 
 export interface EventTransport {

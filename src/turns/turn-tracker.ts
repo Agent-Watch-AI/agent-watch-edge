@@ -10,7 +10,7 @@ import { sha256Hex } from '../events/event-id.js';
 import { TurnStateStore, type ContentEvidence, type TurnRecord, type TurnStateEntry } from './turn-state.js';
 import { readTurnUsage, type TurnUsage } from './claude-transcript.js';
 import { readCursorTurnUsage } from './cursor-transcript.js';
-import { buildTurnSummary, type TurnSummaryEvent } from './turn-summary.js';
+import { alignContentEvidence, buildTurnSummary, type TurnSummaryEvent } from './turn-summary.js';
 
 const TOOL_COMPLETION_TYPES = new Set(['tool.completed', 'tool.failed', 'shell.completed', 'mcp.completed', 'file.read', 'file.edited']);
 
@@ -108,7 +108,7 @@ function fallbackSummary(sessionId: string, stopEvent: AgentWatchEvent, options:
       model: stopEvent.ai?.model,
       endedAt: stopEvent.timestamp
     });
-    return sanitizeValue(summary);
+    return alignContentEvidence(sanitizeValue(summary));
   } catch (error) {
     debugLog('fallback turn summary failed:', error);
     return undefined;
@@ -199,7 +199,7 @@ async function closeTurnLocked(
 
   // Consume exactly what went into the summary; other prompts' records stay.
   if (!readOnly) await store.remove(mine.map((entry) => entry.file));
-  return sanitizeValue(summary);
+  return alignContentEvidence(sanitizeValue(summary));
 }
 
 /**

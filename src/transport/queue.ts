@@ -39,6 +39,8 @@ export interface DrainStats {
   sent: number;
   failed: number;
   dropped: number;
+  /** Events the backend accepted the batch for but rejected individually. */
+  rejected: number;
   skipped: boolean;
 }
 
@@ -88,12 +90,10 @@ export class EventQueue {
     if (files.length === 0) return undefined;
     let oldest: number | undefined;
     for (const file of files) {
-      try {
-        const stat = await fs.stat(path.join(this.options.queueDir, file));
-        if (oldest === undefined || stat.mtimeMs < oldest) oldest = stat.mtimeMs;
-      } catch {
-        // removed concurrently
-      }
+      const entry = await this.readEntry(path.join(this.options.queueDir, file));
+      if (!entry) continue;
+      const queuedAt = Date.parse(entry.firstQueuedAt);
+      if (Number.isFinite(queuedAt) && (oldest === undefined || queuedAt < oldest)) oldest = queuedAt;
     }
     return oldest === undefined ? undefined : this.now().getTime() - oldest;
   }
@@ -101,17 +101,24 @@ export class EventQueue {
   /**
    * Send due queued events through the transport. Serialized by a lock so
    * concurrent hook invocations don't double-send; bounded by maxBatch.
+   *
+   * `statsRecorder.recordRejected` must not throw; failures must be swallowed
+   * by the implementation — drain runs on the coding agent's hook critical
+   * path and is not wrapped against recorder errors.
    */
-  async drain(transport: EventTransport, maxBatch: number): Promise<DrainStats> {
+  async drain(
+    transport: EventTransport,
+    maxBatch: number,
+    statsRecorder?: { recordRejected(count: number): Promise<void> }
+  ): Promise<DrainStats> {
     const release = await acquireLock(this.options.locksDir, 'queue-drain', this.now);
-    if (!release) return { sent: 0, failed: 0, dropped: 0, skipped: true };
+    if (!release) return { sent: 0, failed: 0, dropped: 0, rejected: 0, skipped: true };
     try {
-      const stats: DrainStats = { sent: 0, failed: 0, dropped: 0, skipped: false };
+      const stats: DrainStats = { sent: 0, failed: 0, dropped: 0, rejected: 0, skipped: false };
       const nowMs = this.now().getTime();
       const due: { file: string; entry: z.infer<typeof queueEntrySchema> }[] = [];
 
       for (const name of await this.listFiles()) {
-        if (due.length >= maxBatch) break;
         const file = path.join(this.options.queueDir, name);
         const entry = await this.readEntry(file);
         if (!entry) {
@@ -140,18 +147,28 @@ export class EventQueue {
           due.push({ file, entry });
         }
       }
-      if (due.length === 0) return stats;
+      // Oldest first: hash-ordered filenames would otherwise let a large
+      // backlog defer the same late-sorting entries on every drain.
+      due.sort((a, b) => Date.parse(a.entry.firstQueuedAt) - Date.parse(b.entry.firstQueuedAt));
+      const batch = due.slice(0, maxBatch);
+      if (batch.length === 0) return stats;
 
-      const events = due.map(({ entry }) => entry.event as unknown as ProductEvent);
+      const events = batch.map(({ entry }) => entry.event as unknown as ProductEvent);
       const result = await transport.send(events);
       if (result.ok) {
-        await Promise.all(due.map(({ file }) => fs.rm(file, { force: true })));
-        stats.sent = due.length;
+        await Promise.all(batch.map(({ file }) => fs.rm(file, { force: true })));
+        stats.sent = batch.length;
+        const rejected = result.counters?.rejected ?? 0;
+        if (rejected > 0) {
+          stats.rejected += rejected;
+          debugLog(`backend permanently rejected ${rejected} event(s) from the drained batch`);
+          await statsRecorder?.recordRejected(rejected);
+        }
         return stats;
       }
 
       debugLog('queue drain failed', result.error ?? `status ${result.status}`);
-      if (!result.retryable && due.length > 1) {
+      if (!result.retryable && batch.length > 1) {
         // The backend rejected the batch outright, but that verdict belongs
         // to at most a few events. Retry entries alone so one poison record
         // cannot take its healthy co-batched neighbors down with it. The
@@ -159,7 +176,7 @@ export class EventQueue {
         // each send can cost the full transport timeout, so the remainder
         // keeps its backoff and is probed on later drains instead.
         let probes = 0;
-        for (const { file, entry } of due) {
+        for (const { file, entry } of batch) {
           if (probes >= MAX_ISOLATION_SENDS) {
             await this.recordFailure(file, entry, nowMs, stats);
             continue;
@@ -169,13 +186,19 @@ export class EventQueue {
           if (single.ok) {
             await fs.rm(file, { force: true });
             stats.sent++;
+            const rejected = single.counters?.rejected ?? 0;
+            if (rejected > 0) {
+              stats.rejected += rejected;
+              debugLog(`backend permanently rejected ${rejected} event(s) from an isolation probe`);
+              await statsRecorder?.recordRejected(rejected);
+            }
           } else {
             await this.recordFailure(file, entry, nowMs, stats);
           }
         }
         return stats;
       }
-      for (const { file, entry } of due) {
+      for (const { file, entry } of batch) {
         await this.recordFailure(file, entry, nowMs, stats);
       }
       return stats;
@@ -278,23 +301,28 @@ export class EventQueue {
     return ageMs > this.options.maxEventAgeDays * 24 * 60 * 60 * 1000;
   }
 
-  /** Keep the queue bounded: oldest entries are sacrificed first. */
+  /** Keep the queue bounded: entries that have waited longest are sacrificed first. */
   private async enforceBound(): Promise<void> {
     const files = await this.listFiles();
     const excess = files.length - this.options.maxEvents;
     if (excess <= 0) return;
-    const withTimes = await Promise.all(
+    const withAge = await Promise.all(
       files.map(async (name) => {
         const full = path.join(this.options.queueDir, name);
+        const entry = await this.readEntry(full);
+        if (entry) return { full, queuedAt: Date.parse(entry.firstQueuedAt) };
         try {
+          // Unreadable entry: fall back to the file clock so it still ages out.
           const stat = await fs.stat(full);
-          return { full, mtime: stat.mtimeMs };
+          return { full, queuedAt: stat.mtimeMs };
         } catch {
           return undefined;
         }
       })
     );
-    const sorted = withTimes.filter((f): f is { full: string; mtime: number } => Boolean(f)).sort((a, b) => a.mtime - b.mtime);
+    const sorted = withAge
+      .filter((file): file is { full: string; queuedAt: number } => Boolean(file))
+      .sort((a, b) => a.queuedAt - b.queuedAt);
     for (const { full } of sorted.slice(0, excess)) {
       await fs.rm(full, { force: true });
     }

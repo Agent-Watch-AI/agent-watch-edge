@@ -1,6 +1,6 @@
 {
   "name": "@agentwatch-ai/bridge",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Connect Claude Code, Codex and Cursor telemetry to your backend with turn, Git and ticket-key attribution.",
   "license": "MIT",
   "type": "module",

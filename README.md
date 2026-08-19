@@ -1,137 +1,128 @@
 # AgentWatch Bridge
 
 [![npm](https://img.shields.io/npm/v/@agentwatch-ai/bridge)](https://www.npmjs.com/package/@agentwatch-ai/bridge)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A small, open-source telemetry bridge for Claude Code, OpenAI Codex and Cursor. It
-sends turn context to your backend and lets the backend attribute provider usage to
-Git branches and ticket keys. There is no model proxy, MITM or daemon.
+A lightweight, zero-daemon telemetry bridge for AI coding agents (**Claude Code**, **OpenAI Codex**, **Cursor**, and **Gemini CLI**).
 
-## Quick start
+It connects agent lifecycle hooks and native OpenTelemetry (OTLP) to your observability backend to attribute LLM usage, costs, tool calls, Git branches, and ticket keys (e.g., `PAY-142`) — without model proxies, MITM intercepts, or background daemons.
 
-Requires Node.js 20+ and a backend that accepts AgentWatch events and OTLP.
+---
+
+## Quick Start
+
+**Requirements:** Node.js 20+
 
 ```bash
+# 1. Install globally
 npm install -g @agentwatch-ai/bridge
-agentwatch setup --endpoint https://backend.example.com
-```
 
-Setup detects installed agents and configures their user-level hooks. Restart Claude
-Code or Codex to load the native OpenTelemetry settings. In Codex, run `/hooks` once
-and trust the AgentWatch entries. Then verify the installation:
+# 2. Configure with your backend
+agentwatch setup --endpoint https://backend.example.com --token YOUR_TOKEN
 
-```bash
-agentwatch doctor
+# 3. Verify status & diagnostics
 agentwatch status
+agentwatch doctor
 ```
 
-For a local backend demo:
+---
+
+## Supported Agents & Limitations
+
+| Agent | Hook Configuration | Native OTel Signals | Status |
+|---|---|---|---|
+| **Claude Code** | `~/.claude/settings.json` | Logs, Traces, Metrics | Full support |
+| **OpenAI Codex** | `~/.codex/hooks.json` | Logs, Traces (`~/.codex/config.toml`) | Full support |
+| **Gemini CLI** | `~/.gemini/settings.json` | Logs, Traces, Metrics | Full support |
+| **Cursor** | `~/.cursor/hooks.json` | None | Partial support |
+
+### Agent Limitations & Notes
+
+* **Claude Code**:
+  * Running sessions must be restarted after `agentwatch setup` to apply telemetry environment variables.
+* **OpenAI Codex**:
+  * Requires trusting new hooks: launch `codex`, type `/hooks`, and approve AgentWatch entries.
+* **Gemini CLI**:
+  * Running sessions must be restarted after setup to load new hooks and OpenTelemetry configuration.
+* **Cursor**:
+  * **No native token usage**: Cursor exposes no token usage in hooks or transcripts, so `turn.summary` events remain `usage_status: "pending"`.
+  * **Cursor CLI**: Currently emits only shell hook events. Full hook lifecycle is available only in Cursor IDE sessions.
+  * **Cloud VMs**: Cloud agents do not have access to the local user hook or binary by default; they require an explicit committed `.cursor/hooks.json` and package installation in the cloud environment.
+  * **Tab suggestions**: AgentWatch monitors accepted edits (`afterTabFileEdit`) and intentionally ignores high-frequency `beforeTabFileRead` events.
+
+---
+
+## CLI Commands
 
 ```bash
-git clone https://github.com/alexrepetskyi/agentwatch.git
-cd agentwatch
-npm install
-npm run build
-npm run example
+# Setup & Configuration
+agentwatch setup --endpoint https://backend.example.com    # Interactive / automated setup
+agentwatch config                                         # Print active configuration (secrets redacted)
+agentwatch agents                                         # List detected agents & status
+
+# Diagnostics & Status
+agentwatch status                                         # Backend, queue, and agent health
+agentwatch doctor                                         # Run environment checks (use --json for CI)
+
+# Hook Execution (invoked automatically by agents)
+agentwatch hook --agent claude                            # Process stdin payload from agent
+agentwatch hook --agent codex --dry-run                   # Test hook output without sending
+
+# Telemetry & Teardown
+agentwatch otel-headers                                   # Output formatted OTel headers
+agentwatch uninstall                                      # Remove hooks and restore backups
+agentwatch uninstall --purge                              # Also delete ~/.agentwatch and queues
 ```
 
-## Data flow
+---
 
-The system produces exactly two product records:
+## Parameters & Flags
 
-- `turn.summary` comes from agent hooks and is sent to `POST <backend>/v1/events`.
-  It contains one prompt→response turn with tools, files and Git context. Hook-created
-  summaries have `usage_status: "pending"` or `"provisional"`.
-- `llm.call` is one provider request. Claude Code and Codex send native OTLP directly
-  to `<backend>/v1/otlp/v1/logs`; the backend normalizes completed requests into
-  idempotent `llm.call` rows.
-
-The backend joins calls to turns using provider session/turn identifiers, then uses
-the exported `aggregateTurnUsage` helper to finalize `llm_calls`, tokens, cost and
-per-agent usage. `llm.call` is the atomic usage ledger; never add its totals to the
-finalized `turn.summary` totals.
-
-Git branches are inspected locally. An uppercase key such as `PAY-142` in
-`feature/PAY-142-refund` is emitted as ticket evidence; the Bridge does not call Jira
-or Linear APIs.
-
-### Backend requirements
-
-- Accept `POST /v1/events` with `{ "events": [...] }`.
-- Accept OTLP/HTTP on `/v1/otlp/v1/logs` and, when enabled, `traces` or `metrics`.
-- Normalize completed OTLP log records with `normalizeOtlpLogs`.
-- Durably upsert calls by `(provider, call_id)` before acknowledging OTLP.
-- Finalize summaries only after a quiet period, watermark or session end.
-
-## Supported agents
-
-| Agent | Hooks | Native OTel |
+| Flag | Description | Default |
 |---|---|---|
-| Claude Code | `~/.claude/settings.json` | logs, traces, metrics |
-| OpenAI Codex | `~/.codex/hooks.json` | logs, traces |
-| Cursor | `~/.cursor/hooks.json` | not available |
+| `--endpoint <url>` | Backend base URL for event ingestion | — |
+| `--token <token>` | Bearer token for backend authentication | — |
+| `--developer-email <email>` | Identity attached to turn summaries | `git config user.email` |
+| `--otel <signals>` | OTLP signals exported by agents: `logs`, `traces`, `metrics`, `all`, or `none` | `logs` |
+| `--agent <id>` | Limit command to a single agent (`claude`, `codex`, `cursor`, `gemini`) | All detected |
+| `--yes`, `--non-interactive` | Non-interactive mode (fail instead of prompting on missing args) | `false` |
+| `--purge` | Used with `uninstall`: removes `~/.agentwatch` and local queues | `false` |
+| `--dry-run` | Used with `hook`: prints canonical events to stdout instead of sending | `false` |
+| `--json` | Used with `doctor`: output machine-readable JSON | `false` |
+| `--verbose` | Print verbose diagnostic logs to stderr | `false` |
+| `--version` | Display bridge version | — |
 
-Cursor currently exposes no token usage in hooks or transcripts, so its summaries
-remain `usage_status: "pending"`. Cursor CLI currently emits only shell hook events;
-IDE sessions provide the full hook surface.
-
-Cloud agents can run committed `.cursor/hooks.json` hooks, but AgentWatch setup does
-not configure cloud environments: it installs a local user hook, and cloud VMs do not
-have the AgentWatch binary automatically. Cloud use requires an explicit project hook
-and installing the package in the cloud environment.
-
-AgentWatch records accepted Tab edits through `afterTabFileEdit`. It deliberately does
-not register `beforeTabFileRead`, which fires for every suggestion and carries file
-content.
-
-## Commands
-
-```bash
-agentwatch setup        # configure detected agents
-agentwatch status       # backend, repository, agents and queue
-agentwatch doctor       # diagnostics; add --json for machine output
-agentwatch config       # effective config with secrets redacted
-agentwatch uninstall    # remove AgentWatch-owned config; add --purge for local data
-```
-
-Setup preserves existing hooks, is idempotent and creates timestamped backups before
-changing agent configuration. Foreign telemetry configuration is reported as a
-conflict and is never overwritten.
+---
 
 ## Configuration
 
-Global configuration lives in `~/.agentwatch/config.json`. A repository may commit a
-`.agentwatch.json` file to reduce content capture for that repository:
+* **Global configuration**: `~/.agentwatch/config.json` (managed via `agentwatch setup`).
+* **Repository overrides**: Place a `.agentwatch.json` in any repository root to adjust content capture:
 
 ```json
 {
   "capture": {
+    "prompts": true,
     "responses": false,
-    "toolOutput": false
+    "toolInput": true,
+    "toolOutput": false,
+    "git": true,
+    "files": true
   }
 }
 ```
 
-Prompts, responses, tool input/output, Git and file capture are enabled by default.
-Repository config may override only capture settings; endpoint, token, identity,
-delivery, emission and OTel signal selection remain machine-global.
+*Note: Infrastructure settings (`endpoint`, `token`, `developerEmail`) are global-only.*
 
-Use `agentwatch setup --otel <signals>` with `all`, `none` or a comma list such as
-`logs,traces`. The default is `logs`, which carries the per-request usage ledger.
+---
 
-## Privacy and reliability
+## Data Flow & Backend Integration
 
-- Hook-derived records pass through recursive secret redaction before delivery.
-- Native OTLP goes directly from Claude Code or Codex to your backend and does not pass
-  through the Bridge sanitizer. AgentWatch does not enable provider options that add
-  raw prompts or tool content to native OTel.
-- Disabled prompt/response capture retains only `{length, sha256}` evidence. Disabled
-  tool, Git and file categories are omitted.
-- Failed hook deliveries enter a bounded local queue with backoff. A 60-second circuit
-  breaker avoids repeated waits while the backend is unavailable.
+1. **`turn.summary`**: Generated via agent hooks (`POST <backend>/v1/events`). Captures user prompt, tools executed, files touched, Git branch, and ticket keys.
+2. **`llm.call`**: Emitted via native OTLP (`POST <backend>/v1/otlp/v1/logs`). Contains token usage, cost, and latency per model request.
+3. The backend joins `llm.call` to `turn.summary` records using conversation/turn IDs.
 
-## Backend helpers
-
-The package ships JavaScript and TypeScript declarations for its public helpers:
+### Backend SDK Helpers
 
 ```ts
 import type { ProductEvent } from '@agentwatch-ai/bridge/events';
@@ -139,14 +130,8 @@ import { normalizeOtlpLogs } from '@agentwatch-ai/bridge/otlp';
 import { aggregateTurnUsage } from '@agentwatch-ai/bridge/aggregate-turn';
 ```
 
-## Links
-
-- GitHub: <https://github.com/alexrepetskyi/agentwatch>
-- npm: <https://www.npmjs.com/package/@agentwatch-ai/bridge>
-- Issues: <https://github.com/alexrepetskyi/agentwatch/issues>
+---
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Inspired by ideas from
-[o11y-dev/opentelemetry-hooks](https://github.com/o11y-dev/opentelemetry-hooks) (MIT);
-this project is an independent TypeScript implementation.
+MIT © [Aleksandr Repetskyi](https://github.com/alexrepetskyi)

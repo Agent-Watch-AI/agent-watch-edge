@@ -90,7 +90,8 @@ export interface BuildTurnSummaryInput {
 const PROVIDER_LABELS: Record<string, string> = {
   claude: 'claude-code',
   codex: 'codex',
-  cursor: 'cursor'
+  cursor: 'cursor',
+  gemini: 'gemini'
 };
 
 export function buildTurnSummary(input: BuildTurnSummaryInput): TurnSummaryEvent {

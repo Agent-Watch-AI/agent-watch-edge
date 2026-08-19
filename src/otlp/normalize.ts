@@ -28,7 +28,7 @@ export interface NormalizeOtlpOptions {
    * inside one database transaction.
    */
   correlate?: (identity: {
-    provider: 'claude' | 'codex';
+    provider: 'claude' | 'codex' | 'gemini';
     sessionId?: string;
     turnId?: string;
     threadId?: string;
@@ -103,7 +103,7 @@ function normalizeLogRecord(log: Attributes, attrs: Attributes, options: Normali
   const durationMs = firstNumber(attrs, ['duration_ms', 'request.duration_ms', 'codex.api_request.duration_ms']);
 
   return buildLlmCall({
-    provider: provider === 'claude' ? 'claude-code' : 'codex',
+    provider: provider === 'claude' ? 'claude-code' : provider === 'gemini' ? 'gemini' : 'codex',
     surface: correlated?.surface ?? 'cli',
     callId,
     providerRequestId: requestId,
@@ -137,8 +137,9 @@ function normalizeLogRecord(log: Attributes, attrs: Attributes, options: Normali
   });
 }
 
-function detectProvider(eventName: string | undefined, eventType: string | undefined, attrs: Attributes): 'claude' | 'codex' | undefined {
+function detectProvider(eventName: string | undefined, eventType: string | undefined, attrs: Attributes): 'claude' | 'codex' | 'gemini' | undefined {
   const names = `${eventName ?? ''} ${eventType ?? ''}`;
+  if (/gemini[._](api_request|llm_request)|gemini_code/.test(names) || firstString(attrs, ['gen_ai.system']) === 'gemini') return 'gemini';
   if (/codex[._](sse_event|api_request)|response\.completed/.test(names) && firstString(attrs, ['conversation.id', 'thread.id'])) return 'codex';
   if (/claude_code[._](api_request|llm_request)/.test(names) && firstString(attrs, ['session.id'])) return 'claude';
   // Older Claude logs may use the bare event name. Do not let that generic
@@ -150,9 +151,10 @@ function detectProvider(eventName: string | undefined, eventType: string | undef
   return undefined;
 }
 
-function isCompletedLlmRequest(provider: 'claude' | 'codex', eventName?: string, eventType?: string): boolean {
+function isCompletedLlmRequest(provider: 'claude' | 'codex' | 'gemini', eventName?: string, eventType?: string): boolean {
   const names = `${eventName ?? ''} ${eventType ?? ''}`;
   if (provider === 'claude') return /api_request/.test(names);
+  if (provider === 'gemini') return /api_request|generate_content|generateContent|response\.completed/.test(names) || names.trim() === '';
   return /codex[._]api_request|response\.completed/.test(names);
 }
 

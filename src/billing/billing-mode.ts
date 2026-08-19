@@ -13,6 +13,7 @@ export async function detectBillingMode(agentId: string, env: Env): Promise<Usag
   try {
     if (agentId === 'claude') return await detectClaude(env);
     if (agentId === 'codex') return await detectCodex(env);
+    if (agentId === 'gemini') return await detectGemini(env);
   } catch {
     // fall through
   }
@@ -61,6 +62,19 @@ async function detectCodex(env: Env): Promise<UsageBillingMode> {
   if (mode === 'chatgpt') return 'subscription';
   if (mode === 'apikey') return 'api';
   if (typeof auth['OPENAI_API_KEY'] === 'string' && auth['OPENAI_API_KEY'].length > 0) return 'api';
+  return 'unknown';
+}
+
+async function detectGemini(env: Env): Promise<UsageBillingMode> {
+  if (isSet(env.vars['GEMINI_API_KEY']) || isSet(env.vars['GOOGLE_API_KEY']) || isSet(env.vars['GOOGLE_GENAI_USE_VERTEXAI'])) return 'api';
+  const state = (await readRecord(path.join(env.home, '.gemini', 'settings.json'))) ?? (await readRecord(path.join(env.home, '.gemini', 'oauth.json')));
+  if (!state) return 'unknown';
+  const mode = state['auth_mode'] ?? state['billingType'];
+  if (typeof mode === 'string') {
+    if (mode.includes('subscription')) return 'subscription';
+    if (mode.includes('api')) return 'api';
+  }
+  if (typeof state['GEMINI_API_KEY'] === 'string' || typeof state['GOOGLE_API_KEY'] === 'string') return 'api';
   return 'unknown';
 }
 

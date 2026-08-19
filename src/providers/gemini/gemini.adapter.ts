@@ -22,6 +22,7 @@ const geminiPayloadSchema = z
     tool_response: z.unknown().optional(),
     tool_error: z.unknown().optional(),
     prompt: z.string().optional(),
+    prompt_response: z.string().optional(),
     source: z.string().optional(),
     model: z.string().optional(),
     reason: z.string().optional(),
@@ -36,6 +37,12 @@ export type GeminiPayload = z.infer<typeof geminiPayloadSchema>;
 const EVENT_TYPE_MAP: Record<string, CanonicalEventType> = {
   SessionStart: 'session.started',
   SessionEnd: 'session.ended',
+  // Current Gemini CLI hook names.
+  BeforeAgent: 'prompt.submitted',
+  AfterAgent: 'generation.completed',
+  PreCompress: 'compaction.started',
+  // Kept for payload compatibility with old installations. New hook
+  // registrations use the names above.
   UserPromptSubmit: 'prompt.submitted',
   PermissionRequest: 'permission.requested',
   Stop: 'generation.completed',
@@ -61,6 +68,7 @@ export function parseGeminiHookEvent(rawPayload: unknown, context: HookContext):
     case 'SessionEnd':
       event.metadata = { ...event.metadata, sessionEndReason: payload.reason };
       break;
+    case 'BeforeAgent':
     case 'UserPromptSubmit': {
       const prompt = payload.prompt ?? '';
       event.metadata = { ...event.metadata, prompt: contentEvidence(prompt) };
@@ -69,14 +77,17 @@ export function parseGeminiHookEvent(rawPayload: unknown, context: HookContext):
       }
       break;
     }
+    case 'BeforeTool':
+    case 'AfterTool':
     case 'PreToolUse':
     case 'PostToolUse':
     case 'PostToolUseFailure':
     case 'PermissionRequest':
       applyToolFields(event, payload, providerEventType, context);
       break;
+    case 'AfterAgent':
     case 'Stop': {
-      const response = payload.last_assistant_message ?? '';
+      const response = payload.prompt_response ?? payload.last_assistant_message ?? '';
       event.metadata = {
         ...event.metadata,
         stopHookActive: payload.stop_hook_active,
@@ -141,10 +152,10 @@ function canonicalType(payload: GeminiPayload, providerEventType: string): Canon
   if (direct) return direct;
 
   const toolClassification = classifyTool(payload.tool_name);
-  if (providerEventType === 'PreToolUse') {
+  if (providerEventType === 'BeforeTool' || providerEventType === 'PreToolUse') {
     return toolStartType(toolClassification);
   }
-  if (providerEventType === 'PostToolUse' || providerEventType === 'PostToolUseFailure') {
+  if (providerEventType === 'AfterTool' || providerEventType === 'PostToolUse' || providerEventType === 'PostToolUseFailure') {
     return toolCompleteType(toolClassification);
   }
   return 'agent.other';
@@ -153,7 +164,7 @@ function canonicalType(payload: GeminiPayload, providerEventType: string): Canon
 function applyToolFields(event: AgentWatchEvent, payload: GeminiPayload, providerEventType: string, context: HookContext): void {
   const kind = classifyTool(payload.tool_name);
   const isFailure = providerEventType === 'PostToolUseFailure';
-  const isStart = providerEventType === 'PreToolUse' || providerEventType === 'PermissionRequest';
+  const isStart = providerEventType === 'BeforeTool' || providerEventType === 'PreToolUse' || providerEventType === 'PermissionRequest';
 
   event.tool = {
     name: payload.tool_name,

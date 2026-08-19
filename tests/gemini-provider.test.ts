@@ -79,8 +79,9 @@ describe('Gemini provider', () => {
         expect(settings.hooks[eventName]).toHaveLength(1);
         expect(settings.hooks[eventName][0].hooks[0].command).toBe(HOOK_CMD);
       }
-      expect(settings.hooks.PreToolUse[0].matcher).toBe('*');
+      expect(settings.hooks.BeforeTool[0].matcher).toBe('*');
       expect(settings.hooks.SessionStart[0].matcher).toBeUndefined();
+      expect(settings.hooks.AfterAgent[0].hooks[0].timeout).toBe(30_000);
       expect((await detectGemini(world.env)).hooksInstalled).toBe(true);
     });
 
@@ -89,14 +90,14 @@ describe('Gemini provider', () => {
       await writeJson(settingsPath, {
         model: 'gemini-2.5-pro',
         hooks: {
-          PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'my-linter --check' }] }]
+          BeforeTool: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'my-linter --check' }] }]
         }
       });
       await installGeminiHooks(setupContext());
       const settings = await readJson(settingsPath);
       expect(settings.model).toBe('gemini-2.5-pro');
-      expect(settings.hooks.PreToolUse).toHaveLength(2);
-      expect(settings.hooks.PreToolUse[0].hooks[0].command).toBe('my-linter --check');
+      expect(settings.hooks.BeforeTool).toHaveLength(2);
+      expect(settings.hooks.BeforeTool[0].hooks[0].command).toBe('my-linter --check');
     });
 
     it('uninstalls hooks cleanly', async () => {
@@ -140,7 +141,7 @@ describe('Gemini provider', () => {
   });
 
   describe('hook adapter', () => {
-    it('parses SessionStart and UserPromptSubmit events', () => {
+    it('parses SessionStart and BeforeAgent events', () => {
       const context = { env: world.env, config: defaultConfig() };
       const sessionEvents = parseGeminiHookEvent(
         {
@@ -158,7 +159,7 @@ describe('Gemini provider', () => {
 
       const promptEvents = parseGeminiHookEvent(
         {
-          hook_event_name: 'UserPromptSubmit',
+          hook_event_name: 'BeforeAgent',
           session_id: 'session-gem-1',
           prompt_id: 'turn-gem-1',
           prompt: 'Fix the bug'
@@ -170,11 +171,11 @@ describe('Gemini provider', () => {
       expect(promptEvents[0]!.session.turnId).toBe('turn-gem-1');
     });
 
-    it('parses PreToolUse, PostToolUse and Stop', () => {
+    it('parses BeforeTool, AfterTool and AfterAgent', () => {
       const context = { env: world.env, config: defaultConfig() };
       const toolEvents = parseGeminiHookEvent(
         {
-          hook_event_name: 'PreToolUse',
+          hook_event_name: 'BeforeTool',
           session_id: 'session-gem-1',
           tool_name: 'Bash',
           tool_use_id: 'tool-1'
@@ -187,9 +188,9 @@ describe('Gemini provider', () => {
 
       const stopEvents = parseGeminiHookEvent(
         {
-          hook_event_name: 'Stop',
+          hook_event_name: 'AfterAgent',
           session_id: 'session-gem-1',
-          last_assistant_message: 'Done fixing!'
+          prompt_response: 'Done fixing!'
         },
         context
       );

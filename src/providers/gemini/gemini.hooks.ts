@@ -6,18 +6,18 @@ import { geminiSettingsPath } from './gemini.detect.js';
 export const GEMINI_HOOK_EVENTS = [
   'SessionStart',
   'SessionEnd',
-  'UserPromptSubmit',
-  'PreToolUse',
-  'PostToolUse',
-  'PostToolUseFailure',
-  'PermissionRequest',
-  'Stop',
-  'SubagentStart',
-  'SubagentStop'
+  'BeforeAgent',
+  'AfterAgent',
+  'BeforeTool',
+  'AfterTool',
+  'Notification',
+  'PreCompress'
 ] as const;
 
-const MATCHED_EVENTS = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest']);
-const HOOK_TIMEOUT_SECONDS = 30;
+const MATCHED_EVENTS = new Set(['BeforeAgent', 'AfterAgent', 'BeforeTool', 'AfterTool', 'Notification', 'PreCompress']);
+// Gemini CLI interprets this value as milliseconds (its default is 60,000).
+// `30` made AgentWatch hooks time out almost immediately.
+const HOOK_TIMEOUT_MILLISECONDS = 30_000;
 
 interface HookEntry {
   matcher?: string;
@@ -63,7 +63,7 @@ export async function installGeminiHooks(context: SetupContext): Promise<SetupOu
     const entries = withoutAgentWatchHandlers(existing);
     entries.push({
       ...(MATCHED_EVENTS.has(eventName) ? { matcher: '*' } : {}),
-      hooks: [{ type: 'command', command: context.hookCommand, timeout: HOOK_TIMEOUT_SECONDS }]
+      hooks: [{ type: 'command', command: context.hookCommand, timeout: HOOK_TIMEOUT_MILLISECONDS }]
     } satisfies HookEntry);
     hooks[eventName] = entries;
   }

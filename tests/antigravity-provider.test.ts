@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { antigravityProvider } from '../src/providers/antigravity/antigravity.provider.js';
+import { canonicalModelName } from '../src/providers/antigravity/antigravity.adapter.js';
 import { antigravityHooksPath, detectAntigravity } from '../src/providers/antigravity/antigravity.detect.js';
 import { ANTIGRAVITY_HOOK_EVENTS, installAntigravityHooks, uninstallAntigravityHooks } from '../src/providers/antigravity/antigravity.hooks.js';
 import { resolvePaths } from '../src/storage/paths.js';
@@ -62,8 +63,34 @@ describe('Antigravity provider', () => {
       expect(event?.session.id).toBe(ANTIGRAVITY_COMMON.conversationId);
       expect(event?.session.providerId).toBe(ANTIGRAVITY_COMMON.conversationId);
       expect(event?.session.turnId).toBe(ANTIGRAVITY_COMMON.executionId);
-      expect(event?.ai?.model).toBe(ANTIGRAVITY_COMMON.modelName);
+      // `Claude Opus 4.6 (Thinking)` reaches the event as the id every other
+      // agent reports, with the picker's own wording kept beside it.
+      expect(event?.ai?.model).toBe('claude-opus-4-6');
+      expect((event?.metadata?.['provider'] as Record<string, unknown>)['modelDisplayName']).toBe(ANTIGRAVITY_COMMON.modelName);
       expect(event?.agent.provider).toBe('antigravity');
+    });
+
+    it('translates every model label the picker produces into an id', () => {
+      const cases: [string, string | undefined][] = [
+        ['Claude Opus 4.6 (Thinking)', 'claude-opus-4-6'],
+        ['Claude Sonnet 4.5', 'claude-sonnet-4-5'],
+        ['Claude Opus 4.5 (Thinking)', 'claude-opus-4-5'],
+        // Google and OpenAI keep the dot: `gemini-3-1-pro` matches nothing.
+        ['Gemini 3 Pro (High)', 'gemini-3-pro'],
+        ['Gemini 3.1 Pro', 'gemini-3.1-pro'],
+        ['GPT-5.2', 'gpt-5.2'],
+        ['GPT-OSS 120B', 'gpt-oss-120b'],
+        // An id is already an id: applying this twice must not change it.
+        ['claude-opus-4-6', 'claude-opus-4-6'],
+        ['gemini-3-pro-preview', 'gemini-3-pro-preview'],
+        ['', undefined],
+        ['   ', undefined],
+        [undefined as unknown as string, undefined]
+      ];
+
+      for (const [displayName, expected] of cases) {
+        expect(canonicalModelName(displayName)).toBe(expected);
+      }
     });
 
     it('selects the event from the oneof member, since no name field exists', async () => {

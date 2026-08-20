@@ -6,7 +6,11 @@ import type { HookContext, ToolStatus } from '../types/provider.types.js';
 import {
   ANTIGRAVITY_DISPLAY_NAME,
   ANTIGRAVITY_HOOK_EVENT_BY_ARGS,
-  ANTIGRAVITY_PROVIDER_ID
+  ANTIGRAVITY_PROVIDER_ID,
+  DOTLESS_MODEL_FAMILY,
+  RE_MODEL_QUALIFIER,
+  RE_MODEL_VERSION_DOT,
+  RE_MODEL_WHITESPACE
 } from './constants/antigravity.constants.js';
 import { antigravityPayloadSchema } from './schemas/antigravity.schema.js';
 import type { AntigravityArgsKey, AntigravityHookEvent, AntigravityPayload, AntigravityToolCall } from './types/antigravity.types.js';
@@ -80,6 +84,35 @@ export function parseAntigravityHookEvent(rawPayload: unknown, context: HookCont
 }
 
 /**
+ * The model id behind Antigravity's display name.
+ *
+ * Exported for the same reason it exists: `Claude Opus 4.6 (Thinking)` is not a
+ * model any price list, any other provider's records, or any group-by-model
+ * report can match, and the turn it describes is the only place the name
+ * appears. This translates the picker's label into the id every other agent
+ * reports — and leaves an id that already looks like one untouched, so it is
+ * safe to apply to whatever the payload happens to carry.
+ *
+ * @param displayName - `common.modelName`, as Antigravity wrote it.
+ * @returns The canonical id, or undefined when no model was named.
+ */
+export function canonicalModelName(displayName: string | undefined): string | undefined {
+  if (!displayName) return undefined;
+
+  const hyphenated = displayName
+    .toLowerCase()
+    .replace(RE_MODEL_QUALIFIER, '')
+    .trim()
+    .replace(RE_MODEL_WHITESPACE, '-');
+
+  if (!hyphenated) return undefined;
+
+  if (!hyphenated.startsWith(DOTLESS_MODEL_FAMILY)) return hyphenated;
+
+  return hyphenated.replace(RE_MODEL_VERSION_DOT, '-');
+}
+
+/**
  * The provider-independent part of the event.
  *
  * @param payload - Parsed hook payload.
@@ -89,6 +122,7 @@ export function parseAntigravityHookEvent(rawPayload: unknown, context: HookCont
 function antigravityBaseEvent(payload: AntigravityPayload, hook: AntigravityHookEvent): AgentWatchEvent {
   const common = payload.common;
   const stepIdx = stepIdxOf(payload, hook);
+  const model = canonicalModelName(common?.modelName);
 
   return baseEvent({
     provider: ANTIGRAVITY_PROVIDER_ID,
@@ -101,8 +135,11 @@ function antigravityBaseEvent(payload: AntigravityPayload, hook: AntigravityHook
     turnId: common?.executionId,
     toolUseId: stepIdx,
     payloadFingerprint: sha256Hex(JSON.stringify(fingerprintParts(payload, hook))),
-    ai: common?.modelName ? { model: common.modelName, billingMode: 'unknown' } : undefined,
+    ai: model ? { model, billingMode: 'unknown' } : undefined,
     providerMetadata: {
+      // The picker's own wording, kept beside the id it was translated into: it
+      // carries the thinking/effort selection, which the id does not.
+      modelDisplayName: common?.modelName,
       transcriptPath: common?.transcriptPath,
       artifactDirectoryPath: common?.artifactDirectoryPath,
       stepIdx,

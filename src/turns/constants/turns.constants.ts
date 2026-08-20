@@ -58,6 +58,19 @@ export const IDE_SURFACE = 'ide';
 /** Separator between several prompts collapsed into one turn. */
 export const PROMPT_JOIN_SEPARATOR = '\n---\n';
 
+/**
+ * Cap on `files_touched` and `files_read`, matching the platform's own limit on
+ * either list.
+ *
+ * This is a delivery guarantee, not a payload-size preference. The backend
+ * validates the whole summary against one schema: a list one entry over its
+ * bound fails that schema, the batch answers 422, and 422 is not retryable —
+ * so an exploratory turn that read 501 files used to lose its tokens, its cost
+ * and its ticket keys along with the file list. A long turn's file list is
+ * truncated instead; that is a truncated list, not a lost turn.
+ */
+export const MAX_TURN_FILES = 500;
+
 /** Fallback tool name for a call the provider did not name. */
 export const UNKNOWN_TOOL_NAME = 'unknown';
 

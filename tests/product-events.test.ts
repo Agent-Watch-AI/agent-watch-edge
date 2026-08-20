@@ -145,6 +145,46 @@ describe('two-record product contract', () => {
     expect(calls[0]?.call_id).not.toBe(calls[1]?.call_id);
   });
 
+  it('keeps both file lists inside the platform-accepted bound', () => {
+    const tools = Array.from({ length: 700 }, (_, index) => ({
+      kind: 'tool' as const,
+      at: '2026-08-07T12:00:00.000Z',
+      tool: index % 2 === 0 ? 'Read' : 'Edit',
+      filePath: `src/file-${String(index)}.ts`,
+      access: index % 2 === 0 ? ('read' as const) : ('edit' as const)
+    }));
+    const summary = buildTurnSummary({
+      provider: 'claude', surface: 'cli', sessionId: 'sess-1', turnId: 'turn-1',
+      prompts: [], tools, endedAt: '2026-08-07T12:00:00.000Z'
+    });
+
+    // A list one entry over the bound fails the backend's schema, and its 422 is
+    // not retryable: the whole turn — tokens included — would be lost with it.
+    expect(summary.files_read).toHaveLength(350);
+    expect(summary.files_touched).toHaveLength(350);
+    expect(summary.tool_calls).toBe(700);
+  });
+
+  it('truncates a file list that alone exceeds the bound, without dropping the turn', () => {
+    const tools = Array.from({ length: 600 }, (_, index) => ({
+      kind: 'tool' as const,
+      at: '2026-08-07T12:00:00.000Z',
+      tool: 'Read',
+      filePath: `src/file-${String(index)}.ts`,
+      access: 'read' as const
+    }));
+    const summary = buildTurnSummary({
+      provider: 'claude', surface: 'cli', sessionId: 'sess-1', turnId: 'turn-1',
+      prompts: [], tools, usage: { inputTokens: 900, outputTokens: 40 }, endedAt: '2026-08-07T12:00:00.000Z'
+    });
+
+    expect(summary.files_read).toHaveLength(500);
+    expect(summary.files_read?.[0]).toBe('src/file-0.ts');
+    // What the truncation exists to protect.
+    expect(summary.input_tokens).toBe(900);
+    expect(summary.tool_calls).toBe(600);
+  });
+
   it('turn.summary and llm.call agree on the public agent.provider label', () => {
     const summary = buildTurnSummary({
       provider: 'claude', surface: 'cli', sessionId: 'sess-1', turnId: 'turn-1',

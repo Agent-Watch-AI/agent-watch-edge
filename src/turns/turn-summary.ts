@@ -3,7 +3,7 @@ import { deriveEventId, sha256Hex } from '../events/event-id.js';
 import { EVENT_SCHEMA_VERSION } from '../events/constants/events.constants.js';
 import type { FeatureCandidate } from '../events/types/events.types.js';
 import { contentEvidence } from '../providers/shared/tooling.js';
-import { PROMPT_JOIN_SEPARATOR, PROVIDER_LABELS, UNKNOWN_TOOL_NAME } from './constants/turns.constants.js';
+import { MAX_TURN_FILES, PROMPT_JOIN_SEPARATOR, PROVIDER_LABELS, UNKNOWN_TOOL_NAME } from './constants/turns.constants.js';
 import type { PromptRecord, ToolRecord } from './types/turn-state.types.js';
 import type { BuildTurnSummaryInput, TouchedFiles, TurnSummaryEvent } from './types/turn-summary.types.js';
 
@@ -106,7 +106,10 @@ export function alignContentEvidence(summary: TurnSummaryEvent): TurnSummaryEven
  * Tool call counts and the files the turn read versus modified.
  *
  * One pass over the records: tool counting and both file lists come from the
- * same iteration rather than three filter/map chains (STYLEGUIDE 3.3).
+ * same iteration rather than three filter/map chains (STYLEGUIDE 3.3). Each
+ * list stops growing at {@link MAX_TURN_FILES}, which is what keeps a
+ * file-heavy turn a summary with a truncated list rather than a summary the
+ * backend refuses whole.
  *
  * @param tools - The turn's tool records.
  * @returns Per-tool counts and the two file lists.
@@ -127,14 +130,29 @@ function collectToolUsage(tools: readonly ToolRecord[]): TouchedFiles {
     // their own list. Legacy records without an access marker stay in
     // files_touched (the historical behavior) rather than being dropped.
     if (tool.access === 'read') {
-      filesRead.add(tool.filePath);
+      addCapped(filesRead, tool.filePath);
       continue;
     }
 
-    filesTouched.add(tool.filePath);
+    addCapped(filesTouched, tool.filePath);
   }
 
   return { toolsUsed, filesTouched: [...filesTouched], filesRead: [...filesRead] };
+}
+
+/**
+ * Record a path while the list still has room for one.
+ *
+ * A path already in the set is not a new entry, so it is re-added rather than
+ * counted against the cap.
+ *
+ * @param paths - The list being built.
+ * @param filePath - Path this tool call named.
+ */
+function addCapped(paths: Set<string>, filePath: string): void {
+  if (paths.size >= MAX_TURN_FILES && !paths.has(filePath)) return;
+
+  paths.add(filePath);
 }
 
 /**

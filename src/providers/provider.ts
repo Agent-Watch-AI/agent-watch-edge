@@ -1,189 +1,192 @@
-import type { Env } from '../core/env.js';
-import type { AgentWatchConfig } from '../config/config.js';
-import type { AgentWatchEvent } from '../events/canonical-event.js';
-import type { AgentWatchPaths } from '../storage/paths.js';
-import type { InstallState } from '../storage/install-state.js';
+import {
+  HOOK_COMMAND_MARKER,
+  KNOWN_AGENT_IDS,
+  RE_AGENTWATCH_BINARY,
+  RE_CLI_SCRIPT,
+  RE_DOUBLE_QUOTE_ESCAPABLE,
+  RE_NODE_BINARY,
+  RE_PATH_SEPARATOR,
+  RE_SHELL_CONTROL,
+  RE_WHITESPACE
+} from './constants/provider.constants.js';
 
-export interface DetectionResult {
-  detected: boolean;
-  /** Human-readable reasons, e.g. "~/.claude exists", "claude on PATH". */
-  evidence: string[];
-  executablePath?: string;
-  /** File AgentWatch hooks are (or would be) registered in. */
-  hookConfigPath: string;
-  hooksInstalled: boolean;
-}
-
-export interface SetupContext {
-  env: Env;
-  paths: AgentWatchPaths;
-  config: AgentWatchConfig;
-  /** Command line agents will invoke, e.g. "/usr/local/bin/agentwatch hook --agent claude". */
-  hookCommand: string;
-  /** Mutated in place by install/uninstall; persisted by the caller. */
-  installState: InstallState;
-}
-
-export interface SetupOutcome {
-  ok: boolean;
-  changed: boolean;
-  /** User-facing notes: required manual steps, skip reasons, errors. */
-  messages: string[];
-}
-
-export interface HookContext {
-  env: Env;
-  config: AgentWatchConfig;
-}
-
-export interface ProviderHookResponse {
-  /** Written verbatim to stdout; omit for protocol-safe silence. */
-  stdout?: string;
-  exitCode: number;
-}
-
-export interface NativeTelemetryStatus {
-  supported: boolean;
-  /** Configured by AgentWatch. */
-  configured: boolean;
-  /** Foreign telemetry configuration we refuse to overwrite. */
-  conflict?: string;
-  detail?: string;
-}
-
-export interface NativeTelemetryConfigurator {
-  supported(env: Env): Promise<boolean>;
-  inspect(context: SetupContext): Promise<NativeTelemetryStatus>;
-  configure(context: SetupContext): Promise<SetupOutcome>;
-  uninstall(context: SetupContext): Promise<SetupOutcome>;
-}
-
-export interface AgentProvider {
-  id: string;
-  displayName: string;
-  detect(env: Env): Promise<DetectionResult>;
-  installHooks(context: SetupContext): Promise<SetupOutcome>;
-  uninstallHooks(context: SetupContext): Promise<SetupOutcome>;
-  parseHookEvent(payload: unknown, context: HookContext): Promise<AgentWatchEvent[]>;
-  getHookResponse(payload: unknown): ProviderHookResponse;
-  /**
-   * Working directory this payload was produced in, when the provider does not
-   * report it as a top-level `cwd`. Git context, repository config and ticket
-   * candidates all hang off this path, so a provider that nests it (Antigravity
-   * reports `common.workspacePaths`) has to say where it is.
-   */
-  resolveCwd?(payload: unknown): string | undefined;
-  nativeTelemetry?: NativeTelemetryConfigurator;
-}
-
-/** Substring identifying AgentWatch-owned hook entries in agent configs. */
-export const HOOK_COMMAND_MARKER = 'agentwatch';
+export { HOOK_COMMAND_MARKER } from './constants/provider.constants.js';
+export type {
+  AgentProvider,
+  DetectionResult,
+  HookContext,
+  McpToolName,
+  NativeTelemetryConfigurator,
+  NativeTelemetryStatus,
+  ProviderHookResponse,
+  SetupContext,
+  SetupOutcome,
+  ToolKind,
+  ToolStatus
+} from './types/provider.types.js';
 
 /**
- * A hook command is ours only when the executable actually invoked before
- * `hook --agent` is the agentwatch CLI: either a binary named `agentwatch`,
- * or the generated `dist/cli.js` entry point run via node. A user's
- * `my-agentwatch-notifier hook --agent x` or a compound
- * `echo agentwatch && my-tool hook --agent x` must never be claimed
- * (and deleted) as AgentWatch-owned.
+ * Whether a hook command registered in an agent's config is ours.
+ *
+ * Ownership decides what uninstall is allowed to delete, so the test is
+ * deliberately narrow: the executable invoked before `hook --agent` must
+ * actually be the agentwatch CLI — a binary named `agentwatch`, or the
+ * generated `dist/cli.js` run via node — the agent id must be one we support,
+ * and nothing may follow. A user's `my-agentwatch-notifier hook --agent x`, or
+ * a compound `echo agentwatch && my-tool hook --agent x`, must never be claimed.
+ *
+ * @param command - The command line found in the agent's config.
+ * @returns True only when AgentWatch wrote it.
  */
 export function isAgentWatchHookCommand(command: string): boolean {
   const tokens = tokenizeHookCommand(command);
+
   if (!tokens) return false;
+
   const hookIndex = tokens.indexOf('hook');
+
   if (hookIndex < 1 || tokens[hookIndex + 1] !== '--agent') return false;
-  const agent = tokens[hookIndex + 2];
-  if (agent !== 'claude' && agent !== 'codex' && agent !== 'cursor' && agent !== 'gemini' && agent !== 'antigravity') return false;
-  // Installed commands contain no trailing shell fragments or extra argv.
+
+  if (!KNOWN_AGENT_IDS.has(tokens[hookIndex + 2] ?? '')) return false;
+
+  // Installed commands carry no trailing shell fragments or extra argv.
   if (hookIndex + 3 !== tokens.length) return false;
 
-  const prefix = tokens.slice(0, hookIndex);
+  return isOurExecutable(tokens.slice(0, hookIndex));
+}
+
+/**
+ * Whether the tokens before `hook` name the agentwatch CLI.
+ *
+ * @param prefix - Tokens preceding the subcommand.
+ * @returns True for `agentwatch` or `<node> <cli script>`.
+ */
+function isOurExecutable(prefix: readonly string[]): boolean {
   if (prefix.length === 1) return isAgentWatchBinary(prefix[0]!);
+
   if (prefix.length === 2) return isNodeBinary(prefix[0]!) && isAgentWatchCliScript(prefix[1]!);
+
   return false;
 }
 
+/**
+ * Whether a path names the installed agentwatch binary.
+ *
+ * @param value - Executable path or bare name.
+ * @returns True when its basename is ours.
+ */
 function isAgentWatchBinary(value: string): boolean {
-  const base = pathBase(value).toLowerCase();
-  return /^(?:agentwatch)(?:\.(?:exe|cmd|ps1|js|cjs|mjs))?$/.test(base);
+  return RE_AGENTWATCH_BINARY.test(pathBase(value).toLowerCase());
 }
 
 /**
- * buildHookCommand embeds process.execPath, so hooks written by earlier
- * installs may name any Node-compatible runtime — including versioned
- * binaries (node22) and TypeScript runners (tsx, deno). Failing to recognize
- * one would leave the stale hook in place next to a fresh duplicate, and
- * every turn would then be processed (and counted) twice.
+ * Whether a path names a Node-compatible runtime.
+ *
+ * @param value - Executable path or bare name.
+ * @returns True when it is one we may have embedded.
  */
 function isNodeBinary(value: string): boolean {
-  return /^(?:node[\d.]*|nodejs|bun|tsx|deno)(?:\.exe)?$/i.test(pathBase(value));
-}
-
-function isAgentWatchCliScript(value: string): boolean {
-  const segments = value.split(/[\\/]/).filter(Boolean);
-  if (segments.length < 2) return false;
-  const lower = segments.map((segment) => segment.toLowerCase());
-  // The exact script suffix emitted by buildHookCommand for local or
-  // otherwise non-global installs; the parent directory need not contain the
-  // package name (for example a renamed checkout).
-  if (lower.at(-1) === 'cli.js' && lower.at(-2) === 'dist') return true;
-  // Dev installs ran the TypeScript entry point directly. Require the
-  // package name somewhere in the path so a foreign tool's cli.ts is never
-  // claimed (and deleted) as ours.
-  return /^cli\.(?:ts|mts|js|mjs|cjs)$/.test(lower.at(-1)!) && lower.some((segment) => segment.includes('agentwatch'));
-}
-
-function pathBase(value: string): string {
-  return value.split(/[\\/]/).pop() ?? '';
+  return RE_NODE_BINARY.test(pathBase(value));
 }
 
 /**
- * Minimal tokenizer for the exact commands buildHookCommand emits. It
- * supports quoted paths and their escaped quote/backslash forms, while
- * rejecting shell control operators anywhere in the command.
+ * Whether a path is the agentwatch CLI entry script.
+ *
+ * `dist/cli.js` is accepted on its own — that exact suffix is what
+ * buildHookCommand emits, and the parent directory need not carry the package
+ * name (a renamed checkout). A dev install running the TypeScript entry point
+ * directly must additionally have the package name somewhere in its path, so a
+ * foreign tool's `cli.ts` is never claimed as ours.
+ *
+ * @param value - Script path.
+ * @returns True when it is our entry point.
+ */
+function isAgentWatchCliScript(value: string): boolean {
+  const segments = value.split(RE_PATH_SEPARATOR).filter(Boolean);
+
+  if (segments.length < 2) return false;
+
+  const lower = segments.map((segment) => segment.toLowerCase());
+  const basename = lower.at(-1)!;
+
+  if (basename === 'cli.js' && lower.at(-2) === 'dist') return true;
+
+  return RE_CLI_SCRIPT.test(basename) && lower.some((segment) => segment.includes(HOOK_COMMAND_MARKER));
+}
+
+/**
+ * Last path segment of a path using either platform's separator.
+ *
+ * @param value - The path.
+ * @returns Its basename.
+ */
+function pathBase(value: string): string {
+  return value.split(RE_PATH_SEPARATOR).pop() ?? '';
+}
+
+/**
+ * Minimal tokenizer for the exact commands buildHookCommand emits.
+ *
+ * Supports quoted paths and their escaped quote/backslash forms, and rejects
+ * any command containing a shell control operator — a command we cannot fully
+ * understand is one we must not claim ownership of.
+ *
+ * @param command - The command line.
+ * @returns Its tokens, or undefined when the command is not one we emit.
  */
 function tokenizeHookCommand(command: string): string[] | undefined {
   const tokens: string[] = [];
   let token = '';
+  let started = false;
   let quote: '"' | "'" | undefined;
-  let tokenStarted = false;
-
-  const push = () => {
-    if (!tokenStarted) return;
-    tokens.push(token);
-    token = '';
-    tokenStarted = false;
-  };
 
   for (let index = 0; index < command.length; index++) {
     const char = command[index]!;
+
     if (quote) {
       if (char === quote) {
         quote = undefined;
         continue;
       }
-      if (quote === '"' && char === '\\' && index + 1 < command.length && /["\\$`]/.test(command[index + 1]!)) {
+
+      // Inside double quotes a backslash still escapes the shell's own
+      // specials; inside single quotes it is a literal character.
+      if (quote === '"' && char === '\\' && index + 1 < command.length && RE_DOUBLE_QUOTE_ESCAPABLE.test(command[index + 1]!)) {
         token += command[++index]!;
-      } else {
-        token += char;
+        started = true;
+        continue;
       }
-      tokenStarted = true;
+
+      token += char;
+      started = true;
       continue;
     }
 
     if (char === '"' || char === "'") {
       quote = char;
-      tokenStarted = true;
-    } else if (/\s/.test(char)) {
-      push();
-    } else if (/[|&;<>\r\n]/.test(char)) {
-      return undefined;
-    } else {
-      token += char;
-      tokenStarted = true;
+      started = true;
+      continue;
     }
+
+    if (RE_WHITESPACE.test(char)) {
+      if (started) tokens.push(token);
+
+      token = '';
+      started = false;
+      continue;
+    }
+
+    // A command we cannot fully understand is one we must not claim.
+    if (RE_SHELL_CONTROL.test(char)) return undefined;
+
+    token += char;
+    started = true;
   }
+
+  // An unterminated quote means the command is not one we wrote.
   if (quote) return undefined;
-  push();
+
+  if (started) tokens.push(token);
+
   return tokens;
 }

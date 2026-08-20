@@ -36,8 +36,10 @@ describe('Antigravity provider', () => {
 
   function setupContext(): SetupContext {
     const config = defaultConfig();
+
     config.endpoint = 'https://backend.example.com';
     config.installationId = 'inst-1';
+
     return {
       env: world.env,
       paths: resolvePaths(world.env),
@@ -49,12 +51,14 @@ describe('Antigravity provider', () => {
 
   async function parse(payload: unknown) {
     const config = defaultConfig();
+
     return antigravityProvider.parseHookEvent(payload, { env: world.env, config });
   }
 
   describe('hook payload parsing', () => {
     it('reads identity out of `common`, not the top level', async () => {
       const [event] = await parse(antigravityPreTool('edit_file', EDIT_FILE_ARGS));
+
       expect(event?.session.id).toBe(ANTIGRAVITY_COMMON.conversationId);
       expect(event?.session.providerId).toBe(ANTIGRAVITY_COMMON.conversationId);
       expect(event?.session.turnId).toBe(ANTIGRAVITY_COMMON.executionId);
@@ -71,8 +75,10 @@ describe('Antigravity provider', () => {
         [antigravityPostTool('edit_file', EDIT_FILE_ARGS), 'file.edited', 'PostToolUse'],
         [antigravityStop(), 'generation.completed', 'Stop']
       ];
+
       for (const [payload, type, providerEventType] of cases) {
         const [event] = await parse(payload);
+
         expect(event?.event.type, providerEventType).toBe(type);
         expect(event?.event.providerEventType).toBe(providerEventType);
       }
@@ -81,22 +87,26 @@ describe('Antigravity provider', () => {
     it('takes the turn prompt from common.lastUserInput on the first invocation only', async () => {
       const config = defaultConfig();
       const [first] = await antigravityProvider.parseHookEvent(antigravityPreInvocation(1), { env: world.env, config });
+
       expect(first?.event.type).toBe('prompt.submitted');
       expect(first?.metadata?.['promptText']).toBe(ANTIGRAVITY_COMMON.lastUserInput);
 
       // Invocations 2..n are model calls inside the same turn, not new prompts.
       const [later] = await antigravityProvider.parseHookEvent(antigravityPreInvocation(4), { env: world.env, config });
+
       expect(later?.event.type).toBe('agent.other');
       expect(later?.metadata?.['promptText']).toBeUndefined();
     });
 
     it('treats invocation 0 as the first one too: the counter base is not documented', async () => {
       const [event] = await parse(antigravityPreInvocation(0));
+
       expect(event?.event.type).toBe('prompt.submitted');
     });
 
     it('closes the turn on Stop and carries the final response', async () => {
       const [event] = await parse(antigravityStop({ finalModelOutput: 'raised it to 30s' }));
+
       expect(event?.event.type).toBe('generation.completed');
       expect(event?.metadata?.['responseText']).toBe('raised it to 30s');
       expect(event?.metadata?.['response']).toMatchObject({ length: 'raised it to 30s'.length });
@@ -104,21 +114,25 @@ describe('Antigravity provider', () => {
 
     it('never maps Stop to session.ended, which would delete the turn state', async () => {
       const [event] = await parse(antigravityStop());
+
       expect(event?.event.type).not.toBe('session.ended');
     });
 
     it('reads PascalCase tool arguments: TargetFile and CommandLine', async () => {
       const [edited] = await parse(antigravityPostTool('edit_file', EDIT_FILE_ARGS));
+
       expect(edited?.event.type).toBe('file.edited');
       expect(edited?.metadata?.['filePath']).toBe(EDIT_FILE_ARGS.TargetFile);
 
       const [ran] = await parse(antigravityPostTool('run_command', RUN_COMMAND_ARGS));
+
       expect(ran?.event.type).toBe('shell.completed');
       expect(ran?.metadata?.['command']).toBe(RUN_COMMAND_ARGS.CommandLine);
     });
 
     it('marks a tool call that reported an error as failed', async () => {
       const [event] = await parse(antigravityPostTool('run_command', RUN_COMMAND_ARGS, { error: 'exit 1' }));
+
       expect(event?.event.type).toBe('tool.failed');
       expect(event?.tool?.status).toBe('failed');
     });
@@ -132,12 +146,14 @@ describe('Antigravity provider', () => {
   describe('hook response', () => {
     it('allows the tool call: PreToolHookResult.decision is required', () => {
       const response = antigravityProvider.getHookResponse(antigravityPreTool('edit_file', EDIT_FILE_ARGS));
+
       expect(response.exitCode).toBe(0);
       expect(JSON.parse(response.stdout ?? '{}')).toEqual({ decision: 'allow' });
     });
 
     it('lets the agent stop: StopHookResult.decision is required', () => {
       const response = antigravityProvider.getHookResponse(antigravityStop());
+
       expect(JSON.parse(response.stdout ?? '{}')).toEqual({ decision: 'stop' });
     });
 
@@ -161,27 +177,36 @@ describe('Antigravity provider', () => {
     it('registers a named hook group with a millisecond timeout', async () => {
       const context = setupContext();
       const outcome = await installAntigravityHooks(context);
+
       expect(outcome.ok).toBe(true);
       expect(outcome.changed).toBe(true);
 
       const file = await readJson<Record<string, Record<string, unknown[]>>>(antigravityHooksPath(world.env));
+
       expect(Object.keys(file)).toEqual(['agentwatch']);
+
       for (const event of ANTIGRAVITY_HOOK_EVENTS) {
         expect(file['agentwatch']?.[event]).toBeDefined();
       }
+
       // 30 was read as 30ms and timed every hook out before node could start.
       const timeouts = JSON.stringify(file).match(/"timeout":\s*(\d+)/g) ?? [];
+
       expect(timeouts.length).toBeGreaterThan(0);
+
       for (const timeout of timeouts) expect(timeout).toContain('30000');
     });
 
     it('is idempotent and never duplicates its own entry', async () => {
       const context = setupContext();
+
       await installAntigravityHooks(context);
       const second = await installAntigravityHooks(context);
+
       expect(second.changed).toBe(false);
 
       const file = await readJson<Record<string, Record<string, unknown[]>>>(antigravityHooksPath(world.env));
+
       expect(file['agentwatch']?.['PreInvocation']).toHaveLength(1);
     });
 
@@ -191,6 +216,7 @@ describe('Antigravity provider', () => {
       });
       await installAntigravityHooks(setupContext());
       const file = await readJson<Record<string, unknown>>(antigravityHooksPath(world.env));
+
       expect(file['other-tool']).toEqual({ PreToolUse: [{ type: 'command', command: 'other-tool run' }] });
     });
 
@@ -198,6 +224,7 @@ describe('Antigravity provider', () => {
       await fs.mkdir(path.dirname(antigravityHooksPath(world.env)), { recursive: true });
       await fs.writeFile(antigravityHooksPath(world.env), '{ not json');
       const outcome = await installAntigravityHooks(setupContext());
+
       expect(outcome.ok).toBe(false);
       expect(outcome.changed).toBe(false);
     });
@@ -206,12 +233,14 @@ describe('Antigravity provider', () => {
   describe('hook uninstallation', () => {
     it('actually removes the hooks it installed', async () => {
       const context = setupContext();
+
       await installAntigravityHooks(context);
       const outcome = await uninstallAntigravityHooks(context);
 
       expect(outcome.ok).toBe(true);
       expect(outcome.changed).toBe(true);
       const read = await fs.readFile(antigravityHooksPath(world.env), 'utf8').catch(() => '{}');
+
       expect(read).not.toContain('agentwatch hook --agent antigravity');
       expect(context.installState.agents['antigravity']).toBeUndefined();
     });
@@ -221,10 +250,12 @@ describe('Antigravity provider', () => {
         'other-tool': { PreToolUse: [{ type: 'command', command: 'other-tool run' }] }
       });
       const context = setupContext();
+
       await installAntigravityHooks(context);
       await uninstallAntigravityHooks(context);
 
       const file = await readJson<Record<string, unknown>>(antigravityHooksPath(world.env));
+
       expect(file['other-tool']).toBeDefined();
       expect(file['agentwatch']).toBeUndefined();
     });
@@ -232,6 +263,7 @@ describe('Antigravity provider', () => {
     it('reports success when there is nothing installed', async () => {
       const context = setupContext();
       const outcome = await uninstallAntigravityHooks(context);
+
       expect(outcome.ok).toBe(true);
       expect(outcome.changed).toBe(false);
     });
@@ -240,6 +272,7 @@ describe('Antigravity provider', () => {
   describe('detection', () => {
     it('is not detected in a clean environment', async () => {
       const result = await detectAntigravity(world.env);
+
       expect(result.detected).toBe(false);
       expect(result.hooksInstalled).toBe(false);
     });
@@ -248,6 +281,7 @@ describe('Antigravity provider', () => {
       await fs.mkdir(path.join(world.home, '.gemini', 'antigravity-cli'), { recursive: true });
       await installAntigravityHooks(setupContext());
       const result = await detectAntigravity(world.env);
+
       expect(result.detected).toBe(true);
       expect(result.hooksInstalled).toBe(true);
       expect(isAgentWatchHookCommand(HOOK_CMD)).toBe(true);
@@ -258,6 +292,7 @@ describe('Antigravity provider', () => {
     it('emits one turn.summary per execution, with prompt, response and tools', async () => {
       const paths = resolvePaths(world.env);
       const config = defaultConfig();
+
       // Unroutable endpoint: the direct send fails and the event lands in the
       // queue exactly as it would have been posted.
       config.endpoint = 'http://127.0.0.1:1';
@@ -273,6 +308,7 @@ describe('Antigravity provider', () => {
         antigravityPostInvocation(2, 'partial'),
         antigravityStop({ finalModelOutput: 'raised it to 30s' })
       ];
+
       for (const payload of payloads) {
         await runHook('antigravity', { env: world.env, input: JSON.stringify(payload), writeStdout: () => {} });
       }
@@ -285,6 +321,7 @@ describe('Antigravity provider', () => {
 
       expect(summaries).toHaveLength(1);
       const summary = summaries[0]!;
+
       expect(summary['provider']).toBe('antigravity');
       expect(summary['surface']).toBe('ide');
       expect(summary['session_id']).toBe(ANTIGRAVITY_COMMON.conversationId);
@@ -302,6 +339,7 @@ describe('Antigravity provider', () => {
     it('does not double the prompt when the first-invocation hook fires twice', async () => {
       const paths = resolvePaths(world.env);
       const config = defaultConfig();
+
       config.endpoint = 'http://127.0.0.1:1';
       config.delivery.timeoutMs = 200;
       await writeJson(paths.configFile, config);
@@ -315,6 +353,7 @@ describe('Antigravity provider', () => {
         names.filter((name) => name.endsWith('.json')).map((name) => readJson<{ event: Record<string, unknown> }>(path.join(paths.queueDir, name)))
       );
       const summary = queued.map((entry) => entry.event).find((event) => (event['event'] as { type?: string }).type === 'turn.summary');
+
       expect(summary?.['prompt']).toBe(ANTIGRAVITY_COMMON.lastUserInput);
     });
   });

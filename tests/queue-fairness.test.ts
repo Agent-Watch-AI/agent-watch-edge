@@ -23,6 +23,7 @@ function summary(id: string) {
 
 function dirs() {
   const base = path.join(os.tmpdir(), `aw-queue-${Math.random().toString(36).slice(2)}`);
+
   return { base, queueDir: path.join(base, 'queue'), locksDir: path.join(base, 'locks') };
 }
 
@@ -50,12 +51,14 @@ describe('queue fairness', () => {
       },
       destination: undefined
     };
+
     await queue.drain(failing as never, 10);
 
     nowMs += 60_000;
     await queue.enqueue([summary('evt_new')]);
 
     const remaining = await fs.readdir(queueDir);
+
     // The bound is 2: the entry that has genuinely waited longest (evt_old)
     // is sacrificed, even though its retry made its file the newest on disk.
     expect(remaining.some((name) => name.includes('evt_old'))).toBe(false);
@@ -104,10 +107,12 @@ describe('queue fairness', () => {
     const transport = {
       async send(events: { id: string }[]) {
         sent.push(events.map((event) => event.id));
+
         return { ok: true, retryable: false } as const;
       },
       destination: undefined
     };
+
     await queue.drain(transport as never, 1);
 
     expect(sent[0]).toEqual(['evt_zzz_first']);

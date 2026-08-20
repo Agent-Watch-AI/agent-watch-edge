@@ -10,7 +10,9 @@ import { normalizeOtlpLogs } from '../src/otlp/normalize.js';
 
 function attribute(key: string, value: string | number | boolean) {
   if (typeof value === 'number') return { key, value: { intValue: String(value) } };
+
   if (typeof value === 'boolean') return { key, value: { boolValue: value } };
+
   return { key, value: { stringValue: value } };
 }
 

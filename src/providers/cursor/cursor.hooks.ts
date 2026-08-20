@@ -1,147 +1,118 @@
+import { asRecord } from '../../core/object.js';
+import type { UnknownRecord } from '../../core/types/core.types.js';
+import { backupFile } from '../../storage/atomic-file.js';
 import { readJsonFile } from '../../storage/json-file.js';
-import { backupFile, writeFileAtomic } from '../../storage/atomic-file.js';
-import { isAgentWatchHookCommand, type SetupContext, type SetupOutcome } from '../provider.js';
+import { registerOurHandlers, stripOurHandlers, sweepUnregisteredEvents, writeJsonValidated } from '../shared/hook-config.js';
+import { withHookInstall, withoutHookInstall } from '../shared/install-record.js';
+import type { SetupContext, SetupOutcome } from '../types/provider.types.js';
 import { cursorHooksJsonPath } from './cursor.detect.js';
+import {
+  CURSOR_HOOKS_VERSION,
+  CURSOR_HOOK_EVENTS,
+  CURSOR_HOOK_TIMEOUT_SECONDS,
+  CURSOR_PROVIDER_ID,
+  CURSOR_USAGE_NOTE,
+  CURSOR_VERSION_KEY
+} from './constants/cursor.constants.js';
+
+export { CURSOR_HOOK_EVENTS } from './constants/cursor.constants.js';
 
 /**
- * Cursor lifecycle hooks (verified against cursor.com/docs/hooks, 2026-08).
- * File: ~/.cursor/hooks.json, format { version: 1, hooks: { <event>: [entry] } }
- * — flat command entries per event, no matcher groups. Hooks need no trust
- * step (unlike Codex). Cursor also reads project/enterprise/team hooks.json
- * files; AgentWatch manages only the user-level one.
+ * Register AgentWatch's hooks in `~/.cursor/hooks.json`.
  *
- * beforeTabFileRead is deliberately NOT registered: it fires on every inline
- * completion and carries the full file content — pure noise with a privacy
- * cost. afterAgentThought and workspaceOpen carry nothing the data model uses.
+ * Cursor's entries are flat command objects rather than matcher groups, so ours
+ * is one entry per event. An existing `version` is preserved verbatim — the
+ * documented schema is 1, but the user's file is the authority on what Cursor
+ * build wrote it.
+ *
+ * @param context - Environment, paths, config and the hook command to write.
+ * @returns Whether the file changed, what to tell the user, and the next
+ *   install state.
  */
-export const CURSOR_HOOK_EVENTS = [
-  'sessionStart',
-  'sessionEnd',
-  'beforeSubmitPrompt',
-  'preToolUse',
-  'postToolUse',
-  'postToolUseFailure',
-  'beforeShellExecution',
-  'afterShellExecution',
-  'beforeMCPExecution',
-  'afterMCPExecution',
-  'beforeReadFile',
-  'afterFileEdit',
-  'subagentStart',
-  'subagentStop',
-  'preCompact',
-  'afterAgentResponse',
-  'stop',
-  'afterTabFileEdit'
-] as const;
-
-const HOOK_TIMEOUT_SECONDS = 30;
-
-interface HookEntry {
-  command?: string;
-  [key: string]: unknown;
-}
-
-function isAgentWatchEntry(entry: unknown): boolean {
-  return typeof entry === 'object' && entry !== null && typeof (entry as HookEntry).command === 'string' && isAgentWatchHookCommand((entry as HookEntry).command!);
-}
-
-/** Remove AgentWatch entries, preserving user entries in the same event list. */
-function withoutAgentWatchEntries(entries: unknown[]): unknown[] {
-  return entries.filter((entry) => !isAgentWatchEntry(entry));
-}
-
 export async function installCursorHooks(context: SetupContext): Promise<SetupOutcome> {
   const hooksPath = cursorHooksJsonPath(context.env);
   const read = await readJsonFile(hooksPath);
+
   if (read.state === 'invalid') {
     return { ok: false, changed: false, messages: [`refusing to modify unparseable ${hooksPath} (${read.error})`] };
   }
-  if (read.state === 'ok' && !isRecord(read.value)) {
+
+  if (read.state === 'ok' && !asRecord(read.value)) {
     return { ok: false, changed: false, messages: [`refusing to modify ${hooksPath}: top level is not an object`] };
   }
-  const file: Record<string, unknown> = read.state === 'ok' && isRecord(read.value) ? read.value : {};
 
-  const before = JSON.stringify(file);
-  // Preserve an existing version verbatim; Cursor's documented schema is 1.
-  if (typeof file['version'] !== 'number') file['version'] = 1;
-  const hooks: Record<string, unknown> = isRecord(file['hooks']) ? (file['hooks'] as Record<string, unknown>) : {};
-  file['hooks'] = hooks;
+  const file: UnknownRecord = (read.state === 'ok' ? asRecord(read.value) : undefined) ?? {};
+  const hooks = asRecord(file['hooks']) ?? {};
+  const registered = registerOurHandlers(hooks, CURSOR_HOOK_EVENTS, () => ourEntry(context.hookCommand), { allowBareHandlers: true });
+  const nextFile: UnknownRecord = {
+    ...file,
+    [CURSOR_VERSION_KEY]: typeof file[CURSOR_VERSION_KEY] === 'number' ? file[CURSOR_VERSION_KEY] : CURSOR_HOOKS_VERSION,
+    hooks: sweepUnregisteredEvents(registered, CURSOR_HOOK_EVENTS, { allowBareHandlers: true })
+  };
+  const changed = JSON.stringify(nextFile) !== JSON.stringify(file);
 
-  for (const eventName of CURSOR_HOOK_EVENTS) {
-    const existing: unknown[] = Array.isArray(hooks[eventName]) ? (hooks[eventName] as unknown[]) : [];
-    const entries = withoutAgentWatchEntries(existing);
-    entries.push({ command: context.hookCommand, timeout: HOOK_TIMEOUT_SECONDS } satisfies HookEntry);
-    hooks[eventName] = entries;
-  }
-  // Sweep our entries out of events we no longer register.
-  for (const [eventName, value] of Object.entries(hooks)) {
-    if ((CURSOR_HOOK_EVENTS as readonly string[]).includes(eventName) || !Array.isArray(value)) continue;
-    const filtered = withoutAgentWatchEntries(value);
-    if (filtered.length === 0) delete hooks[eventName];
-    else if (JSON.stringify(filtered) !== JSON.stringify(value)) hooks[eventName] = filtered;
-  }
-
-  const changed = JSON.stringify(file) !== before;
   if (changed) {
     await backupFile(hooksPath, context.paths.backupsDir, context.env.now());
-    const serialized = JSON.stringify(file, null, 2) + '\n';
-    JSON.parse(serialized);
-    await writeFileAtomic(hooksPath, serialized);
+    await writeJsonValidated(hooksPath, nextFile);
   }
 
-  const messages = changed ? [`hooks registered in ${hooksPath}`] : ['hooks already registered'];
-  messages.push('note: Cursor transcripts carry no token usage yet — Cursor turn summaries stay usage_status=pending until Cursor enriches them.');
-
-  context.installState.agents['cursor'] = {
-    ...context.installState.agents['cursor'],
-    hooksInstalledAt: context.env.now().toISOString(),
-    hookConfigPath: hooksPath,
-    hookEvents: [...CURSOR_HOOK_EVENTS],
-    hookCommand: context.hookCommand,
-    otelOwnedKeys: context.installState.agents['cursor']?.otelOwnedKeys ?? [],
-    notes: context.installState.agents['cursor']?.notes ?? []
+  return {
+    ok: true,
+    changed,
+    messages: [changed ? `hooks registered in ${hooksPath}` : 'hooks already registered', CURSOR_USAGE_NOTE],
+    installState: withHookInstall(context.installState, CURSOR_PROVIDER_ID, {
+      hookConfigPath: hooksPath,
+      hookEvents: CURSOR_HOOK_EVENTS,
+      hookCommand: context.hookCommand,
+      installedAt: context.env.now()
+    })
   };
-
-  return { ok: true, changed, messages };
 }
 
+/**
+ * Remove AgentWatch's hooks from `~/.cursor/hooks.json`.
+ *
+ * Every other top-level field, `version` included, is preserved.
+ *
+ * @param context - Environment, paths and current install state.
+ * @returns Whether the file changed, what to tell the user, and the next
+ *   install state.
+ */
 export async function uninstallCursorHooks(context: SetupContext): Promise<SetupOutcome> {
   const hooksPath = cursorHooksJsonPath(context.env);
   const read = await readJsonFile(hooksPath);
+
   if (read.state === 'missing') return { ok: true, changed: false, messages: ['no Cursor hooks file'] };
-  if (read.state === 'invalid' || !isRecord(read.value)) {
-    return { ok: false, changed: false, messages: [`cannot parse ${hooksPath}; not modified`] };
-  }
-  const file = read.value as Record<string, unknown>;
-  const hooks = file['hooks'];
-  if (!isRecord(hooks)) return { ok: true, changed: false, messages: ['no hooks configured'] };
 
-  let changed = false;
-  for (const [eventName, value] of Object.entries(hooks)) {
-    if (!Array.isArray(value)) continue;
-    const filtered = withoutAgentWatchEntries(value);
-    if (JSON.stringify(filtered) !== JSON.stringify(value)) {
-      changed = true;
-      if (filtered.length === 0) delete hooks[eventName];
-      else hooks[eventName] = filtered;
-    }
-  }
+  const file = read.state === 'ok' ? asRecord(read.value) : undefined;
 
-  if (changed) {
+  if (!file) return { ok: false, changed: false, messages: [`cannot parse ${hooksPath}; not modified`] };
+
+  const hooks = asRecord(file['hooks']);
+
+  if (!hooks) return { ok: true, changed: false, messages: ['no hooks configured'] };
+
+  const stripped = stripOurHandlers(hooks, { allowBareHandlers: true });
+
+  if (stripped.changed) {
     await backupFile(hooksPath, context.paths.backupsDir, context.env.now());
-    // Preserve every other top-level field (version included); only the hook
-    // entries we own are gone.
-    await writeFileAtomic(hooksPath, JSON.stringify(file, null, 2) + '\n');
+    await writeJsonValidated(hooksPath, { ...file, hooks: stripped.hooks });
   }
-  const cursorState = context.installState.agents['cursor'];
-  if (cursorState) {
-    delete cursorState.hooksInstalledAt;
-    cursorState.hookEvents = [];
-  }
-  return { ok: true, changed, messages: changed ? ['AgentWatch hooks removed'] : ['no AgentWatch hooks found'] };
+
+  return {
+    ok: true,
+    changed: stripped.changed,
+    messages: stripped.changed ? ['AgentWatch hooks removed'] : ['no AgentWatch hooks found'],
+    installState: withoutHookInstall(context.installState, CURSOR_PROVIDER_ID)
+  };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+/**
+ * Our entry: a flat command object, which is the only shape Cursor accepts.
+ *
+ * @param hookCommand - Command line agents will invoke.
+ * @returns The entry.
+ */
+function ourEntry(hookCommand: string): unknown {
+  return { command: hookCommand, timeout: CURSOR_HOOK_TIMEOUT_SECONDS };
 }

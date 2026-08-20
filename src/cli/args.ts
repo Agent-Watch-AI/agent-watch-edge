@@ -1,36 +1,75 @@
-/**
- * Hand-rolled argv parsing: the hook subcommand runs on coding agents'
- * critical path, so we keep startup free of CLI-framework imports.
- */
-export interface ParsedArgs {
-  command?: string;
-  positional: string[];
-  flags: Record<string, string | boolean>;
-}
+import { FLAG_PREFIX, VALUE_FLAGS } from './constants/cli.constants.js';
+import type { ParsedArgs } from './types/cli.types.js';
 
-export function parseArgs(argv: string[]): ParsedArgs {
-  const parsed: ParsedArgs = { positional: [], flags: {} };
-  // Every flag documented as taking a value must be listed here, or its value
-  // silently becomes a positional and the flag a boolean (`--otel none` used
-  // to ignore the selection entirely).
-  const valueFlags = new Set(['agent', 'endpoint', 'token', 'developer-email', 'otel']);
+export type { ParsedArgs } from './types/cli.types.js';
+
+/**
+ * Parse argv.
+ *
+ * Hand-rolled on purpose: the `hook` subcommand runs on the coding agent's
+ * critical path, and importing a CLI framework would cost every hook
+ * invocation the framework's startup.
+ *
+ * @param argv - Arguments after the executable and script.
+ * @returns The command, positionals and flags.
+ */
+export function parseArgs(argv: readonly string[]): ParsedArgs {
+  const positional: string[] = [];
+  const flags: Record<string, string | boolean> = {};
+  let command: string | undefined;
   let index = 0;
+
   while (index < argv.length) {
     const arg = argv[index]!;
-    if (arg.startsWith('--')) {
-      const name = arg.slice(2);
-      if (valueFlags.has(name) && index + 1 < argv.length && !argv[index + 1]!.startsWith('--')) {
-        parsed.flags[name] = argv[index + 1]!;
-        index += 2;
+
+    if (!arg.startsWith(FLAG_PREFIX)) {
+      if (command === undefined) {
+        command = arg;
+        index += 1;
         continue;
       }
-      parsed.flags[name] = true;
+
+      positional.push(arg);
       index += 1;
       continue;
     }
-    if (!parsed.command) parsed.command = arg;
-    else parsed.positional.push(arg);
+
+    const name = arg.slice(FLAG_PREFIX.length);
+    const value = argv[index + 1];
+
+    if (VALUE_FLAGS.has(name) && value !== undefined && !value.startsWith(FLAG_PREFIX)) {
+      flags[name] = value;
+      index += 2;
+      continue;
+    }
+
+    flags[name] = true;
     index += 1;
   }
-  return parsed;
+
+  return { command, positional, flags };
+}
+
+/**
+ * A flag's value when it was given as a string.
+ *
+ * @param parsed - Parsed arguments.
+ * @param name - Flag name without the `--`.
+ * @returns The value, or undefined when absent or boolean.
+ */
+export function stringFlag(parsed: ParsedArgs, name: string): string | undefined {
+  const value = parsed.flags[name];
+
+  return typeof value === 'string' ? value : undefined;
+}
+
+/**
+ * Whether a boolean flag was given.
+ *
+ * @param parsed - Parsed arguments.
+ * @param name - Flag name without the `--`.
+ * @returns True when present.
+ */
+export function boolFlag(parsed: ParsedArgs, name: string): boolean {
+  return parsed.flags[name] === true;
 }

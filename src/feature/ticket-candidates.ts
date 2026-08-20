@@ -1,25 +1,31 @@
 import type { FeatureCandidate } from '../events/canonical-event.js';
-
-const TICKET_PATTERN = /\b([A-Z][A-Z0-9]{1,9}-\d{1,6})\b/g;
+import { BRANCH_EVIDENCE_SOURCE, RE_TICKET_KEY } from './constants/feature.constants.js';
 
 /**
- * Extract feature-correlation *evidence* (e.g. Jira/Linear ticket keys) from
- * a branch name. Final feature attribution happens in the backend.
+ * Extract feature-correlation *evidence* (Jira/Linear ticket keys) from a
+ * branch name.
  *
- * Only keys that are uppercase in the branch itself count: uppercasing the
- * whole name first would turn ordinary words into fabricated ticket ids
- * ("bump-node-20" -> NODE-20) and misattribute the session's work and cost.
+ * Evidence, not attribution: this reports what the branch name literally
+ * contains and the backend decides what it means. Duplicates collapse, order
+ * of first appearance is kept.
+ *
+ * @param branch - Current branch name, or undefined outside a repository.
+ * @returns Ticket candidates, empty when the branch names none.
  */
 export function featureCandidatesFromBranch(branch: string | undefined): FeatureCandidate[] {
   if (!branch) return [];
+
   const candidates: FeatureCandidate[] = [];
   const seen = new Set<string>();
-  for (const match of branch.matchAll(TICKET_PATTERN)) {
+
+  for (const match of branch.matchAll(RE_TICKET_KEY)) {
     const ticket = match[1];
-    if (ticket && !seen.has(ticket)) {
-      seen.add(ticket);
-      candidates.push({ type: 'ticket', value: ticket, source: 'git.branch' });
-    }
+
+    if (!ticket || seen.has(ticket)) continue;
+
+    seen.add(ticket);
+    candidates.push({ type: 'ticket', value: ticket, source: BRANCH_EVIDENCE_SOURCE });
   }
+
   return candidates;
 }

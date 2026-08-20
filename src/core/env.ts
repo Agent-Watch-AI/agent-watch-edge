@@ -1,19 +1,18 @@
 import os from 'node:os';
 import process from 'node:process';
+import type { Env } from './types/core.types.js';
+
+export type { Env } from './types/core.types.js';
 
 /**
- * Ambient environment for every command. All filesystem locations, environment
- * variables and PATH lookups flow through this object so tests can run against
- * a temporary HOME without ever touching the developer's real agent configs.
+ * The real process environment.
+ *
+ * The single place the package reads ambient state from. Everything
+ * downstream takes an `Env` argument instead, which is what lets the test
+ * suite run every command against a temporary HOME.
+ *
+ * @returns An Env bound to this process.
  */
-export interface Env {
-  home: string;
-  platform: NodeJS.Platform;
-  cwd: string;
-  vars: Record<string, string | undefined>;
-  now(): Date;
-}
-
 export function realEnv(): Env {
   return {
     home: os.homedir(),

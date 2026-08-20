@@ -11,6 +11,7 @@ import { defaultConfig } from '../src/config/config.js';
 
 describe('claude transcript usage', () => {
   let world: TempWorld;
+
   beforeEach(async () => {
     world = await makeTempEnv();
   });
@@ -18,7 +19,9 @@ describe('claude transcript usage', () => {
 
   async function writeTranscript(lines: unknown[]): Promise<string> {
     const file = path.join(world.home, 'transcript.jsonl');
+
     await fs.writeFile(file, lines.map((line) => (typeof line === 'string' ? line : JSON.stringify(line))).join('\n'));
+
     return file;
   }
 
@@ -35,6 +38,7 @@ describe('claude transcript usage', () => {
     ]);
 
     const usage = await readTurnUsage(file, since);
+
     expect(usage).toBeDefined();
     expect(usage!.model).toBe('claude-sonnet-4');
     expect(usage!.inputTokens).toBe(300);
@@ -53,6 +57,7 @@ describe('claude transcript usage', () => {
     ]);
 
     const usage = await readTurnUsage(file, since);
+
     expect(usage!.model).toBe('claude-sonnet-4');
     expect(usage!.inputTokens).toBe(5020);
   });
@@ -61,11 +66,14 @@ describe('claude transcript usage', () => {
     const since = '2026-08-06T18:00:00.000Z';
     const padding = JSON.stringify({ type: 'user', message: { content: 'x'.repeat(1024) } });
     const lines = Array.from({ length: 5 * 1024 }, () => padding); // ~5 MB of old noise
+
     lines.push(JSON.stringify({ type: 'assistant', timestamp: '2026-08-06T18:01:00.000Z', message: { id: 'recent', model: 'claude-sonnet-4', usage: { input_tokens: 10, output_tokens: 5 } } }));
     const file = path.join(world.home, 'huge.jsonl');
+
     await fs.writeFile(file, lines.join('\n'));
 
     const usage = await readTurnUsage(file, since);
+
     expect(usage).toBeDefined();
     expect(usage!.inputTokens).toBe(10);
   });
@@ -73,6 +81,7 @@ describe('claude transcript usage', () => {
   it('returns undefined when the transcript is missing or has no usage in range', async () => {
     expect(await readTurnUsage(path.join(world.home, 'nope.jsonl'), '2026-08-06T18:00:00.000Z')).toBeUndefined();
     const file = await writeTranscript([{ type: 'assistant', timestamp: '2026-08-06T17:00:00.000Z', message: { id: 'm', usage: { input_tokens: 1 } } }]);
+
     expect(await readTurnUsage(file, '2026-08-06T18:00:00.000Z')).toBeUndefined();
   });
 
@@ -89,6 +98,7 @@ describe('claude transcript usage', () => {
     });
 
     const usage = await readTurnUsage(file, since, { attempts: 6, delayMs: 150 });
+
     await appended;
     expect(usage!.inputTokens).toBe(30);
     expect(usage!.outputTokens).toBe(12);
@@ -107,6 +117,7 @@ describe('claude transcript usage', () => {
     });
 
     const usage = await readTurnUsage(file, since, { attempts: 8, delayMs: 100, minSettleMs: 500 });
+
     await appended;
     expect(usage!.inputTokens).toBe(30);
     expect(usage!.outputTokens).toBe(12);
@@ -120,6 +131,7 @@ describe('claude transcript usage', () => {
       { type: 'assistant', timestamp: '2026-08-06T18:05:00.000Z', message: { id: 'p2', model: 'claude-sonnet-4', usage: { input_tokens: 999, output_tokens: 999 } } }
     ]);
     const usage = await readTurnUsage(file, since, undefined, '2026-08-06T18:02:00.000Z');
+
     expect(usage!.inputTokens).toBe(10);
     expect(usage!.outputTokens).toBe(5);
   });
@@ -137,6 +149,7 @@ describe('claude transcript usage', () => {
     });
 
     const usage = await readTurnUsage(file, since, { attempts: 6, delayMs: 100 });
+
     await appended;
     expect(usage).toBeDefined();
     expect(usage!.inputTokens).toBe(10);
@@ -146,6 +159,7 @@ describe('claude transcript usage', () => {
 
 describe('turn state store', () => {
   let world: TempWorld;
+
   beforeEach(async () => {
     world = await makeTempEnv();
   });
@@ -153,26 +167,32 @@ describe('turn state store', () => {
 
   it('writes state files with 0600: they hold raw prompt text', async () => {
     const store = new TurnStateStore(path.join(world.home, 'turns'));
+
     await store.append('sess-priv', 'r1', { kind: 'prompt', at: '2026-08-06T18:00:00.000Z', text: 'secret prompt' });
     const dirs = await fs.readdir(path.join(world.home, 'turns'));
     const files = await fs.readdir(path.join(world.home, 'turns', dirs[0]!));
     const stat = await fs.stat(path.join(world.home, 'turns', dirs[0]!, files[0]!));
+
     expect(stat.mode & 0o777).toBe(0o600);
   });
 
   it('sweeps sessions whose records are older than the TTL', async () => {
     const store = new TurnStateStore(path.join(world.home, 'turns'));
+
     await store.append('sess-stale', 'r1', { kind: 'prompt', at: '2026-08-05T18:00:00.000Z', text: 'old' });
     await store.append('sess-fresh', 'r1', { kind: 'prompt', at: '2026-08-06T18:00:00.000Z', text: 'new' });
 
     // Age the stale session's files on disk.
     const staleDirs = await fs.readdir(path.join(world.home, 'turns'));
+
     for (const dir of staleDirs) {
       const full = path.join(world.home, 'turns', dir);
       const [record] = await fs.readdir(full);
       const content = JSON.parse(await fs.readFile(path.join(full, record!), 'utf8'));
+
       if (content.text === 'old') {
         const past = new Date(Date.now() - 48 * 3600 * 1000);
+
         await fs.utimes(path.join(full, record!), past, past);
       }
     }
@@ -184,11 +204,13 @@ describe('turn state store', () => {
 
   it('appends, collects in order and clears per session', async () => {
     const store = new TurnStateStore(path.join(world.home, 'turns'));
+
     await store.append('sess-1', 'b-tool', { kind: 'tool', at: '2026-08-06T18:01:00.000Z', tool: 'Bash' });
     await store.append('sess-1', 'a-prompt', { kind: 'prompt', at: '2026-08-06T18:00:00.000Z', text: 'hello' });
     await store.append('sess-other', 'x', { kind: 'tool', at: '2026-08-06T18:00:30.000Z', tool: 'Edit' });
 
     const records = await store.collect('sess-1');
+
     expect(records.map((r) => r.kind)).toEqual(['prompt', 'tool']);
 
     await store.clear('sess-1');
@@ -264,6 +286,7 @@ describe('buildTurnSummary', () => {
       ],
       endedAt: '2026-08-06T18:24:00.000Z'
     });
+
     expect(summary.files_touched).toEqual(['src/refund.ts', 'src/new.ts']);
     expect(summary.files_read).toEqual(['src/auth.ts']);
   });
@@ -278,6 +301,7 @@ describe('buildTurnSummary', () => {
       response: { evidence: { length: 4, sha256: 'y' } },
       endedAt: '2026-08-06T18:24:00.000Z'
     });
+
     expect(summary.prompt).toBeUndefined();
     expect(summary.response).toBeUndefined();
     expect(summary.prompt_evidence).toEqual({ length: 11, sha256: 'x' });
@@ -288,6 +312,7 @@ describe('buildTurnSummary', () => {
 
 describe('turn tracking through the hook pipeline', () => {
   let world: TempWorld;
+
   beforeEach(async () => {
     world = await makeTempEnv();
   });
@@ -295,6 +320,7 @@ describe('turn tracking through the hook pipeline', () => {
 
   async function configure(overrides: Record<string, unknown> = {}): Promise<void> {
     const paths = resolvePaths(world.env);
+
     await writeJson(paths.configFile, {
       ...defaultConfig(),
       developerEmail: 'dev@company.com',
@@ -313,11 +339,13 @@ describe('turn tracking through the hook pipeline', () => {
       env: world.env,
       input: JSON.stringify(payload)
     });
+
     expect(code).toBe(0);
     const added = (await fs.readdir(paths.queueDir).catch(() => [])).filter((name) => !before.has(name));
     const events = await Promise.all(
       added.map(async (name) => JSON.parse(await fs.readFile(path.join(paths.queueDir, name), 'utf8')).event)
     );
+
     return { events };
   }
 
@@ -327,6 +355,7 @@ describe('turn tracking through the hook pipeline', () => {
       oauthAccount: { emailAddress: 'dev@company.com', billingType: 'stripe_subscription' }
     });
     const transcript = path.join(world.home, 'transcript.jsonl');
+
     await fs.writeFile(
       transcript,
       JSON.stringify({ type: 'assistant', timestamp: new Date(Date.now() - 120_000).toISOString(), message: { id: 'old', model: 'claude-sonnet-4', usage: { input_tokens: 999, output_tokens: 999 } } })
@@ -349,6 +378,7 @@ describe('turn tracking through the hook pipeline', () => {
     });
 
     const summary = result.events.find((event: any) => event.event.type === 'turn.summary');
+
     expect(summary).toBeDefined();
     expect(summary.provider).toBe('claude-code');
     expect(summary.session_id).toBe('sess-t');
@@ -374,12 +404,14 @@ describe('turn tracking through the hook pipeline', () => {
     // The turn is consumed: a repeated Stop with nothing new produces no
     // summary at all (previously an empty duplicate).
     const again = await hookDryRun({ hook_event_name: 'Stop', session_id: 'sess-t', prompt_id: 'p1', transcript_path: transcript, cwd: world.home });
+
     expect(again.events.some((event: any) => event.event.type === 'turn.summary')).toBe(false);
   });
 
   it('still emits a degraded summary when turn state is unusable', async () => {
     await configure();
     const paths = resolvePaths(world.env);
+
     // Sabotage turn state: the turns dir is a plain file, so every state
     // operation fails. The turn must still reach the backend.
     await fs.mkdir(path.dirname(paths.turnsDir), { recursive: true });
@@ -394,6 +426,7 @@ describe('turn tracking through the hook pipeline', () => {
       cwd: world.home
     });
     const summary = result.events.find((event: any) => event.event.type === 'turn.summary');
+
     expect(summary).toBeDefined();
     expect(summary.session_id).toBe('sess-broken');
     expect(summary.turn_id).toBe('p9');
@@ -412,6 +445,7 @@ describe('turn tracking through the hook pipeline', () => {
 
     const first = await hookDryRun({ hook_event_name: 'Stop', session_id: 'sess-s', prompt_id: 'p1', last_assistant_message: 'first done', cwd: world.home });
     const firstSummary = first.events.find((event: any) => event.event.type === 'turn.summary');
+
     expect(firstSummary.turn_id).toBe('p1');
     expect(firstSummary.prompt).toBe('first prompt');
     expect(firstSummary.tools_used).toEqual({ Edit: 1 });
@@ -419,6 +453,7 @@ describe('turn tracking through the hook pipeline', () => {
     // p2's records survived p1's close and produce their own summary.
     const second = await hookDryRun({ hook_event_name: 'Stop', session_id: 'sess-s', prompt_id: 'p2', last_assistant_message: 'second done', cwd: world.home });
     const secondSummary = second.events.find((event: any) => event.event.type === 'turn.summary');
+
     expect(secondSummary.turn_id).toBe('p2');
     expect(secondSummary.prompt).toBe('second prompt');
     expect(secondSummary.tools_used).toEqual({ Bash: 1 });
@@ -427,6 +462,7 @@ describe('turn tracking through the hook pipeline', () => {
   it('picks up usage flushed to the transcript after Stop fires', async () => {
     await configure();
     const transcript = path.join(world.home, 'late-transcript.jsonl');
+
     await fs.writeFile(
       transcript,
       JSON.stringify({ type: 'assistant', timestamp: new Date(Date.now() - 120_000).toISOString(), message: { id: 'old', model: 'claude-old', usage: { input_tokens: 999 } } })
@@ -439,8 +475,10 @@ describe('turn tracking through the hook pipeline', () => {
     });
 
     const result = await hookDryRun({ hook_event_name: 'Stop', session_id: 'sess-late', transcript_path: transcript, cwd: world.home });
+
     await appended;
     const summary = result.events.find((event: any) => event.event.type === 'turn.summary');
+
     expect(summary.model).toBe('claude-sonnet-4');
     expect(summary.input_tokens).toBe(7);
     expect(summary.output_tokens).toBe(3);
@@ -451,6 +489,7 @@ describe('turn tracking through the hook pipeline', () => {
     await hookDryRun({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-p', prompt: 'secret prompt', cwd: world.home });
     const result = await hookDryRun({ hook_event_name: 'Stop', session_id: 'sess-p', last_assistant_message: 'reply', cwd: world.home });
     const summary = result.events.find((event: any) => event.event.type === 'turn.summary');
+
     expect(summary).toBeDefined();
     expect(JSON.stringify(summary)).not.toContain('secret prompt');
     expect(summary.prompt_evidence).toBeDefined();
@@ -460,6 +499,7 @@ describe('turn tracking through the hook pipeline', () => {
     await configure();
     await hookDryRun({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-e', prompt: 'hi', cwd: world.home });
     const result = await hookDryRun({ hook_event_name: 'Stop', session_id: 'sess-e', cwd: world.home });
+
     expect(result.events).toHaveLength(1);
     expect(result.events[0].event.type).toBe('turn.summary');
   });
@@ -468,24 +508,28 @@ describe('turn tracking through the hook pipeline', () => {
     await configure({ emit: { events: true, turnSummaries: true } });
     await hookDryRun({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-e2', prompt: 'hi', cwd: world.home });
     const result = await hookDryRun({ hook_event_name: 'Stop', session_id: 'sess-e2', cwd: world.home });
+
     expect(result.events.map((event: any) => event.event.type)).toEqual(['turn.summary']);
   });
 
   it('emit.turnSummaries=false emits no hook-path product record', async () => {
     await configure({ emit: { events: true, turnSummaries: false } });
     const transcript = path.join(world.home, 'transcript-nosummary.jsonl');
+
     await hookDryRun({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-d', prompt: 'hi', cwd: world.home });
     await fs.writeFile(
       transcript,
       JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(), message: { id: 'm1', model: 'claude-sonnet-4', usage: { input_tokens: 11, output_tokens: 4 } } })
     );
     const result = await hookDryRun({ hook_event_name: 'Stop', session_id: 'sess-d', transcript_path: transcript, cwd: world.home });
+
     expect(result.events).toEqual([]);
   });
 
   it('includes a tool that completes while Stop waits out the settle window', async () => {
     await configure();
     const transcript = path.join(world.home, 'settle-transcript.jsonl');
+
     await hookDryRun({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-w', prompt_id: 'p1', prompt: 'go', cwd: world.home });
     await fs.writeFile(
       transcript,
@@ -494,17 +538,20 @@ describe('turn tracking through the hook pipeline', () => {
 
     // Stop takes >= 500 ms (settle window); the tool completion lands mid-close.
     const stopPromise = hookDryRun({ hook_event_name: 'Stop', session_id: 'sess-w', prompt_id: 'p1', transcript_path: transcript, last_assistant_message: 'ok', cwd: world.home });
+
     await new Promise((resolve) => setTimeout(resolve, 150));
     await hookDryRun({ hook_event_name: 'PostToolUse', session_id: 'sess-w', prompt_id: 'p1', tool_name: 'Edit', tool_use_id: 't-late', tool_input: { file_path: 'late.ts' }, cwd: world.home });
 
     const result = await stopPromise;
     const summary = result.events.find((event: any) => event.event.type === 'turn.summary');
+
     expect(summary.tools_used).toEqual({ Edit: 1 });
   });
 
   it('closes two different prompts concurrently without losing either summary', async () => {
     await configure();
     const transcript = path.join(world.home, 'parallel-transcript.jsonl');
+
     await hookDryRun({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-par', prompt_id: 'p1', prompt: 'first', cwd: world.home });
     await hookDryRun({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-par', prompt_id: 'p2', prompt: 'second', cwd: world.home });
     // Force both prompts and the transcript entry onto the same inclusive
@@ -513,14 +560,17 @@ describe('turn tracking through the hook pipeline', () => {
     const boundary = new Date(Date.now() - 1_000).toISOString();
     const paths = resolvePaths(world.env);
     const [sessionDir] = await fs.readdir(paths.turnsDir);
+
     for (const name of await fs.readdir(path.join(paths.turnsDir, sessionDir!))) {
       const file = path.join(paths.turnsDir, sessionDir!, name);
       const record = JSON.parse(await fs.readFile(file, 'utf8'));
+
       if (record.kind === 'prompt') {
         record.at = boundary;
         await fs.writeFile(file, JSON.stringify(record));
       }
     }
+
     await fs.writeFile(transcript, JSON.stringify({ type: 'assistant', timestamp: boundary, message: { id: 'm1', model: 'claude-sonnet-4', usage: { input_tokens: 5, output_tokens: 2 } } }));
 
     const stop = (promptId: string) =>
@@ -531,10 +581,12 @@ describe('turn tracking through the hook pipeline', () => {
         .filter((event: any) => event.event.type === 'turn.summary')
         .map((event: any) => [event.id, event])
     ).values()] as any[];
+
     expect(summaries.map((s: any) => s.turn_id).sort()).toEqual(['p1', 'p2']);
     // The single transcript usage entry must be claimed exactly once even
     // though both time windows include it.
     const claimed = summaries.filter((s: any) => s.input_tokens !== undefined);
+
     expect(claimed).toHaveLength(1);
     expect(claimed[0]).toMatchObject({ input_tokens: 5, output_tokens: 2 });
   });
@@ -561,6 +613,7 @@ describe('turn tracking through the hook pipeline', () => {
     // The inner turn closes FIRST and fully consumes its state.
     const inner = await hookDryRun({ hook_event_name: 'Stop', session_id: 'sess-nest', prompt_id: 'p2', transcript_path: transcript, last_assistant_message: 'inner done', cwd: world.home });
     const innerSummary = inner.events.find((event: any) => event.event.type === 'turn.summary');
+
     expect(innerSummary.input_tokens).toBe(20);
     expect(innerSummary.output_tokens).toBe(7);
 
@@ -568,6 +621,7 @@ describe('turn tracking through the hook pipeline', () => {
     // already claimed — it must count e1 only, never e2 again.
     const outer = await hookDryRun({ hook_event_name: 'Stop', session_id: 'sess-nest', prompt_id: 'p1', transcript_path: transcript, last_assistant_message: 'outer done', cwd: world.home });
     const outerSummary = outer.events.find((event: any) => event.event.type === 'turn.summary');
+
     expect(outerSummary.input_tokens).toBe(10);
     expect(outerSummary.output_tokens).toBe(5);
   });
@@ -585,8 +639,10 @@ describe('turn tracking through the hook pipeline', () => {
       tool_input: { file_path: sibling },
       cwd: world.home
     });
+
     expect(toolResult.events).toEqual([]);
     const result = await hookDryRun({ hook_event_name: 'Stop', session_id: 'sess-bound', prompt_id: 'p1', cwd: world.home });
+
     expect(result.events[0].files_touched).toEqual(['file.ts']);
   });
 
@@ -602,12 +658,14 @@ describe('turn tracking through the hook pipeline', () => {
       tool_input: { file_path: absolute, old_string: 'a', new_string: 'b' },
       cwd: world.home
     });
+
     expect(result.events).toEqual([]);
   });
 
   it('emits exactly one summary when two Stops race for the same turn', async () => {
     await configure();
     const transcript = path.join(world.home, 'race-transcript.jsonl');
+
     await hookDryRun({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-race', prompt_id: 'p1', prompt: 'go', cwd: world.home });
     await fs.writeFile(
       transcript,
@@ -621,6 +679,7 @@ describe('turn tracking through the hook pipeline', () => {
         .filter((event: any) => event.event.type === 'turn.summary')
         .map((event: any) => [event.id, event])
     ).values()];
+
     expect(summaries).toHaveLength(1);
   });
 
@@ -628,6 +687,7 @@ describe('turn tracking through the hook pipeline', () => {
     await configure();
     const paths = resolvePaths(world.env);
     const transcript = path.join(world.home, 'dry-run-transcript.jsonl');
+
     await hookDryRun({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-preview', prompt_id: 'p1', prompt: 'preview me', cwd: world.home });
     await fs.writeFile(
       transcript,
@@ -643,9 +703,11 @@ describe('turn tracking through the hook pipeline', () => {
       dryRun: true,
       writeStdout: (text) => { stdout += text; }
     });
+
     expect(code).toBe(0);
     expect(JSON.parse(stdout).events[0]).toMatchObject({ event: { type: 'turn.summary' }, input_tokens: 8 });
     const after = (await fs.readdir(stateDir)).sort();
+
     expect(after).toEqual(before);
     expect(after.some((name) => name.startsWith('usage-claim--'))).toBe(false);
   });
@@ -653,6 +715,7 @@ describe('turn tracking through the hook pipeline', () => {
   it('caps prompt text stored on disk but keeps true length in evidence', async () => {
     await configure();
     const big = 'x'.repeat(200_000);
+
     await hookDryRun({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-big', prompt: big, cwd: world.home });
 
     const paths = resolvePaths(world.env);
@@ -660,6 +723,7 @@ describe('turn tracking through the hook pipeline', () => {
     const [sessionDir] = await fs.readdir(turnsDir);
     const [recordFile] = await fs.readdir(path.join(turnsDir, sessionDir!));
     const record = JSON.parse(await fs.readFile(path.join(turnsDir, sessionDir!, recordFile!), 'utf8'));
+
     expect(record.text.length).toBeLessThanOrEqual(65536);
     expect(record.evidence.length).toBe(200_000);
   });
@@ -670,6 +734,7 @@ describe('turn tracking through the hook pipeline', () => {
     await hookDryRun({ hook_event_name: 'SessionEnd', session_id: 'sess-c', cwd: world.home });
     const paths = resolvePaths(world.env);
     const store = new TurnStateStore(path.join(paths.dataDir, 'turns'));
+
     expect(await store.collect('sess-c')).toEqual([]);
   });
 });

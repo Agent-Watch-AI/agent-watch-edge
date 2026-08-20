@@ -1,25 +1,5 @@
 /**
- * Endpoint/credential acquisition abstraction. The MVP ships a manual
- * provider (user types a backend URL); a future RemoteEnrollmentProvider will
- * implement `agentwatch setup <enrollment-url>` (fetch org config, register
- * the device, receive installation credentials) without changing setup.
+ * The enrollment contract. Kept as its own module so `setup` depends on the
+ * abstraction rather than on the manual implementation it happens to ship with.
  */
-export interface EnrollmentInput {
-  /** URL passed to `agentwatch setup`, when any. */
-  setupUrl?: string;
-  /** --endpoint flag or existing configured endpoint. */
-  endpoint?: string;
-  /** --token flag or existing configured token. */
-  token?: string;
-  /** Interactive prompt; undefined in non-interactive runs. */
-  ask?: (question: string) => Promise<string>;
-}
-
-export interface EnrollmentResult {
-  endpoint: string;
-  token?: string;
-}
-
-export interface EnrollmentProvider {
-  enroll(input: EnrollmentInput): Promise<EnrollmentResult>;
-}
+export type { EnrollmentInput, EnrollmentProvider, EnrollmentResult } from './types/enrollment.types.js';

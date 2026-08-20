@@ -1,72 +1,125 @@
+import { asRecord, firstString } from '../../core/object.js';
 import { sha256Hex } from '../../events/event-id.js';
-import type { CanonicalEventType } from '../../events/canonical-event.js';
+import type { CanonicalEventType, ContentEvidence } from '../../events/types/events.types.js';
+import type { McpToolName, ToolKind } from '../types/provider.types.js';
+import {
+  COMMAND_KEYS,
+  FILE_EDIT_TOOLS,
+  FILE_PATH_KEYS,
+  FILE_READ_TOOLS,
+  MCP_TOOL_PREFIX,
+  MCP_TOOL_SEPARATOR,
+  SHELL_TOOLS
+} from './constants/tooling.constants.js';
 
-export type ToolKind = 'shell' | 'mcp' | 'file-read' | 'file-edit' | 'other';
+export type { McpToolName, ToolKind } from '../types/provider.types.js';
 
-// `run_command`, `edit_file` and `write_to_file` are Antigravity's names,
-// read off the tool schemas in the `agy` binary. Names it uses that are not
-// listed here fall through to 'other' -> tool.completed, which is accurate
-// rather than guessed.
-const SHELL_TOOLS = new Set(['Bash', 'shell', 'local_shell', 'exec_command', 'run_command']);
-const FILE_READ_TOOLS = new Set(['Read', 'read_file', 'view_image']);
-const FILE_EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'apply_patch', 'edit_file', 'write_to_file']);
-
+/**
+ * What kind of thing a tool call is, whatever the agent calls it.
+ *
+ * The classification is what decides which canonical event type the call maps
+ * to, so "reading a file" is one product signal across every provider.
+ *
+ * @param toolName - Provider-reported tool name.
+ * @returns The kind, defaulting to 'other' for anything unrecognized.
+ */
 export function classifyTool(toolName: string | undefined): ToolKind {
   if (!toolName) return 'other';
-  if (toolName.startsWith('mcp__')) return 'mcp';
+
+  if (toolName.startsWith(MCP_TOOL_PREFIX)) return 'mcp';
+
   if (SHELL_TOOLS.has(toolName)) return 'shell';
+
   if (FILE_READ_TOOLS.has(toolName)) return 'file-read';
+
   if (FILE_EDIT_TOOLS.has(toolName)) return 'file-edit';
+
   return 'other';
 }
 
+/**
+ * Canonical event type for a tool call starting.
+ *
+ * @param kind - Tool classification.
+ * @returns The event type.
+ */
 export function toolStartType(kind: ToolKind): CanonicalEventType {
-  switch (kind) {
-    case 'shell':
-      return 'shell.started';
-    case 'mcp':
-      return 'mcp.started';
-    default:
-      return 'tool.started';
-  }
+  if (kind === 'shell') return 'shell.started';
+
+  if (kind === 'mcp') return 'mcp.started';
+
+  return 'tool.started';
 }
 
+/**
+ * Canonical event type for a tool call finishing successfully.
+ *
+ * @param kind - Tool classification.
+ * @returns The event type.
+ */
 export function toolCompleteType(kind: ToolKind): CanonicalEventType {
-  switch (kind) {
-    case 'shell':
-      return 'shell.completed';
-    case 'mcp':
-      return 'mcp.completed';
-    case 'file-read':
-      return 'file.read';
-    case 'file-edit':
-      return 'file.edited';
-    default:
-      return 'tool.completed';
-  }
+  if (kind === 'shell') return 'shell.completed';
+
+  if (kind === 'mcp') return 'mcp.completed';
+
+  if (kind === 'file-read') return 'file.read';
+
+  if (kind === 'file-edit') return 'file.edited';
+
+  return 'tool.completed';
 }
 
-/** "mcp__server__tool" -> { server, tool } */
-export function parseMcpToolName(toolName: string): { server?: string; tool?: string } {
-  if (!toolName.startsWith('mcp__')) return {};
-  const parts = toolName.split('__');
-  return { server: parts[1], tool: parts.slice(2).join('__') || undefined };
+/**
+ * Split "mcp__server__tool" into its parts.
+ *
+ * @param toolName - Provider-reported tool name.
+ * @returns The server and tool, or an empty object for a non-MCP name.
+ */
+export function parseMcpToolName(toolName: string): McpToolName {
+  if (!toolName.startsWith(MCP_TOOL_PREFIX)) return {};
+
+  const parts = toolName.split(MCP_TOOL_SEPARATOR);
+
+  return { server: parts[1], tool: parts.slice(2).join(MCP_TOOL_SEPARATOR) || undefined };
 }
 
-/** Length + hash evidence for text we do not capture verbatim. */
-export function contentEvidence(text: string): { length: number; sha256: string } {
+/**
+ * Length and hash of text, as evidence for content we may not transmit.
+ *
+ * Lets the backend verify that a record describes the content the developer
+ * actually saw, without the content having to leave the machine.
+ *
+ * @param text - The content.
+ * @returns Its evidence.
+ */
+export function contentEvidence(text: string): ContentEvidence {
   return { length: text.length, sha256: sha256Hex(text) };
 }
 
-/** Best-effort file path from heterogeneous tool inputs. */
+/**
+ * Best-effort file path out of a heterogeneous tool input.
+ *
+ * @param toolInput - Whatever the provider passed as the call's arguments.
+ * @returns The path, or undefined when the input names none.
+ */
 export function extractFilePath(toolInput: unknown): string | undefined {
-  if (typeof toolInput !== 'object' || toolInput === null) return undefined;
-  const record = toolInput as Record<string, unknown>;
-  // Antigravity's tool arguments are PascalCase (`TargetFile`); every other
-  // provider uses snake_case or camelCase.
-  for (const key of ['file_path', 'path', 'notebook_path', 'filePath', 'TargetFile', 'AbsolutePath']) {
-    const value = record[key];
-    if (typeof value === 'string' && value.length > 0) return value;
-  }
-  return undefined;
+  const record = asRecord(toolInput);
+
+  if (!record) return undefined;
+
+  return firstString(record, FILE_PATH_KEYS);
+}
+
+/**
+ * Best-effort shell command out of a heterogeneous tool input.
+ *
+ * @param toolInput - Whatever the provider passed as the call's arguments.
+ * @returns The command, or undefined when the input names none.
+ */
+export function extractCommand(toolInput: unknown): string | undefined {
+  const record = asRecord(toolInput);
+
+  if (!record) return undefined;
+
+  return firstString(record, COMMAND_KEYS);
 }

@@ -9,6 +9,7 @@ import { runHook } from '../src/cli/hook.js';
 
 describe('repo config discovery', () => {
   let world: TempWorld;
+
   beforeEach(async () => {
     world = await makeTempEnv();
   });
@@ -17,6 +18,7 @@ describe('repo config discovery', () => {
   it('finds .agentwatch.json walking up from a nested directory', async () => {
     const repo = path.join(world.home, 'repo');
     const nested = path.join(repo, 'src', 'deep');
+
     await fs.mkdir(nested, { recursive: true });
     await writeJson(path.join(repo, '.agentwatch.json'), { developerEmail: 'repo@company.com' });
 
@@ -34,6 +36,7 @@ describe('repo config merge', () => {
       emit: { turnSummaries: false, llmCalls: false },
       delivery: { maxQueueEvents: 1, maxAttempts: 1 }
     });
+
     // Attribution cannot be spoofed by a committed repo file.
     expect(merged.config.developerEmail).toBe('global@company.com');
     expect(merged.config.endpoint).toBe('https://global.example.com');
@@ -54,6 +57,7 @@ describe('repo config merge', () => {
 
   it('refuses otel signal selection from the repo file', () => {
     const merged = mergeRepoConfig(defaultConfig(), { otel: { logs: false, traces: true } });
+
     expect(merged.config.otel).toEqual(defaultConfig().otel);
     expect(merged.warnings.join(' ')).toMatch(/"otel" is global-only/);
   });
@@ -61,6 +65,7 @@ describe('repo config merge', () => {
   it('refuses token, installationId and developerEmail from the repo file', () => {
     const global = { ...defaultConfig(), token: 'global-token', installationId: 'inst-1', developerEmail: 'me@company.com' };
     const merged = mergeRepoConfig(global, { token: 'evil', installationId: 'evil', developerEmail: 'spoof@evil.com', capture: { git: false } });
+
     expect(merged.config.token).toBe('global-token');
     expect(merged.config.installationId).toBe('inst-1');
     expect(merged.config.developerEmail).toBe('me@company.com');
@@ -77,6 +82,7 @@ describe('repo config merge', () => {
       eventsUrl: 'https://evil.example.com/v1/events',
       otlpUrl: 'https://evil.example.com/v1/otlp'
     });
+
     expect(merged.config.endpoint).toBe('https://global.example.com');
     expect(merged.config.eventsUrl).toBeUndefined();
     expect(merged.config.otlpUrl).toBeUndefined();
@@ -86,6 +92,7 @@ describe('repo config merge', () => {
   it('rejects an invalid merge result and keeps the global config', () => {
     const global = defaultConfig();
     const merged = mergeRepoConfig(global, { developerEmail: 123 });
+
     expect(merged.config).toEqual(global);
     expect(merged.warnings.length).toBeGreaterThan(0);
   });
@@ -93,6 +100,7 @@ describe('repo config merge', () => {
 
 describe('effective config through the hook pipeline', () => {
   let world: TempWorld;
+
   beforeEach(async () => {
     world = await makeTempEnv();
   });
@@ -100,9 +108,11 @@ describe('effective config through the hook pipeline', () => {
 
   it('repo overrides apply to hook processing based on the payload cwd', async () => {
     const paths = resolvePaths(world.env);
+
     await writeJson(paths.configFile, { ...defaultConfig(), developerEmail: 'global@company.com' });
 
     const repo = path.join(world.home, 'repo');
+
     await fs.mkdir(repo, { recursive: true });
     await writeJson(path.join(repo, '.agentwatch.json'), {
       developerEmail: 'spoofed@evil.com',
@@ -115,17 +125,20 @@ describe('effective config through the hook pipeline', () => {
         env: world.env,
         input: JSON.stringify(payload)
       });
+
       expect(code).toBe(0);
       const added = (await fs.readdir(paths.queueDir).catch(() => [])).filter((name) => !before.has(name));
       const events = await Promise.all(
         added.map(async (name) => JSON.parse(await fs.readFile(path.join(paths.queueDir, name), 'utf8')).event)
       );
+
       return { events };
     }
 
     await hookDryRun({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-r', prompt: 'repo prompt text', cwd: repo });
     const result = await hookDryRun({ hook_event_name: 'Stop', session_id: 'sess-r', last_assistant_message: 'the answer', cwd: repo });
     const summary = result.events.find((event: any) => event.event.type === 'turn.summary');
+
     // capture override applied, identity override refused
     expect(summary.developer_id).toBe('global@company.com');
     expect(summary.prompt).toBe('repo prompt text');
@@ -137,12 +150,14 @@ describe('effective config through the hook pipeline', () => {
     // committed repo file.
     const paths = resolvePaths(world.env);
     const repo = path.join(world.home, 'repo');
+
     await fs.mkdir(repo, { recursive: true });
     await writeJson(path.join(repo, '.agentwatch.json'), {
       capture: { prompts: true, toolInput: true }
     });
 
     const effective = await loadEffectiveConfig(paths, repo);
+
     expect(effective.config.capture.prompts).toBe(false);
     expect(effective.config.capture.toolInput).toBe(false);
     expect('offlineQueue' in effective.config.delivery).toBe(false);
@@ -151,8 +166,10 @@ describe('effective config through the hook pipeline', () => {
 
   it('loadEffectiveConfig without a repo file returns the global config unchanged', async () => {
     const paths = resolvePaths(world.env);
+
     await writeJson(paths.configFile, { ...defaultConfig(), developerEmail: 'global@company.com' });
     const effective = await loadEffectiveConfig(paths, world.home);
+
     expect(effective.config.developerEmail).toBe('global@company.com');
     expect(effective.repoConfigFile).toBeUndefined();
   });

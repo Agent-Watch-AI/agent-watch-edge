@@ -5,6 +5,7 @@ import { detectBillingMode } from '../src/billing/billing-mode.js';
 
 describe('billing mode detection', () => {
   let world: TempWorld;
+
   beforeEach(async () => {
     world = await makeTempEnv();
   });
@@ -30,6 +31,7 @@ describe('billing mode detection', () => {
 
     it('reports api when the environment key was approved for Claude Code (key-tail entry)', async () => {
       const apiKey = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz';
+
       await writeJson(path.join(world.home, '.claude.json'), {
         oauthAccount: { billingType: 'stripe_subscription' },
         customApiKeyResponses: { approved: [apiKey.slice(-20)], rejected: [] }

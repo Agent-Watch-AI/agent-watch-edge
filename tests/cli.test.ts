@@ -41,10 +41,12 @@ describe('CLI commands', () => {
   describe('setup', () => {
     it('configures both detected agents end to end', async () => {
       const code = await setupOnce();
+
       expect(code).toBe(0);
 
       const paths = resolvePaths(world.env);
       const config = await readJson(paths.configFile);
+
       expect(config.endpoint).toBe('https://backend.example.com');
       expect(config.installationId).toBeTruthy();
       expect(config.capture.prompts).toBe(true);
@@ -53,6 +55,7 @@ describe('CLI commands', () => {
       expect(config.capture.toolOutput).toBe(true);
 
       const claudeSettings = await readJson(path.join(world.home, '.claude', 'settings.json'));
+
       expect(claudeSettings.hooks.SessionStart[0].hooks[0].command).toContain('agentwatch hook --agent claude');
       expect(claudeSettings.env.CLAUDE_CODE_ENABLE_TELEMETRY).toBe('1');
       expect(claudeSettings.env.OTEL_LOGS_EXPORTER).toBe('otlp');
@@ -61,13 +64,16 @@ describe('CLI commands', () => {
       expect(claudeSettings.env.OTEL_METRICS_EXPORTER).toBe('none');
 
       const codexHooks = await readJson(path.join(world.home, '.codex', 'hooks.json'));
+
       expect(codexHooks.hooks.Stop[0].hooks[0].command).toContain('agentwatch hook --agent codex');
       const codexToml = await fs.readFile(path.join(world.home, '.codex', 'config.toml'), 'utf8').catch(() => '');
+
       expect(codexToml).toContain('[otel]');
       expect(codexToml).toContain('exporter = { otlp-http');
       expect(codexToml).toContain('trace_exporter = "none"');
 
       const installState = await readJson(paths.installStateFile);
+
       expect(installState.agents.claude.hookEvents).toContain('SessionStart');
       expect(installState.agents.codex.hookEvents).toContain('Stop');
     });
@@ -75,8 +81,10 @@ describe('CLI commands', () => {
     it('always configures the lossless llm.call telemetry path', async () => {
       expect(await setupOnce()).toBe(0);
       const paths = resolvePaths(world.env);
+
       expect((await readJson(paths.configFile)).emit).toEqual({ turnSummaries: true, llmCalls: true });
       const claudeSettings = await readJson(path.join(world.home, '.claude', 'settings.json'));
+
       expect(claudeSettings.env.CLAUDE_CODE_ENABLE_TELEMETRY).toBe('1');
       expect(await fs.readFile(path.join(world.home, '.codex', 'config.toml'), 'utf8')).toContain('[otel]');
     });
@@ -90,14 +98,18 @@ describe('CLI commands', () => {
         yes: true,
         hookCommandFor: (id) => `agentwatch hook --agent ${id}`
       });
+
       expect(code).toBe(0);
       const config = await readJson(resolvePaths(world.env).configFile);
+
       expect(config.otel).toEqual({ logs: true, traces: true, metrics: true });
       const claudeSettings = await readJson(path.join(world.home, '.claude', 'settings.json'));
+
       expect(claudeSettings.env.OTEL_TRACES_EXPORTER).toBe('otlp');
       expect(claudeSettings.env.OTEL_METRICS_EXPORTER).toBe('otlp');
       expect(claudeSettings.env.CLAUDE_CODE_ENHANCED_TELEMETRY_BETA).toBe('1');
       const codexToml = await fs.readFile(path.join(world.home, '.codex', 'config.toml'), 'utf8');
+
       expect(codexToml).toContain('trace_exporter = { otlp-http');
     });
 
@@ -110,12 +122,16 @@ describe('CLI commands', () => {
         yes: true,
         hookCommandFor: (id) => `agentwatch hook --agent ${id}`
       });
+
       expect(code).toBe(0);
       const config = await readJson(resolvePaths(world.env).configFile);
+
       expect(config.otel).toEqual({ logs: false, traces: false, metrics: false });
       const claudeSettings = await readJson(path.join(world.home, '.claude', 'settings.json'));
+
       expect(claudeSettings.env?.CLAUDE_CODE_ENABLE_TELEMETRY).toBeUndefined();
       const codexToml = await fs.readFile(path.join(world.home, '.codex', 'config.toml'), 'utf8').catch(() => '');
+
       expect(codexToml).not.toContain('[otel]');
     });
 
@@ -128,6 +144,7 @@ describe('CLI commands', () => {
         yes: true,
         hookCommandFor: (id) => `agentwatch hook --agent ${id}`
       });
+
       expect(code).toBe(1);
       await expect(fs.stat(resolvePaths(world.env).configFile)).rejects.toThrow();
     });
@@ -137,6 +154,7 @@ describe('CLI commands', () => {
       const claudeBefore = await fs.readFile(path.join(world.home, '.claude', 'settings.json'), 'utf8');
       const codexBefore = await fs.readFile(path.join(world.home, '.codex', 'hooks.json'), 'utf8');
       const tomlBefore = await fs.readFile(path.join(world.home, '.codex', 'config.toml'), 'utf8').catch(() => '');
+
       await setupOnce();
       expect(await fs.readFile(path.join(world.home, '.claude', 'settings.json'), 'utf8')).toBe(claudeBefore);
       expect(await fs.readFile(path.join(world.home, '.codex', 'hooks.json'), 'utf8')).toBe(codexBefore);
@@ -149,31 +167,38 @@ describe('CLI commands', () => {
         env: world.env,
         ask: async (question) => {
           questions.push(question);
+
           return question.includes('URL') ? 'https://asked.example.com' : '';
         },
         hookCommandFor: (id) => `agentwatch hook --agent ${id}`
       });
+
       expect(code).toBe(0);
       expect(questions[0]).toContain('backend URL');
       const config = await readJson(resolvePaths(world.env).configFile);
+
       expect(config.endpoint).toBe('https://asked.example.com');
     });
 
     it('fails cleanly with no endpoint in non-interactive mode', async () => {
       const code = await runSetup({ env: world.env, yes: true });
+
       expect(code).toBe(1);
     });
 
     async function enqueuePinned(): Promise<EventQueue> {
       const paths = resolvePaths(world.env);
       const queue = new EventQueue({ queueDir: paths.queueDir, locksDir: paths.locksDir, maxEvents: 100, maxAttempts: 3, maxEventAgeDays: 7 });
+
       await queue.enqueue([{ id: 'evt_pinned', event: { type: 'turn.summary' } } as unknown as Parameters<EventQueue['enqueue']>[0][number]], 'https://backend.example.com/v1/events');
+
       return queue;
     }
 
     async function pinnedDestination(): Promise<string> {
       const paths = resolvePaths(world.env);
       const files = await fs.readdir(paths.queueDir);
+
       return JSON.parse(await fs.readFile(path.join(paths.queueDir, files[0]!), 'utf8')).destination;
     }
 
@@ -188,10 +213,12 @@ describe('CLI commands', () => {
         token: 'tok-2',
         ask: async (question) => {
           questions.push(question);
+
           return question.includes('Deliver them to the new backend') ? 'y' : '';
         },
         hookCommandFor: (id) => `agentwatch hook --agent ${id}`
       });
+
       expect(code).toBe(0);
       expect(questions.some((question) => question.includes('previous backend'))).toBe(true);
       expect(await pinnedDestination()).toBe('https://new.example.com/v1/events');
@@ -208,6 +235,7 @@ describe('CLI commands', () => {
         yes: true,
         hookCommandFor: (id) => `agentwatch hook --agent ${id}`
       });
+
       expect(code).toBe(0);
       // Non-interactive runs must never silently replay one backend's data
       // to another; the entries stay pinned (and eventually expire).
@@ -226,6 +254,7 @@ describe('CLI commands', () => {
         installationId: 'inst-t',
         delivery: { ...defaultConfig().delivery, timeoutMs: 300 }
       };
+
       await saveConfig(paths, config);
 
       let stdout = '';
@@ -236,20 +265,24 @@ describe('CLI commands', () => {
           stdout += text;
         }
       });
+
       expect(code).toBe(0);
       expect(stdout).toBe(''); // passive observer: silence on stdout
 
       const queueFiles = await fs.readdir(paths.queueDir).catch(() => []);
+
       expect(queueFiles).toEqual([]);
     });
 
     it('tolerates malformed stdin', async () => {
       const code = await runHook('claude', { env: world.env, input: '{{{not json' });
+
       expect(code).toBe(0);
     });
 
     it('tolerates unknown agents', async () => {
       const code = await runHook('imaginary', { env: world.env, input: '{}' });
+
       expect(code).toBe(0);
     });
 
@@ -267,6 +300,7 @@ describe('CLI commands', () => {
           stdout += text;
         }
       });
+
       expect(code).toBe(0);
       expect(JSON.parse(stdout).events).toEqual([]);
       expect(await fs.readdir(paths.turnsDir).catch(() => [])).toEqual([]);
@@ -289,6 +323,7 @@ describe('CLI commands', () => {
       });
       expect(code).toBe(0);
       const parsed = JSON.parse(stdout);
+
       expect(parsed.events[0].event.type).toBe('turn.summary');
       expect(stdout).not.toContain('Refactor the auth middleware');
       expect(JSON.stringify(parsed.events[0].prompt_evidence)).toContain('sha256');
@@ -306,19 +341,25 @@ describe('CLI commands', () => {
       await setupOnce();
       // Keep doctor's connectivity probe off the network: closed local port.
       const paths = resolvePaths(world.env);
+
       await saveConfig(paths, { ...defaultConfig(), endpoint: 'http://127.0.0.1:9', token: 'tok-1', installationId: 'inst-t' });
       const logs: string[] = [];
       const original = process.stdout.write.bind(process.stdout);
+
       process.stdout.write = ((chunk: any) => {
         logs.push(String(chunk));
+
         return true;
       }) as typeof process.stdout.write;
+
       try {
         await runDoctor(world.env, { json: true });
       } finally {
         process.stdout.write = original;
       }
+
       const output = logs.join('');
+
       expect(output).toContain('"checks"');
       expect(output).not.toContain('tok-1');
     });
@@ -328,18 +369,23 @@ describe('CLI commands', () => {
     it('removes AgentWatch config from both agents but keeps local config', async () => {
       await setupOnce();
       const code = await runUninstall({ env: world.env });
+
       expect(code).toBe(0);
 
       const claudeSettings = await readJson(path.join(world.home, '.claude', 'settings.json'));
+
       expect(JSON.stringify(claudeSettings)).not.toContain('agentwatch');
       expect(claudeSettings.env?.CLAUDE_CODE_ENABLE_TELEMETRY).toBeUndefined();
 
       const codexHooks = await readJson(path.join(world.home, '.codex', 'hooks.json'));
+
       expect(JSON.stringify(codexHooks)).not.toContain('agentwatch');
       const codexToml = await fs.readFile(path.join(world.home, '.codex', 'config.toml'), 'utf8').catch(() => '');
+
       expect(codexToml).not.toContain('agentwatch');
 
       const paths = resolvePaths(world.env);
+
       await expect(fs.access(paths.configFile)).resolves.toBeUndefined();
     });
 
@@ -347,8 +393,10 @@ describe('CLI commands', () => {
       await setupOnce();
       await runUninstall({ env: world.env, agent: 'claude' });
       const claudeSettings = await readJson(path.join(world.home, '.claude', 'settings.json'));
+
       expect(JSON.stringify(claudeSettings)).not.toContain('agentwatch');
       const codexHooks = await readJson(path.join(world.home, '.codex', 'hooks.json'));
+
       expect(JSON.stringify(codexHooks)).toContain('agentwatch');
     });
 
@@ -356,6 +404,7 @@ describe('CLI commands', () => {
       await setupOnce();
       await runUninstall({ env: world.env, purge: true });
       const paths = resolvePaths(world.env);
+
       await expect(fs.access(paths.configFile)).rejects.toThrow();
     });
   });
@@ -365,15 +414,19 @@ describe('CLI commands', () => {
       await setupOnce();
       const logs: string[] = [];
       const original = process.stdout.write.bind(process.stdout);
+
       process.stdout.write = ((chunk: any) => {
         logs.push(String(chunk));
+
         return true;
       }) as typeof process.stdout.write;
+
       try {
         await runOtelHeaders(world.env);
       } finally {
         process.stdout.write = original;
       }
+
       expect(JSON.parse(logs.join(''))).toEqual({ Authorization: 'Bearer tok-1' });
     });
   });

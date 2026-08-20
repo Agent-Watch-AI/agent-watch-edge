@@ -25,6 +25,7 @@ class FakeTransport implements EventTransport {
   constructor(private readonly result: DeliveryResult) {}
   async send(events: ProductEvent[]): Promise<DeliveryResult> {
     this.calls.push(events);
+
     return this.result;
   }
 }
@@ -53,24 +54,28 @@ describe('public event offline queue', () => {
   it('a dead backend keeps both public product types', async () => {
     const transport = new FakeTransport({ ok: false, retryable: true });
     const outcome = await deliverEvents(mixed(), transport, queue, 10);
+
     expect(outcome.queued).toBe(2);
     expect(await queue.pendingCount()).toBe(2);
   });
 
   it('always keeps everything in the two-type contract', async () => {
     const transport = new FakeTransport({ ok: false, retryable: true });
+
     await deliverEvents(mixed(), transport, queue, 10);
     expect(await queue.pendingCount()).toBe(2);
   });
 
   it('has no policy that can drop usage records', async () => {
     const transport = new FakeTransport({ ok: false, retryable: true });
+
     await deliverEvents(mixed(), transport, queue, 10);
     expect(await queue.pendingCount()).toBe(2);
   });
 
   it('queues both types when no endpoint is configured yet', async () => {
     const outcome = await deliverEvents(mixed(), undefined, queue, 10);
+
     expect(outcome.queued).toBe(2);
     expect(await queue.pendingCount()).toBe(2);
   });
@@ -81,6 +86,7 @@ describe('public event offline queue', () => {
 
     const alive = new FakeTransport({ ok: true, retryable: false });
     const outcome = await deliverEvents([makeSummary('evt_next')], alive, queue, 10);
+
     expect(outcome.delivered).toBe(1);
     expect(outcome.drained).toBe(2);
     expect(await queue.pendingCount()).toBe(0);
@@ -88,6 +94,7 @@ describe('public event offline queue', () => {
 
   it('hook path: unreachable backend queues only the summary, silently', async () => {
     const paths = resolvePaths(world.env);
+
     await writeJson(paths.configFile, {
       ...defaultConfig(),
       endpoint: 'http://127.0.0.1:9',
@@ -113,12 +120,14 @@ describe('public event offline queue', () => {
     const files = await fs.readdir(paths.queueDir);
     const queued = await Promise.all(files.map(async (name) => JSON.parse(await fs.readFile(path.join(paths.queueDir, name), 'utf8'))));
     const types = queued.map((entry) => entry.event.event.type);
+
     expect(types).toEqual(['turn.summary']);
   });
 
   it('hook path drains old summaries when turn summary emission is disabled', async () => {
     const paths = resolvePaths(world.env);
     const endpoint = 'https://backend.example.com';
+
     await writeJson(paths.configFile, {
       ...defaultConfig(),
       endpoint,
@@ -131,14 +140,18 @@ describe('public event offline queue', () => {
       maxAttempts: 3,
       maxEventAgeDays: 7
     });
+
     await runtimeQueue.enqueue([makeSummary('evt_backlog')], `${endpoint}/v1/events`);
 
     const originalFetch = globalThis.fetch;
     const delivered: ProductEvent[] = [];
+
     globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
       delivered.push(...JSON.parse(String(init?.body)).events);
+
       return new Response('{}', { status: 200 });
     }) as typeof fetch;
+
     try {
       expect(await runHook('claude', {
         env: world.env,

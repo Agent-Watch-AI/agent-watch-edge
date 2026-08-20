@@ -1,117 +1,59 @@
+import { asRecord, omitKeys } from '../../core/object.js';
+import type { UnknownRecord } from '../../core/types/core.types.js';
+import { backupFile } from '../../storage/atomic-file.js';
 import { readJsonFile } from '../../storage/json-file.js';
-import { backupFile, writeFileAtomic } from '../../storage/atomic-file.js';
-import { isAgentWatchHookCommand, type SetupContext, type SetupOutcome } from '../provider.js';
+import { registerOurHandlers, stripOurHandlers, sweepUnregisteredEvents, writeJsonValidated } from '../shared/hook-config.js';
+import { withHookInstall, withoutAgent } from '../shared/install-record.js';
+import type { SetupContext, SetupOutcome } from '../types/provider.types.js';
 import { antigravityHooksPath } from './antigravity.detect.js';
+import {
+  ANTIGRAVITY_GROUP_NAME,
+  ANTIGRAVITY_HOOK_EVENTS,
+  ANTIGRAVITY_HOOK_TIMEOUT_MILLISECONDS,
+  ANTIGRAVITY_MATCHED_EVENTS,
+  ANTIGRAVITY_PROVIDER_ID
+} from './constants/antigravity.constants.js';
+
+export { ANTIGRAVITY_HOOK_EVENTS } from './constants/antigravity.constants.js';
+
+/** Antigravity accepts a bare handler as well as a matcher group. */
+const STRIP_OPTIONS = { allowBareHandlers: true } as const;
 
 /**
- * Antigravity reads `~/.gemini/config/hooks.json` as a map of *named* hook
- * groups — its log line is "loaded N named hooks from N hooks.json file(s)" —
- * so AgentWatch owns exactly one top-level key and never touches another
- * tool's group.
+ * Register AgentWatch's hooks in `~/.gemini/config/hooks.json`.
+ *
+ * The file is a map of *named* groups, so AgentWatch owns exactly one top-level
+ * key and never touches another tool's group.
+ *
+ * @param context - Environment, paths, config and the hook command to write.
+ * @returns Whether the file changed, what to tell the user, and the next
+ *   install state.
  */
-const GROUP_NAME = 'agentwatch';
-
-export const ANTIGRAVITY_HOOK_EVENTS = ['PreToolUse', 'PostToolUse', 'PreInvocation', 'PostInvocation', 'Stop'] as const;
-
-/** Tool-scoped events take a matcher; the rest are plain handler lists. */
-const MATCHED_EVENTS = new Set<string>(['PreToolUse', 'PostToolUse']);
-
-/**
- * `HookHandlerConfig.timeout` carries no unit suffix, and Gemini CLI — the
- * same Google hook runner — reads the field as milliseconds with a 60,000
- * default. A bare `30` there timed every AgentWatch hook out before node could
- * start; see the identical constant in gemini.hooks.ts. Milliseconds is also
- * the safe reading of the two: an over-large upper bound costs nothing,
- * because the hook exits in well under a second either way.
- */
-const HOOK_TIMEOUT_MILLISECONDS = 30_000;
-
-interface HookHandler {
-  type: string;
-  command: string;
-  timeout?: number;
-}
-
-interface HookEntry {
-  matcher?: string;
-  hooks: HookHandler[];
-  [key: string]: unknown;
-}
-
-function isAgentWatchHandler(hook: unknown): boolean {
-  return (
-    typeof hook === 'object' &&
-    hook !== null &&
-    typeof (hook as { command?: unknown }).command === 'string' &&
-    isAgentWatchHookCommand((hook as { command: string }).command)
-  );
-}
-
-/**
- * Drop AgentWatch's own handlers from one event's entry list. Handles both
- * shapes Antigravity accepts: a bare handler and a matcher entry wrapping a
- * handler list.
- */
-function withoutAgentWatchHandlers(entries: unknown[]): unknown[] {
-  const kept: unknown[] = [];
-  for (const entry of entries) {
-    if (isAgentWatchHandler(entry)) continue;
-    if (typeof entry !== 'object' || entry === null || !Array.isArray((entry as HookEntry).hooks)) {
-      kept.push(entry);
-      continue;
-    }
-    const hooks = (entry as HookEntry).hooks.filter((hook) => !isAgentWatchHandler(hook));
-    if (hooks.length > 0) kept.push({ ...(entry as HookEntry), hooks });
-  }
-  return kept;
-}
-
 export async function installAntigravityHooks(context: SetupContext): Promise<SetupOutcome> {
   const target = antigravityHooksPath(context.env);
   const read = await readJsonFile(target);
+
   if (read.state === 'invalid') {
     return { ok: false, changed: false, messages: [`refusing to modify unparseable ${target} (${read.error})`] };
   }
-  if (read.state === 'ok' && !isRecord(read.value)) {
+
+  if (read.state === 'ok' && !asRecord(read.value)) {
     return { ok: false, changed: false, messages: [`refusing to modify ${target}: top level is not an object`] };
   }
 
-  const file: Record<string, unknown> = read.state === 'ok' ? (read.value as Record<string, unknown>) : {};
-  const before = JSON.stringify(file);
-  const group: Record<string, unknown> = isRecord(file[GROUP_NAME]) ? (file[GROUP_NAME] as Record<string, unknown>) : {};
+  const file: UnknownRecord = (read.state === 'ok' ? asRecord(read.value) : undefined) ?? {};
+  const group = asRecord(file[ANTIGRAVITY_GROUP_NAME]) ?? {};
+  const registered = registerOurHandlers(group, ANTIGRAVITY_HOOK_EVENTS, hookEntryFor(context.hookCommand), STRIP_OPTIONS);
+  const nextFile: UnknownRecord = {
+    ...file,
+    [ANTIGRAVITY_GROUP_NAME]: sweepUnregisteredEvents(registered, ANTIGRAVITY_HOOK_EVENTS, STRIP_OPTIONS)
+  };
+  const changed = JSON.stringify(nextFile) !== JSON.stringify(file);
 
-  const handler: HookHandler = { type: 'command', command: context.hookCommand, timeout: HOOK_TIMEOUT_MILLISECONDS };
-  for (const event of ANTIGRAVITY_HOOK_EVENTS) {
-    const existing = Array.isArray(group[event]) ? (group[event] as unknown[]) : [];
-    const kept = withoutAgentWatchHandlers(existing);
-    group[event] = MATCHED_EVENTS.has(event) ? [...kept, { matcher: '*', hooks: [handler] }] : [...kept, handler];
-  }
-
-  // An event we registered in an earlier version and no longer use would
-  // otherwise keep firing a hook nothing reads.
-  for (const [event, value] of Object.entries(group)) {
-    if ((ANTIGRAVITY_HOOK_EVENTS as readonly string[]).includes(event) || !Array.isArray(value)) continue;
-    const kept = withoutAgentWatchHandlers(value);
-    if (kept.length === 0) delete group[event];
-    else group[event] = kept;
-  }
-
-  file[GROUP_NAME] = group;
-  const changed = JSON.stringify(file) !== before;
   if (changed) {
     await backupFile(target, context.paths.backupsDir, context.env.now());
-    await writeValidated(target, file);
+    await writeJsonValidated(target, nextFile);
   }
-
-  context.installState.agents['antigravity'] = {
-    ...context.installState.agents['antigravity'],
-    hooksInstalledAt: context.env.now().toISOString(),
-    hookConfigPath: target,
-    hookEvents: [...ANTIGRAVITY_HOOK_EVENTS],
-    hookCommand: context.hookCommand,
-    otelOwnedKeys: [],
-    notes: context.installState.agents['antigravity']?.notes ?? []
-  };
 
   return {
     ok: true,
@@ -119,61 +61,98 @@ export async function installAntigravityHooks(context: SetupContext): Promise<Se
     messages: [
       changed ? `hooks registered in ${target}` : 'hooks already registered',
       ...(changed ? ['restart running Antigravity sessions to pick them up'] : [])
-    ]
+    ],
+    installState: withHookInstall(context.installState, ANTIGRAVITY_PROVIDER_ID, {
+      hookConfigPath: target,
+      hookEvents: ANTIGRAVITY_HOOK_EVENTS,
+      hookCommand: context.hookCommand,
+      installedAt: context.env.now()
+    })
   };
 }
 
+/**
+ * Remove AgentWatch's hooks from `~/.gemini/config/hooks.json`.
+ *
+ * Our own group goes wholesale; a group somebody else owns is only filtered, in
+ * case an AgentWatch command was hand-added to it.
+ *
+ * @param context - Environment, paths and current install state.
+ * @returns Whether the file changed, what to tell the user, and the next
+ *   install state.
+ */
 export async function uninstallAntigravityHooks(context: SetupContext): Promise<SetupOutcome> {
   const target = antigravityHooksPath(context.env);
   const read = await readJsonFile(target);
+  const forgotten = withoutAgent(context.installState, ANTIGRAVITY_PROVIDER_ID);
+
   if (read.state === 'missing') {
-    delete context.installState.agents['antigravity'];
-    return { ok: true, changed: false, messages: ['no Antigravity hooks file'] };
+    return { ok: true, changed: false, messages: ['no Antigravity hooks file'], installState: forgotten };
   }
+
   if (read.state === 'invalid') {
     return { ok: false, changed: false, messages: [`refusing to modify unparseable ${target} (${read.error})`] };
   }
-  if (!isRecord(read.value)) {
+
+  const file = asRecord(read.value);
+
+  if (!file) {
     return { ok: false, changed: false, messages: [`refusing to modify ${target}: top level is not an object`] };
   }
 
-  const file = read.value as Record<string, unknown>;
-  const before = JSON.stringify(file);
+  const nextFile = strippedGroups(file);
+  const changed = JSON.stringify(nextFile) !== JSON.stringify(file);
 
-  // Our own group goes wholesale; a group somebody else owns is only filtered,
-  // in case an AgentWatch command was hand-added to it.
-  for (const [name, value] of Object.entries(file)) {
-    if (!isRecord(value)) continue;
-    const group = value as Record<string, unknown>;
-    for (const [event, entries] of Object.entries(group)) {
-      if (!Array.isArray(entries)) continue;
-      const kept = withoutAgentWatchHandlers(entries);
-      if (kept.length === 0) delete group[event];
-      else group[event] = kept;
-    }
-    if (Object.keys(group).length === 0) delete file[name];
-  }
-
-  const changed = JSON.stringify(file) !== before;
   if (changed) {
     await backupFile(target, context.paths.backupsDir, context.env.now());
-    await writeValidated(target, file);
+    await writeJsonValidated(target, nextFile);
   }
-  delete context.installState.agents['antigravity'];
 
   return {
     ok: true,
     changed,
-    messages: [changed ? 'AgentWatch hooks removed' : 'no AgentWatch hooks found']
+    messages: [changed ? 'AgentWatch hooks removed' : 'no AgentWatch hooks found'],
+    installState: forgotten
   };
 }
 
-async function writeValidated(targetPath: string, file: Record<string, unknown>): Promise<void> {
-  const serialized = `${JSON.stringify(file, null, 2)}\n`;
-  JSON.parse(serialized);
-  await writeFileAtomic(targetPath, serialized);
+/**
+ * Every group with our handlers removed, and emptied groups dropped.
+ *
+ * @param file - The whole hooks file.
+ * @returns The next file contents.
+ */
+function strippedGroups(file: UnknownRecord): UnknownRecord {
+  const emptied = new Set<string>();
+  const next: UnknownRecord = { ...file };
+
+  for (const [name, value] of Object.entries(file)) {
+    const group = asRecord(value);
+
+    if (!group) continue;
+
+    const stripped = stripOurHandlers(group, STRIP_OPTIONS).hooks;
+
+    if (Object.keys(stripped).length === 0) {
+      emptied.add(name);
+      continue;
+    }
+
+    next[name] = stripped;
+  }
+
+  return omitKeys(next, emptied);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+/**
+ * Our entry for one event: a matcher group for tool events, a bare handler
+ * otherwise — both shapes Antigravity accepts.
+ *
+ * @param hookCommand - Command line agents will invoke.
+ * @returns A factory producing the entry for a given event name.
+ */
+function hookEntryFor(hookCommand: string): (eventName: string) => unknown {
+  const handler = { type: 'command', command: hookCommand, timeout: ANTIGRAVITY_HOOK_TIMEOUT_MILLISECONDS };
+
+  return (eventName: string) => (ANTIGRAVITY_MATCHED_EVENTS.has(eventName) ? { matcher: '*', hooks: [handler] } : handler);
 }

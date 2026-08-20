@@ -1,123 +1,42 @@
-import type { AgentWatchEvent, FeatureCandidate, UsageBillingMode } from '../events/canonical-event.js';
+import { compact } from '../core/object.js';
 import { deriveEventId, sha256Hex } from '../events/event-id.js';
+import { EVENT_SCHEMA_VERSION } from '../events/constants/events.constants.js';
+import type { FeatureCandidate } from '../events/types/events.types.js';
 import { contentEvidence } from '../providers/shared/tooling.js';
-import type { ContentEvidence, TurnRecord } from './turn-state.js';
-import type { TurnUsage } from './claude-transcript.js';
+import { PROMPT_JOIN_SEPARATOR, PROVIDER_LABELS, UNKNOWN_TOOL_NAME } from './constants/turns.constants.js';
+import type { PromptRecord, ToolRecord } from './types/turn-state.types.js';
+import type { BuildTurnSummaryInput, TouchedFiles, TurnSummaryEvent } from './types/turn-summary.types.js';
+
+export type {
+  AgentUsageSummary,
+  BuildTurnSummaryInput,
+  TouchedFiles,
+  TurnResponse,
+  TurnSummaryEvent,
+  TurnUsageStatus
+} from './types/turn-summary.types.js';
 
 /**
- * One prompt→response turn, flattened for direct backend consumption:
- * who (developer), where (repo/branch/commit/ticket), what (prompt, response,
- * tools, files) and provisional usage. It is the only hook-path product
- * record; the backend finalizes it from atomic llm.call rows.
+ * Flatten one turn's accumulated state into the single product record the hook
+ * path emits.
+ *
+ * Everything here is derived from the input: the same prompts, tools and usage
+ * always produce the same summary, including its id. That is what makes a
+ * duplicate Stop harmless.
+ *
+ * @param input - The turn's accumulated state.
+ * @returns The summary, with absent fields omitted rather than null.
  */
-export interface AgentUsageSummary {
-  agent_id?: string;
-  parent_agent_id?: string;
-  agent_type?: string;
-  llm_calls: number;
-  input_tokens?: number;
-  cached_input_tokens?: number;
-  cache_creation_input_tokens?: number;
-  output_tokens?: number;
-  reasoning_output_tokens?: number;
-  total_tokens?: number;
-  cost_usd?: number;
-}
-
-export type TurnUsageStatus = 'pending' | 'provisional' | 'complete' | 'partial';
-
-export interface TurnSummaryEvent extends AgentWatchEvent<'turn.summary'> {
-  provider: string;
-  surface: string;
-  session_id?: string;
-  turn_id?: string;
-  developer_id?: string;
-  repository?: string;
-  branch?: string;
-  commit?: string;
-  jira_ids?: string[];
-  /** Working-tree changes reported by git at the end of the turn. */
-  files_changed?: string[];
-  /** Files edited by the agent's tools during this turn (repo-relative). */
-  files_touched?: string[];
-  /** Files the agent's tools only read during this turn (repo-relative). */
-  files_read?: string[];
-  prompt?: string;
-  prompt_evidence?: ContentEvidence;
-  response?: string;
-  response_evidence?: ContentEvidence;
-  tool_calls: number;
-  tools_used: Record<string, number>;
-  model?: string;
-  /** subscription (flat plan) vs api (per-token billing); see billing-mode.ts. */
-  billing_mode?: UsageBillingMode;
-  input_tokens?: number;
-  cached_input_tokens?: number;
-  cache_creation_input_tokens?: number;
-  output_tokens?: number;
-  reasoning_output_tokens?: number;
-  total_tokens?: number;
-  cost_usd?: number;
-  /** Filled by the backend from unique llm.call records. */
-  llm_calls?: number;
-  /** Main-agent and child-agent usage, derived from the same call ledger. */
-  agent_usage?: AgentUsageSummary[];
-  /** Hook summaries start pending/provisional; only backend aggregation is complete. */
-  usage_status: TurnUsageStatus;
-  started_at?: string;
-  ended_at: string;
-}
-
-export interface BuildTurnSummaryInput {
-  /** Internal provider id ('claude' | 'codex'); mapped to the public label. */
-  provider: string;
-  surface: string;
-  sessionId?: string;
-  turnId?: string;
-  developerId?: string;
-  installationId?: string;
-  git?: AgentWatchEvent['git'];
-  featureCandidates?: FeatureCandidate[];
-  prompts: Extract<TurnRecord, { kind: 'prompt' }>[];
-  tools: Extract<TurnRecord, { kind: 'tool' }>[];
-  response?: { text?: string; evidence?: ContentEvidence };
-  usage?: TurnUsage;
-  model?: string;
-  billingMode?: UsageBillingMode;
-  endedAt: string;
-}
-
-const PROVIDER_LABELS: Record<string, string> = {
-  claude: 'claude-code',
-  codex: 'codex',
-  cursor: 'cursor',
-  gemini: 'gemini',
-  antigravity: 'antigravity'
-};
-
 export function buildTurnSummary(input: BuildTurnSummaryInput): TurnSummaryEvent {
-  const toolsUsed: Record<string, number> = {};
-  const filesTouched = new Set<string>();
-  const filesRead = new Set<string>();
-  for (const tool of input.tools) {
-    const name = tool.tool ?? 'unknown';
-    toolsUsed[name] = (toolsUsed[name] ?? 0) + 1;
-    if (!tool.filePath) continue;
-    // files_touched is documented as files the agent MODIFIED; pure reads get
-    // their own list. Legacy records without an access marker stay in
-    // files_touched (the historical behavior) rather than being dropped.
-    if (tool.access === 'read') filesRead.add(tool.filePath);
-    else filesTouched.add(tool.filePath);
-  }
-
-  const promptText = joinDefined(input.prompts.map((prompt) => prompt.text));
+  const files = collectToolUsage(input.tools);
+  const promptText = joinPrompts(input.prompts);
   const startedAt = input.prompts[0]?.at;
   const turnId = input.turnId ?? input.prompts.find((prompt) => prompt.turnId)?.turnId;
-  const jiraIds = (input.featureCandidates ?? []).filter((candidate) => candidate.type === 'ticket').map((candidate) => candidate.value);
+  const jiraIds = ticketValues(input.featureCandidates);
   const provider = PROVIDER_LABELS[input.provider] ?? input.provider;
 
-  const summary: TurnSummaryEvent = {
-    schemaVersion: '1',
+  return compact({
+    schemaVersion: EVENT_SCHEMA_VERSION,
     id: deriveEventId({
       provider: input.provider,
       providerEventType: 'turn.summary',
@@ -142,15 +61,16 @@ export function buildTurnSummary(input: BuildTurnSummaryInput): TurnSummaryEvent
     commit: input.git?.commit,
     jira_ids: jiraIds.length > 0 ? jiraIds : undefined,
     files_changed: input.git?.changedFiles,
-    files_touched: filesTouched.size > 0 ? [...filesTouched] : undefined,
-    files_read: filesRead.size > 0 ? [...filesRead] : undefined,
+    files_touched: files.filesTouched.length > 0 ? files.filesTouched : undefined,
+    files_read: files.filesRead.length > 0 ? files.filesRead : undefined,
     prompt: promptText,
     prompt_evidence: input.prompts[0]?.evidence,
     response: input.response?.text,
     response_evidence: input.response?.evidence,
     tool_calls: input.tools.length,
-    tools_used: toolsUsed,
+    tools_used: files.toolsUsed,
     model: input.usage?.model ?? input.model,
+    // 'unknown' is the absence of a verdict, not a billing mode.
     billing_mode: input.billingMode && input.billingMode !== 'unknown' ? input.billingMode : undefined,
     input_tokens: input.usage?.inputTokens,
     cached_input_tokens: input.usage?.cachedInputTokens,
@@ -159,8 +79,7 @@ export function buildTurnSummary(input: BuildTurnSummaryInput): TurnSummaryEvent
     usage_status: input.usage ? 'provisional' : 'pending',
     started_at: startedAt,
     ended_at: input.endedAt
-  };
-  return compact(summary);
+  });
 }
 
 /**
@@ -171,20 +90,85 @@ export function buildTurnSummary(input: BuildTurnSummaryInput): TurnSummaryEvent
  * then reject honest events. When the text is absent (capture disabled), the
  * capture-time evidence still describes the content the developer saw, and is
  * kept as the only description there is.
+ *
+ * @param summary - Summary about to be sent.
+ * @returns A copy whose evidence matches its own text.
  */
 export function alignContentEvidence(summary: TurnSummaryEvent): TurnSummaryEvent {
-  const aligned = { ...summary };
-  if (typeof aligned.prompt === 'string') aligned.prompt_evidence = contentEvidence(aligned.prompt);
-  if (typeof aligned.response === 'string') aligned.response_evidence = contentEvidence(aligned.response);
-  return aligned;
+  return {
+    ...summary,
+    prompt_evidence: typeof summary.prompt === 'string' ? contentEvidence(summary.prompt) : summary.prompt_evidence,
+    response_evidence: typeof summary.response === 'string' ? contentEvidence(summary.response) : summary.response_evidence
+  };
 }
 
-function joinDefined(texts: (string | undefined)[]): string | undefined {
-  const present = texts.filter((text): text is string => typeof text === 'string' && text.length > 0);
+/**
+ * Tool call counts and the files the turn read versus modified.
+ *
+ * One pass over the records: tool counting and both file lists come from the
+ * same iteration rather than three filter/map chains (STYLEGUIDE 3.3).
+ *
+ * @param tools - The turn's tool records.
+ * @returns Per-tool counts and the two file lists.
+ */
+function collectToolUsage(tools: readonly ToolRecord[]): TouchedFiles {
+  const toolsUsed: Record<string, number> = {};
+  const filesTouched = new Set<string>();
+  const filesRead = new Set<string>();
+
+  for (const tool of tools) {
+    const name = tool.tool ?? UNKNOWN_TOOL_NAME;
+
+    toolsUsed[name] = (toolsUsed[name] ?? 0) + 1;
+
+    if (!tool.filePath) continue;
+
+    // files_touched is documented as files the agent MODIFIED; pure reads get
+    // their own list. Legacy records without an access marker stay in
+    // files_touched (the historical behavior) rather than being dropped.
+    if (tool.access === 'read') {
+      filesRead.add(tool.filePath);
+      continue;
+    }
+
+    filesTouched.add(tool.filePath);
+  }
+
+  return { toolsUsed, filesTouched: [...filesTouched], filesRead: [...filesRead] };
+}
+
+/**
+ * The turn's prompt text, joining several submissions into one.
+ *
+ * @param prompts - The turn's prompt records.
+ * @returns The joined text, or undefined when none was captured.
+ */
+function joinPrompts(prompts: readonly PromptRecord[]): string | undefined {
+  const present: string[] = [];
+
+  for (const prompt of prompts) {
+    if (typeof prompt.text === 'string' && prompt.text.length > 0) present.push(prompt.text);
+  }
+
   if (present.length === 0) return undefined;
-  return present.join('\n---\n');
+
+  return present.join(PROMPT_JOIN_SEPARATOR);
 }
 
-function compact<T extends object>(value: T): T {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
+/**
+ * Ticket keys out of mixed feature evidence.
+ *
+ * @param candidates - Evidence collected during enrichment.
+ * @returns The ticket values, in order.
+ */
+function ticketValues(candidates: readonly FeatureCandidate[] | undefined): string[] {
+  const tickets: string[] = [];
+
+  for (const candidate of candidates ?? []) {
+    if (candidate.type !== 'ticket') continue;
+
+    tickets.push(candidate.value);
+  }
+
+  return tickets;
 }

@@ -1,158 +1,110 @@
+import { asRecord } from '../../core/object.js';
+import type { UnknownRecord } from '../../core/types/core.types.js';
+import { backupFile } from '../../storage/atomic-file.js';
 import { readJsonFile } from '../../storage/json-file.js';
-import { backupFile, writeFileAtomic } from '../../storage/atomic-file.js';
-import { isAgentWatchHookCommand, type SetupContext, type SetupOutcome } from '../provider.js';
+import { registerOurHandlers, stripOurHandlers, sweepUnregisteredEvents, withHooksBlock, writeJsonValidated } from '../shared/hook-config.js';
+import { withHookInstall, withoutHookInstall } from '../shared/install-record.js';
+import type { SetupContext, SetupOutcome } from '../types/provider.types.js';
+import { CLAUDE_HOOK_EVENTS, CLAUDE_HOOK_TIMEOUT_SECONDS, CLAUDE_MATCHED_EVENTS, CLAUDE_PROVIDER_ID } from './constants/claude.constants.js';
 import { claudeSettingsPath } from './claude.detect.js';
 
-/**
- * Hook events AgentWatch registers in Claude Code.
- * Schema: hooks -> EventName -> [{matcher?, hooks: [{type:"command", command, timeout}]}]
- * (verified against code.claude.com/docs/en/hooks, 2026-08).
- */
-export const CLAUDE_HOOK_EVENTS = [
-  'SessionStart',
-  'SessionEnd',
-  'UserPromptSubmit',
-  'PreToolUse',
-  'PostToolUse',
-  'PostToolUseFailure',
-  'PermissionRequest',
-  'Stop',
-  'SubagentStart',
-  'SubagentStop'
-] as const;
-
-/** Tool-scoped events take a tool-name matcher; "*" observes every tool. */
-const MATCHED_EVENTS = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest']);
-const HOOK_TIMEOUT_SECONDS = 30;
-
-interface HookEntry {
-  matcher?: string;
-  hooks: { type: string; command: string; timeout?: number }[];
-  [key: string]: unknown;
-}
-
-function isAgentWatchHandler(hook: unknown): boolean {
-  return typeof hook === 'object' && hook !== null && typeof (hook as { command?: unknown }).command === 'string' && isAgentWatchHookCommand((hook as { command: string }).command);
-}
+export { CLAUDE_HOOK_EVENTS } from './constants/claude.constants.js';
 
 /**
- * Remove AgentWatch HANDLERS (not whole matcher groups: a user may have added
- * their own handler into our group) from every entry; drop entries left with
- * no handlers. Returns the filtered entry list.
+ * Register AgentWatch's hooks in `~/.claude/settings.json`.
+ *
+ * Everything the user owns survives: their handlers inside our matcher groups,
+ * their own groups, and every unrelated setting in the file. Our previous
+ * handlers are stripped before the fresh one is added, because two
+ * registrations would make every turn be processed — and counted — twice.
+ *
+ * @param context - Environment, paths, config and the hook command to write.
+ * @returns Whether the file changed, what to tell the user, and the next
+ *   install state.
  */
-function withoutAgentWatchHandlers(entries: unknown[]): unknown[] {
-  const out: unknown[] = [];
-  for (const entry of entries) {
-    if (typeof entry !== 'object' || entry === null || !Array.isArray((entry as HookEntry).hooks)) {
-      out.push(entry);
-      continue;
-    }
-    const kept = (entry as HookEntry).hooks.filter((hook) => !isAgentWatchHandler(hook));
-    if (kept.length === (entry as HookEntry).hooks.length) out.push(entry);
-    else if (kept.length > 0) out.push({ ...(entry as HookEntry), hooks: kept });
-    // else: the entry was purely ours; drop it.
-  }
-  return out;
-}
-
 export async function installClaudeHooks(context: SetupContext): Promise<SetupOutcome> {
   const settingsPath = claudeSettingsPath(context.env);
   const read = await readJsonFile(settingsPath);
+
   if (read.state === 'invalid') {
     return { ok: false, changed: false, messages: [`refusing to modify unparseable ${settingsPath} (${read.error})`] };
   }
-  const settings: Record<string, unknown> = read.state === 'ok' && isRecord(read.value) ? read.value : {};
-  if (read.state === 'ok' && !isRecord(read.value)) {
+
+  if (read.state === 'ok' && !asRecord(read.value)) {
     return { ok: false, changed: false, messages: [`refusing to modify ${settingsPath}: top level is not an object`] };
   }
 
-  const before = JSON.stringify(settings);
-  const hooks: Record<string, unknown> = isRecord(settings['hooks']) ? (settings['hooks'] as Record<string, unknown>) : {};
-  settings['hooks'] = hooks;
+  const settings: UnknownRecord = (read.state === 'ok' ? asRecord(read.value) : undefined) ?? {};
+  const hooks = asRecord(settings['hooks']) ?? {};
+  const registered = registerOurHandlers(hooks, CLAUDE_HOOK_EVENTS, hookEntryFor(context.hookCommand));
+  const nextSettings: UnknownRecord = { ...settings, hooks: sweepUnregisteredEvents(registered, CLAUDE_HOOK_EVENTS) };
+  const changed = JSON.stringify(nextSettings) !== JSON.stringify(settings);
 
-  for (const eventName of CLAUDE_HOOK_EVENTS) {
-    const existing: unknown[] = Array.isArray(hooks[eventName]) ? (hooks[eventName] as unknown[]) : [];
-    // Strip our (possibly stale) handlers, keep everything user-owned, then
-    // register a fresh dedicated entry.
-    const entries = withoutAgentWatchHandlers(existing);
-    entries.push({
-      ...(MATCHED_EVENTS.has(eventName) ? { matcher: '*' } : {}),
-      hooks: [{ type: 'command', command: context.hookCommand, timeout: HOOK_TIMEOUT_SECONDS }]
-    } satisfies HookEntry);
-    hooks[eventName] = entries;
-  }
-
-  // Drop stale AgentWatch registrations on events we no longer subscribe to.
-  for (const [eventName, value] of Object.entries(hooks)) {
-    if ((CLAUDE_HOOK_EVENTS as readonly string[]).includes(eventName) || !Array.isArray(value)) continue;
-    const filtered = withoutAgentWatchHandlers(value);
-    if (filtered.length !== value.length || JSON.stringify(filtered) !== JSON.stringify(value)) {
-      if (filtered.length === 0) delete hooks[eventName];
-      else hooks[eventName] = filtered;
-    }
-  }
-
-  const changed = JSON.stringify(settings) !== before;
   if (changed) {
     await backupFile(settingsPath, context.paths.backupsDir, context.env.now());
-    await writeSettingsValidated(settingsPath, settings);
+    await writeJsonValidated(settingsPath, nextSettings);
   }
 
-  context.installState.agents['claude'] = {
-    ...context.installState.agents['claude'],
-    hooksInstalledAt: context.env.now().toISOString(),
-    hookConfigPath: settingsPath,
-    hookEvents: [...CLAUDE_HOOK_EVENTS],
-    hookCommand: context.hookCommand,
-    otelOwnedKeys: context.installState.agents['claude']?.otelOwnedKeys ?? [],
-    notes: context.installState.agents['claude']?.notes ?? []
+  return {
+    ok: true,
+    changed,
+    messages: changed ? [`hooks registered in ${settingsPath}`] : ['hooks already registered'],
+    installState: withHookInstall(context.installState, CLAUDE_PROVIDER_ID, {
+      hookConfigPath: settingsPath,
+      hookEvents: CLAUDE_HOOK_EVENTS,
+      hookCommand: context.hookCommand,
+      installedAt: context.env.now()
+    })
   };
-
-  return { ok: true, changed, messages: changed ? [`hooks registered in ${settingsPath}`] : ['hooks already registered'] };
 }
 
+/**
+ * Remove AgentWatch's hooks from `~/.claude/settings.json`.
+ *
+ * @param context - Environment, paths and current install state.
+ * @returns Whether the file changed, what to tell the user, and the next
+ *   install state.
+ */
 export async function uninstallClaudeHooks(context: SetupContext): Promise<SetupOutcome> {
   const settingsPath = claudeSettingsPath(context.env);
   const read = await readJsonFile(settingsPath);
+
   if (read.state === 'missing') return { ok: true, changed: false, messages: ['no Claude settings file'] };
-  if (read.state === 'invalid' || !isRecord(read.value)) {
-    return { ok: false, changed: false, messages: [`cannot parse ${settingsPath}; not modified`] };
-  }
-  const settings = read.value as Record<string, unknown>;
-  const hooks = settings['hooks'];
-  if (!isRecord(hooks)) return { ok: true, changed: false, messages: ['no hooks configured'] };
 
-  let changed = false;
-  for (const [eventName, value] of Object.entries(hooks)) {
-    if (!Array.isArray(value)) continue;
-    const filtered = withoutAgentWatchHandlers(value);
-    if (JSON.stringify(filtered) !== JSON.stringify(value)) {
-      changed = true;
-      if (filtered.length === 0) delete hooks[eventName];
-      else hooks[eventName] = filtered;
-    }
-  }
-  if (Object.keys(hooks).length === 0) delete settings['hooks'];
+  const settings = read.state === 'ok' ? asRecord(read.value) : undefined;
 
-  if (changed) {
+  if (!settings) return { ok: false, changed: false, messages: [`cannot parse ${settingsPath}; not modified`] };
+
+  const hooks = asRecord(settings['hooks']);
+
+  if (!hooks) return { ok: true, changed: false, messages: ['no hooks configured'] };
+
+  const stripped = stripOurHandlers(hooks);
+  const nextSettings = withHooksBlock(settings, stripped.hooks);
+
+  if (stripped.changed) {
     await backupFile(settingsPath, context.paths.backupsDir, context.env.now());
-    await writeSettingsValidated(settingsPath, settings);
+    await writeJsonValidated(settingsPath, nextSettings);
   }
-  const claudeState = context.installState.agents['claude'];
-  if (claudeState) {
-    delete claudeState.hooksInstalledAt;
-    claudeState.hookEvents = [];
-  }
-  return { ok: true, changed, messages: changed ? ['AgentWatch hooks removed'] : ['no AgentWatch hooks found'] };
+
+  return {
+    ok: true,
+    changed: stripped.changed,
+    messages: stripped.changed ? ['AgentWatch hooks removed'] : ['no AgentWatch hooks found'],
+    installState: withoutHookInstall(context.installState, CLAUDE_PROVIDER_ID)
+  };
 }
 
-/** Claude rejects invalid settings files wholesale; verify what we wrote parses. */
-async function writeSettingsValidated(settingsPath: string, settings: Record<string, unknown>): Promise<void> {
-  const serialized = JSON.stringify(settings, null, 2) + '\n';
-  JSON.parse(serialized); // throws before we touch the file if serialization is broken
-  await writeFileAtomic(settingsPath, serialized);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+/**
+ * Our entry for one event: a dedicated matcher group holding one handler.
+ *
+ * @param hookCommand - Command line agents will invoke.
+ * @returns A factory producing the entry for a given event name.
+ */
+function hookEntryFor(hookCommand: string): (eventName: string) => unknown {
+  return (eventName: string) => ({
+    // Tool-scoped events require a matcher; "*" observes every tool.
+    ...(CLAUDE_MATCHED_EVENTS.has(eventName) ? { matcher: '*' } : {}),
+    hooks: [{ type: 'command', command: hookCommand, timeout: CLAUDE_HOOK_TIMEOUT_SECONDS }]
+  });
 }

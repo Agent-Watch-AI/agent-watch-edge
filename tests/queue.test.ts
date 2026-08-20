@@ -22,6 +22,7 @@ class FakeTransport implements EventTransport {
   ) {}
   async send(events: ProductEvent[]): Promise<DeliveryResult> {
     this.calls.push(events);
+
     return this.result;
   }
 }
@@ -47,9 +48,11 @@ describe('EventQueue', () => {
 
   async function makeAllDue(): Promise<void> {
     const dir = path.join(world.home, 'q');
+
     for (const name of await fs.readdir(dir)) {
       const file = path.join(dir, name);
       const entry = JSON.parse(await fs.readFile(file, 'utf8'));
+
       entry.nextAttemptAt = new Date(0).toISOString();
       await fs.writeFile(file, JSON.stringify(entry));
     }
@@ -66,6 +69,7 @@ describe('EventQueue', () => {
     await queue.enqueue([makeEvent('evt_1'), makeEvent('evt_2')]);
     const transport = new FakeTransport({ ok: true, retryable: false });
     const stats = await queue.drain(transport, 10);
+
     expect(stats.sent).toBe(2);
     expect(await queue.pendingCount()).toBe(0);
     expect(transport.calls).toHaveLength(1);
@@ -75,10 +79,12 @@ describe('EventQueue', () => {
     await queue.enqueue([makeEvent('evt_1')]);
     const transport = new FakeTransport({ ok: false, retryable: true, error: 'HTTP 503' });
     const stats = await queue.drain(transport, 10);
+
     expect(stats.failed).toBe(1);
     expect(await queue.pendingCount()).toBe(1);
     // Not due yet: an immediate second drain sends nothing.
     const again = await queue.drain(new FakeTransport({ ok: true, retryable: false }), 10);
+
     expect(again.sent).toBe(0);
   });
 
@@ -89,6 +95,7 @@ describe('EventQueue', () => {
     const transport = new FakeTransport({ ok: false, retryable: false, error: 'HTTP 400' });
 
     const first = await queue.drain(transport, 10);
+
     expect(first.failed).toBe(1);
     expect(first.dropped).toBe(0);
     expect(await queue.pendingCount()).toBe(1);
@@ -106,11 +113,13 @@ describe('EventQueue', () => {
     const transport: EventTransport = {
       async send(events: ProductEvent[]): Promise<DeliveryResult> {
         if (events.some((event) => event.id === 'evt_poison')) return { ok: false, retryable: false, status: 400, error: 'HTTP 400' };
+
         return { ok: true, retryable: false };
       }
     };
 
     const stats = await queue.drain(transport, 10);
+
     // The batch is rejected, but the individual retry delivers the healthy
     // events; only the poison event stays behind for backoff.
     expect(stats.sent).toBe(2);
@@ -129,6 +138,7 @@ describe('EventQueue', () => {
 
     const transport = new FakeTransport({ ok: true, retryable: false }, 'https://new.example.com/v1/events');
     const stats = await queue.drain(transport, 10);
+
     // Old-URL entry re-routed, ANY entry always flows; the entry pinned to a
     // different backend must never follow a reconfiguration it wasn't part of.
     expect(stats.sent).toBe(2);
@@ -140,6 +150,7 @@ describe('EventQueue', () => {
     await queue.enqueue(Array.from({ length: 5 }, (_, i) => makeEvent(`evt_reject_${i}`)));
     const rejectAll = new FakeTransport({ ok: false, retryable: false, status: 400, error: 'HTTP 400' });
     const stats = await queue.drain(rejectAll, 10);
+
     // One batch send plus at most 3 individual probes; the rest just backs off.
     expect(rejectAll.calls.length).toBe(4);
     expect(stats.failed).toBe(5);
@@ -148,9 +159,11 @@ describe('EventQueue', () => {
 
   it('drops legacy non-product entries instead of draining them to the backend', async () => {
     const internal = { ...makeEvent('evt_legacy_internal'), event: { type: 'prompt.submitted', providerEventType: 'UserPromptSubmit' } } as unknown as ProductEvent;
+
     await queue.enqueue([internal, makeEvent('evt_real')]);
     const transport = new FakeTransport({ ok: true, retryable: false });
     const stats = await queue.drain(transport, 10);
+
     expect(stats.dropped).toBe(1);
     expect(stats.sent).toBe(1);
     expect(transport.calls.flat().map((event) => event.id)).toEqual(['evt_real']);
@@ -171,8 +184,10 @@ describe('EventQueue', () => {
 
     const transportB = new FakeTransport({ ok: true, retryable: false }, 'https://backend-b.example.com/v1/events');
     const stats = await queue.drain(transportB, 10);
+
     expect(stats.sent).toBe(3);
     const sentIds = transportB.calls.flat().map((event) => event.id);
+
     expect(sentIds).toContain('evt_b');
     expect(sentIds).toContain('evt_presetup');
     expect(sentIds).not.toContain('evt_a');
@@ -184,10 +199,12 @@ describe('EventQueue', () => {
   it('never delivers a duplicate event twice across retries', async () => {
     await queue.enqueue([makeEvent('evt_dup')]);
     const ok = new FakeTransport({ ok: true, retryable: false });
+
     await queue.drain(ok, 10);
     await queue.enqueue([makeEvent('evt_dup')]); // same event re-enqueued later
     await queue.drain(ok, 10);
     const delivered = ok.calls.flat().map((event) => event.id);
+
     expect(delivered.filter((id) => id === 'evt_dup')).toHaveLength(2); // two distinct sends, one per enqueue
     expect(ok.calls.every((batch) => batch.length === new Set(batch.map((e) => e.id)).size)).toBe(true);
   });
@@ -214,11 +231,13 @@ describe('deliverEvents', () => {
 
   it('queues when no transport is configured and drains to the first configured backend', async () => {
     const outcome = await deliverEvents([makeEvent('evt_a')], undefined, queue, 10);
+
     expect(outcome.queued).toBe(1);
     expect(await queue.pendingCount()).toBe(1);
 
     const healthy = new FakeTransport({ ok: true, retryable: false }, 'https://first.example.com/v1/events');
     const after = await deliverEvents([makeEvent('evt_b')], healthy, queue, 10);
+
     expect(after.drained).toBe(1);
     expect(await queue.pendingCount()).toBe(0);
   });
@@ -229,6 +248,7 @@ describe('deliverEvents', () => {
     const cooldown = new BackendCooldown(path.join(world.home, 'cooldown.json'), now);
 
     const failing = new FakeTransport({ ok: false, retryable: true, error: 'ECONNREFUSED' }, 'https://b.example/v1/events');
+
     await deliverEvents([makeEvent('evt_1')], failing, queue, 10, cooldown);
     expect(failing.calls).toHaveLength(1);
 
@@ -236,6 +256,7 @@ describe('deliverEvents', () => {
     // events go straight to the queue.
     const stillFailing = new FakeTransport({ ok: false, retryable: true, error: 'ECONNREFUSED' }, 'https://b.example/v1/events');
     const during = await deliverEvents([makeEvent('evt_2')], stillFailing, queue, 10, cooldown);
+
     expect(stillFailing.calls).toHaveLength(0);
     expect(during.queued).toBe(1);
     expect(await queue.pendingCount()).toBe(2);
@@ -244,12 +265,14 @@ describe('deliverEvents', () => {
     clock += 120_000;
     const healthy = new FakeTransport({ ok: true, retryable: false }, 'https://b.example/v1/events');
     const after = await deliverEvents([makeEvent('evt_3')], healthy, queue, 10, cooldown);
+
     expect(healthy.calls.length).toBeGreaterThan(0);
     expect(after.delivered).toBe(1);
   });
 
   it('queues on failed send and retries on a later invocation', async () => {
     const failing = new FakeTransport({ ok: false, retryable: true, error: 'ECONNREFUSED' });
+
     await deliverEvents([makeEvent('evt_a')], failing, queue, 10);
     expect(await queue.pendingCount()).toBe(1);
 
@@ -258,11 +281,13 @@ describe('deliverEvents', () => {
     const file = (await fs.readdir(path.join(world.home, 'q')))[0]!;
     const full = path.join(world.home, 'q', file);
     const entry = JSON.parse(await fs.readFile(full, 'utf8'));
+
     entry.nextAttemptAt = new Date(0).toISOString();
     await fs.writeFile(full, JSON.stringify(entry));
 
     const healthy = new FakeTransport({ ok: true, retryable: false });
     const outcome = await deliverEvents([makeEvent('evt_b')], healthy, queue, 10);
+
     expect(outcome.delivered).toBe(1);
     expect(outcome.drained).toBe(1);
     expect(await queue.pendingCount()).toBe(0);
@@ -271,6 +296,7 @@ describe('deliverEvents', () => {
   it('queues product records after a non-retryable direct-send failure', async () => {
     const failing = new FakeTransport({ ok: false, retryable: false, status: 400, error: 'HTTP 400' }, 'https://b.example/v1/events');
     const outcome = await deliverEvents([makeEvent('evt_bad_route')], failing, queue, 10);
+
     expect(outcome.queued).toBe(1);
     expect(await queue.pendingCount()).toBe(1);
   });
@@ -279,6 +305,7 @@ describe('deliverEvents', () => {
     await queue.enqueue([makeEvent('evt_backlog')], 'https://b.example/v1/events');
     const healthy = new FakeTransport({ ok: true, retryable: false }, 'https://b.example/v1/events');
     const outcome = await deliverEvents([], healthy, queue, 10);
+
     expect(outcome).toMatchObject({ delivered: 0, queued: 0, drained: 1 });
     expect(healthy.calls).toHaveLength(1);
     expect(healthy.calls[0]?.map((event) => event.id)).toEqual(['evt_backlog']);
@@ -298,13 +325,16 @@ describe('HttpTransport', () => {
       timeoutMs: 1000,
       fetchFn: (async (url: any, init: any) => {
         captured = { url: String(url), init };
+
         return new Response('{}', { status: 202 });
       }) as typeof fetch
     });
     const result = await transport.send([event]);
+
     expect(result.ok).toBe(true);
     expect(captured!.url).toBe('https://backend.example.com/v1/events');
     const headers = captured!.init.headers as Record<string, string>;
+
     expect(headers['authorization']).toBe('Bearer tok123');
     expect(JSON.parse(String(captured!.init.body)).events).toHaveLength(1);
   });
@@ -316,6 +346,7 @@ describe('HttpTransport', () => {
         timeoutMs: 1000,
         fetchFn: (async () => new Response('no', { status })) as typeof fetch
       });
+
     expect((await make(503).send([event])).retryable).toBe(true);
     expect((await make(400).send([event])).retryable).toBe(false);
     expect((await make(429).send([event])).retryable).toBe(true);
@@ -330,6 +361,7 @@ describe('HttpTransport', () => {
       }) as typeof fetch
     });
     const result = await transport.send([event]);
+
     expect(result.ok).toBe(false);
     expect(result.retryable).toBe(true);
   });

@@ -44,6 +44,7 @@ describe('two-record product contract', () => {
         featureCandidates: [{ type: 'ticket', value: 'PAY-142', source: 'git.branch' }]
       })
     });
+
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
       event: { type: 'llm.call' },
@@ -81,6 +82,7 @@ describe('two-record product contract', () => {
         ]
       }] }] }]
     };
+
     expect(normalizeOtlpLogs(payload, {
       correlate: ({ threadId }) => threadId === 'child-thread'
         ? { sessionId: 'root-thread', turnId: 'root-turn', parentAgentId: 'root-thread' }
@@ -111,6 +113,7 @@ describe('two-record product contract', () => {
         ]
       }] }] }]
     };
+
     expect(normalizeOtlpLogs(payload)[0]).toMatchObject({
       provider: 'codex',
       call_id: 'codex-request',
@@ -136,6 +139,7 @@ describe('two-record product contract', () => {
       ] }] }]
     };
     const calls = normalizeOtlpLogs(payload);
+
     expect(calls).toHaveLength(2);
     expect(calls[0]?.ended_at).toBe(calls[1]?.ended_at);
     expect(calls[0]?.call_id).not.toBe(calls[1]?.call_id);
@@ -150,6 +154,7 @@ describe('two-record product contract', () => {
       provider: 'claude-code', surface: 'cli', callId: 'req-1', sessionId: 'sess-1', turnId: 'turn-1',
       correlation: 'turn', endedAt: summary.ended_at
     });
+
     expect(summary.agent).toEqual({ provider: 'claude-code', name: 'claude-code' });
     expect(summary.agent.provider).toBe(call.agent.provider);
   });
@@ -176,6 +181,7 @@ describe('two-record product contract', () => {
     });
 
     const finalized = aggregateTurnUsage(summary, [main, child, child], { complete: true });
+
     expect(finalized).toMatchObject({
       llm_calls: 2,
       input_tokens: 150,
@@ -225,6 +231,7 @@ describe('two-record product contract', () => {
         ]
       }] }] }]
     };
+
     expect(normalizeOtlpLogs(payload)[0]?.ended_at).toBe(new Date(1786118400000).toISOString());
   });
 
@@ -253,6 +260,7 @@ describe('two-record product contract', () => {
     };
     const payload = { resourceLogs: [{ scopeLogs: [{ logRecords: [malformed, healthy] }] }] };
     const calls = normalizeOtlpLogs(payload);
+
     expect(calls.some((call) => call.call_id === 'req-ok')).toBe(true);
   });
 
@@ -270,6 +278,7 @@ describe('two-record product contract', () => {
       provider: 'claude-code', surface: 'cli', callId: 'before', sessionId: 'sess',
       correlation: 'session', usage: { inputTokens: 999 }, endedAt: '2026-08-07T11:59:00.000Z'
     });
+
     expect(aggregateTurnUsage(summary, [inWindow, beforeTurn], { sessionSummaries: [summary], complete: true })).toMatchObject({
       llm_calls: 1,
       input_tokens: 40,
@@ -291,6 +300,7 @@ describe('two-record product contract', () => {
       provider: 'claude-code', surface: 'cli', callId: 'in-window', sessionId: 'sess',
       correlation: 'session', usage: { inputTokens: 40 }, endedAt: '2026-08-07T12:01:00.000Z'
     });
+
     expect(aggregateTurnUsage(summary, [inWindow])).toEqual(summary);
   });
 
@@ -305,6 +315,7 @@ describe('two-record product contract', () => {
       provider: 'claude-code', surface: 'cli', callId: 'earlier', sessionId: 'sess',
       correlation: 'session', usage: { inputTokens: 100 }, endedAt: '2026-08-07T11:00:00.000Z'
     });
+
     expect(aggregateTurnUsage(summary, [earlier])).toEqual(summary);
   });
 
@@ -326,6 +337,7 @@ describe('two-record product contract', () => {
     });
 
     const sessionSummaries = [turnA, turnB];
+
     // The newer prompt owns the ambiguous overlap, mirroring the transcript path.
     expect(aggregateTurnUsage(turnA, [overlapping], { sessionSummaries })).toEqual(turnA);
     expect(aggregateTurnUsage(turnB, [overlapping], { sessionSummaries })).toMatchObject({ input_tokens: 70, llm_calls: 1 });
@@ -353,6 +365,7 @@ describe('two-record product contract', () => {
     });
 
     const sessionSummaries = [bounded, degraded];
+
     expect(aggregateTurnUsage(bounded, [insideBounded, afterBounded], { sessionSummaries })).toMatchObject({ input_tokens: 10, llm_calls: 1 });
     expect(aggregateTurnUsage(degraded, [insideBounded, afterBounded], { sessionSummaries, complete: true })).toMatchObject({ input_tokens: 20, llm_calls: 1, usage_status: 'complete' });
   });
@@ -370,6 +383,7 @@ describe('two-record product contract', () => {
       }),
       ended_at: 'not-a-timestamp'
     };
+
     expect(aggregateTurnUsage(summary, [garbage], { sessionSummaries: [summary] })).toEqual(summary);
     expect(aggregateTurnUsage(summary, [garbage])).toEqual(summary);
   });
@@ -384,6 +398,7 @@ describe('two-record product contract', () => {
       correlation: 'turn', status: 'failed', endedAt: summary.ended_at
     });
     const finalized = aggregateTurnUsage(summary, [tokenless]);
+
     expect(finalized).toMatchObject({
       llm_calls: 1,
       input_tokens: 30,
@@ -406,6 +421,7 @@ describe('two-record product contract', () => {
       provider: 'claude-code', surface: 'cli', callId: 'missing', sessionId: 'sess',
       correlation: 'session', usage: { inputTokens: 200 }, endedAt: summary.ended_at
     });
+
     expect(aggregateTurnUsage(summary, [wrongTurn, missingTurn])).toEqual(summary);
     expect(summary).toMatchObject({ input_tokens: 30, output_tokens: 4, usage_status: 'provisional' });
     expect(summary.llm_calls).toBeUndefined();

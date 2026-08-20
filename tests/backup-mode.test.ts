@@ -9,6 +9,7 @@ describe('backupFile', () => {
     const base = path.join(os.tmpdir(), `aw-backup-${Math.random().toString(36).slice(2)}`);
     const source = path.join(base, 'config.toml');
     const backups = path.join(base, 'backups');
+
     await fs.mkdir(base, { recursive: true });
     await fs.writeFile(source, 'Authorization = "Bearer secret"', { mode: 0o600 });
 
@@ -16,6 +17,7 @@ describe('backupFile', () => {
 
     expect(target).toBeDefined();
     const mode = (await fs.stat(target as string)).mode & 0o777;
+
     expect(mode).toBe(0o600);
     await fs.rm(base, { recursive: true, force: true });
   });

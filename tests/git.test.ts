@@ -38,6 +38,7 @@ describe('remote sanitization', () => {
 
 describe('gitUserEmail isolation', () => {
   let world: TempWorld;
+
   beforeEach(async () => {
     world = await makeTempEnv();
   });
@@ -47,6 +48,7 @@ describe('gitUserEmail isolation', () => {
     // The temp home has no .gitconfig; whatever the developer's real global
     // user.email is, it must not leak into a run with an injected home.
     const email = await gitUserEmail(world.home, { home: world.home });
+
     expect(email).toBeUndefined();
   });
 });
@@ -60,6 +62,7 @@ describe('collectGitContext', () => {
     repoDir = path.join(world.home, 'repo');
     await fs.mkdir(repoDir, { recursive: true });
     const git = (...args: string[]) => execFileSync('git', args, { cwd: repoDir, stdio: 'pipe' });
+
     git('init', '--initial-branch', 'feature/OASIS-99-thing');
     git('config', 'user.email', 'test@example.com');
     git('config', 'user.name', 'Test');
@@ -76,6 +79,7 @@ describe('collectGitContext', () => {
 
   it('collects root, branch, commit, sanitized remote and changed files', async () => {
     const context = await collectGitContext({ cwd: repoDir, includeChangedFiles: true });
+
     expect(context.repositoryRoot).toBeDefined();
     expect(context.branch).toBe('feature/OASIS-99-thing');
     expect(context.commit).toMatch(/^[0-9a-f]{40}$/);
@@ -91,6 +95,7 @@ describe('collectGitContext', () => {
     // of the first filename ("CHANGELOG.md" -> "HANGELOG.md").
     await fs.writeFile(path.join(repoDir, 'committed.txt'), 'modified');
     const context = await collectGitContext({ cwd: repoDir, includeChangedFiles: true });
+
     expect(context.changedFiles).toContain('committed.txt');
   });
 
@@ -99,13 +104,16 @@ describe('collectGitContext', () => {
     // for résumé.txt; the escapes must be decoded, not passed through.
     await fs.writeFile(path.join(repoDir, 'résumé.txt'), 'unicode name');
     const context = await collectGitContext({ cwd: repoDir, includeChangedFiles: true });
+
     expect(context.changedFiles).toContain('résumé.txt');
   });
 
   it('degrades gracefully outside a repository', async () => {
     const outside = path.join(world.home, 'not-a-repo');
+
     await fs.mkdir(outside);
     const context = await collectGitContext({ cwd: outside, includeChangedFiles: true });
+
     expect(context.repositoryRoot).toBeUndefined();
     expect(context.workingDirectory).toBe(outside);
   });
@@ -114,6 +122,7 @@ describe('collectGitContext', () => {
     // Hooks on the agent's critical path use this mode: one git process
     // instead of five, keeping tool-heavy sessions cheap.
     const context = await collectGitContext({ cwd: repoDir, includeChangedFiles: true, rootOnly: true });
+
     expect(context.repositoryRoot).toBeDefined();
     expect(context.repository).toBe('repo');
     expect(context.branch).toBeUndefined();

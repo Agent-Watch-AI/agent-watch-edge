@@ -8,6 +8,7 @@ import { defaultConfig, parseOtelSignals } from '../src/config/config.js';
 
 describe('config load fallback', () => {
   let world: TempWorld;
+
   beforeEach(async () => {
     world = await makeTempEnv();
   });
@@ -15,6 +16,7 @@ describe('config load fallback', () => {
 
   it('defaults to the two-record product contract', () => {
     const config = defaultConfig();
+
     expect(config.emit.turnSummaries).toBe(true);
     expect(config.emit.llmCalls).toBe(true);
     expect(Object.keys(config.emit).sort()).toEqual(['llmCalls', 'turnSummaries']);
@@ -22,14 +24,17 @@ describe('config load fallback', () => {
 
   it('a parsed config keeps its capture settings', async () => {
     const paths = resolvePaths(world.env);
+
     await writeJson(paths.configFile, defaultConfig());
     const result = await loadConfig(paths);
+
     expect(result.state).toBe('ok');
     expect(result.config.capture.prompts).toBe(true);
   });
 
   it('migrates legacy emit.llmCalls=false without invalidating the rest of the config', async () => {
     const paths = resolvePaths(world.env);
+
     await writeJson(paths.configFile, {
       ...defaultConfig(),
       endpoint: 'https://backend.example.com',
@@ -37,6 +42,7 @@ describe('config load fallback', () => {
       emit: { turnSummaries: false, llmCalls: false }
     });
     const result = await loadConfig(paths);
+
     expect(result.state).toBe('ok');
     expect(result.config.endpoint).toBe('https://backend.example.com');
     expect(result.config.capture.prompts).toBe(false);
@@ -46,6 +52,7 @@ describe('config load fallback', () => {
 
   it('fails safe to metadata-only capture when the config file is missing', async () => {
     const result = await loadConfig(resolvePaths(world.env));
+
     expect(result.state).toBe('missing');
     expect(result.config.capture.prompts).toBe(false);
     expect(result.config.capture.responses).toBe(false);
@@ -55,9 +62,11 @@ describe('config load fallback', () => {
 
   it('fails safe to metadata-only capture when the config file is corrupt', async () => {
     const paths = resolvePaths(world.env);
+
     await fs.mkdir(path.dirname(paths.configFile), { recursive: true });
     await fs.writeFile(paths.configFile, '{ broken json');
     const result = await loadConfig(paths);
+
     expect(result.state).toBe('invalid');
     expect(result.config.capture.prompts).toBe(false);
     expect(result.config.capture.toolOutput).toBe(false);

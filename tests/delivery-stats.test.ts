@@ -26,6 +26,7 @@ function summary(id: string) {
 
 function tempDirs() {
   const base = path.join(os.tmpdir(), `aw-stats-${Math.random().toString(36).slice(2)}`);
+
   return {
     queueDir: path.join(base, 'queue'),
     locksDir: path.join(base, 'locks'),
@@ -53,6 +54,7 @@ describe('rejected-event accounting', () => {
 
   it('deliverEvents persists a running rejected tally', async () => {
     const dirs = tempDirs();
+
     try {
       const queue = new EventQueue({
         queueDir: dirs.queueDir,
@@ -76,6 +78,7 @@ describe('rejected-event accounting', () => {
 
       expect(outcome.rejected).toBe(1);
       const snapshot = await stats.read();
+
       expect(snapshot?.totalRejected).toBe(1);
       expect(snapshot?.lastRejectedCount).toBe(1);
     } finally {
@@ -85,6 +88,7 @@ describe('rejected-event accounting', () => {
 
   it('sequential records accumulate the running total', async () => {
     const dirs = tempDirs();
+
     try {
       const stats = new DeliveryStats(dirs.statsFile, undefined, dirs.locksDir);
 
@@ -92,6 +96,7 @@ describe('rejected-event accounting', () => {
       await stats.recordRejected(2);
 
       const snapshot = await stats.read();
+
       expect(snapshot?.totalRejected).toBe(3);
       expect(snapshot?.lastRejectedCount).toBe(2);
     } finally {
@@ -101,16 +106,20 @@ describe('rejected-event accounting', () => {
 
   it('waits for a held lock and records once it frees', async () => {
     const dirs = tempDirs();
+
     try {
       const stats = new DeliveryStats(dirs.statsFile, undefined, dirs.locksDir);
+
       await stats.recordRejected(1);
 
       // Simulate another hook holding the lock; free it mid-wait.
       const lockFile = path.join(dirs.locksDir, 'delivery-stats.lock');
+
       await fs.mkdir(dirs.locksDir, { recursive: true });
       await fs.writeFile(lockFile, JSON.stringify({ pid: 0, at: new Date().toISOString() }));
       const started = Date.now();
       const pending = stats.recordRejected(2);
+
       setTimeout(() => {
         void fs.rm(lockFile, { force: true });
       }, 60);
@@ -120,6 +129,7 @@ describe('rejected-event accounting', () => {
       // to the unlocked write.
       expect(Date.now() - started).toBeGreaterThanOrEqual(50);
       const snapshot = await stats.read();
+
       expect(snapshot?.totalRejected).toBe(3);
       expect(snapshot?.lastRejectedCount).toBe(2);
     } finally {
@@ -129,12 +139,15 @@ describe('rejected-event accounting', () => {
 
   it('falls back to a best-effort unlocked write when the lock never frees', async () => {
     const dirs = tempDirs();
+
     try {
       const stats = new DeliveryStats(dirs.statsFile, undefined, dirs.locksDir);
+
       await stats.recordRejected(1);
 
       // Lock held for the whole bounded wait (fresh enough to not be stale-broken).
       const lockFile = path.join(dirs.locksDir, 'delivery-stats.lock');
+
       await fs.mkdir(dirs.locksDir, { recursive: true });
       await fs.writeFile(lockFile, JSON.stringify({ pid: 0, at: new Date().toISOString() }));
 
@@ -142,6 +155,7 @@ describe('rejected-event accounting', () => {
 
       // The record still lands: bounded wait expired, then unlocked best-effort.
       const snapshot = await stats.read();
+
       expect(snapshot?.totalRejected).toBe(3);
       expect(snapshot?.lastRejectedCount).toBe(2);
     } finally {
@@ -153,6 +167,7 @@ describe('rejected-event accounting', () => {
 describe('lost-event accounting', () => {
   it('records events the queue gave up on, instead of losing them silently', async () => {
     const dirs = tempDirs();
+
     try {
       const queue = new EventQueue({
         queueDir: dirs.queueDir,
@@ -176,6 +191,7 @@ describe('lost-event accounting', () => {
       expect(drained.dropped).toBe(1);
       expect(await queue.pendingCount()).toBe(0);
       const snapshot = await stats.read();
+
       expect(snapshot?.totalDropped).toBe(1);
       expect(snapshot?.lastDroppedAt).toBe('2026-08-20T10:00:00.000Z');
     } finally {
@@ -185,6 +201,7 @@ describe('lost-event accounting', () => {
 
   it('records the status a refused direct send came back with', async () => {
     const dirs = tempDirs();
+
     try {
       const queue = new EventQueue({
         queueDir: dirs.queueDir,
@@ -206,6 +223,7 @@ describe('lost-event accounting', () => {
       // but the reason it was kept is now on the record.
       expect(outcome.queued).toBe(1);
       const snapshot = await stats.read();
+
       expect(snapshot?.lastRefusalStatus).toBe(422);
       expect(snapshot?.lastRefusalAt).toBe('2026-08-20T10:00:00.000Z');
     } finally {

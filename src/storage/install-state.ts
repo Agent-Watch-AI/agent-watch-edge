@@ -1,44 +1,48 @@
-import { z } from 'zod';
 import { readJsonFile } from './json-file.js';
 import { writeFileAtomic } from './atomic-file.js';
-import type { AgentWatchPaths } from './paths.js';
+import { SECRET_FILE_MODE } from './constants/storage.constants.js';
+import { installStateSchema } from './schemas/storage.schema.js';
+import type { AgentWatchPaths, InstallState } from './types/storage.types.js';
+
+export type { AgentInstallState, InstallState } from './types/storage.types.js';
 
 /**
- * Records exactly what `agentwatch setup` wrote into each agent's native
- * configuration, so uninstall removes only AgentWatch-owned entries.
+ * Read what setup previously wrote into agent configs.
+ *
+ * Never fails: a missing or corrupt state file degrades to "nothing
+ * installed", which makes the next setup re-register hooks rather than leave
+ * the user with an agent nobody is watching.
+ *
+ * @param paths - Resolved AgentWatch paths.
+ * @returns The stored state, or an empty one.
  */
-const agentInstallSchema = z
-  .object({
-    hooksInstalledAt: z.string().optional(),
-    hookConfigPath: z.string().optional(),
-    hookEvents: z.array(z.string()).default([]),
-    hookCommand: z.string().optional(),
-    otelConfiguredAt: z.string().optional(),
-    otelConfigPath: z.string().optional(),
-    otelOwnedKeys: z.array(z.string()).default([]),
-    notes: z.array(z.string()).default([])
-  })
-  .passthrough();
-
-const installStateSchema = z
-  .object({
-    schemaVersion: z.literal(1).default(1),
-    agents: z.record(agentInstallSchema).default({})
-  })
-  .passthrough();
-
-export type AgentInstallState = z.infer<typeof agentInstallSchema>;
-export type InstallState = z.infer<typeof installStateSchema>;
-
 export async function loadInstallState(paths: AgentWatchPaths): Promise<InstallState> {
   const result = await readJsonFile(paths.installStateFile);
-  if (result.state === 'ok') {
-    const parsed = installStateSchema.safeParse(result.value);
-    if (parsed.success) return parsed.data;
-  }
-  return { schemaVersion: 1, agents: {} };
+
+  if (result.state !== 'ok') return emptyInstallState();
+
+  const parsed = installStateSchema.safeParse(result.value);
+
+  if (!parsed.success) return emptyInstallState();
+
+  return parsed.data;
 }
 
+/**
+ * Persist install state atomically.
+ *
+ * @param paths - Resolved AgentWatch paths.
+ * @param state - State to write.
+ */
 export async function saveInstallState(paths: AgentWatchPaths, state: InstallState): Promise<void> {
-  await writeFileAtomic(paths.installStateFile, JSON.stringify(state, null, 2) + '\n', 0o600);
+  await writeFileAtomic(paths.installStateFile, JSON.stringify(state, null, 2) + '\n', SECRET_FILE_MODE);
+}
+
+/**
+ * A state file describing no installation at all.
+ *
+ * @returns A fresh empty state.
+ */
+function emptyInstallState(): InstallState {
+  return { schemaVersion: 1, agents: {} };
 }

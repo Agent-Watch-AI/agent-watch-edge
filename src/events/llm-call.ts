@@ -1,87 +1,28 @@
-import type { AgentWatchEvent, FeatureCandidate, UsageBillingMode } from './canonical-event.js';
+import { compact } from '../core/object.js';
 import { deriveEventId, sha256Hex } from './event-id.js';
+import { EVENT_SCHEMA_VERSION } from './constants/events.constants.js';
+import type { BuildLlmCallInput, LlmCallEvent } from './types/llm-call.types.js';
+import type { FeatureCandidate } from './types/events.types.js';
 
-export type LlmCallStatus = 'completed' | 'failed';
-export type LlmCallCorrelation = 'exact' | 'turn' | 'session';
+export type { BuildLlmCallInput, LlmCallCorrelation, LlmCallEvent, LlmCallStatus, LlmCallUsage } from './types/llm-call.types.js';
 
 /**
- * One provider request that can consume tokens. This is the atomic usage
- * ledger record: retries are separate calls when the provider reports them
- * separately, and turn/feature totals must be derived from unique call ids.
+ * Build the atomic usage record for one provider request.
+ *
+ * Called by whoever decodes agent telemetry — the bridge's own OTLP
+ * normalizer, or a backend using `@agentwatch-ai/bridge/llm-call` directly.
+ * Both the flat `*_tokens` fields and the nested canonical `session` block are
+ * populated from the same input, so a consumer can read whichever it models.
+ *
+ * @param input - Everything known about the call.
+ * @returns The llm.call event, with absent fields omitted rather than null.
  */
-export interface LlmCallEvent extends AgentWatchEvent<'llm.call'> {
-  provider: string;
-  surface: string;
-  call_id: string;
-  provider_request_id?: string;
-  /** Native scope before a child-agent trace is joined to its root turn. */
-  provider_session_id?: string;
-  provider_turn_id?: string;
-  session_id?: string;
-  turn_id?: string;
-  /** Concrete child-agent instance when the provider exposes it. */
-  agent_id?: string;
-  parent_agent_id?: string;
-  /** Provider role/name such as Explore, reviewer, or repl_main_thread. */
-  agent_type?: string;
-  model?: string;
-  billing_mode?: UsageBillingMode;
-  status: LlmCallStatus;
-  correlation: LlmCallCorrelation;
-  input_tokens?: number;
-  cached_input_tokens?: number;
-  cache_creation_input_tokens?: number;
-  output_tokens?: number;
-  reasoning_output_tokens?: number;
-  total_tokens?: number;
-  cost_usd?: number;
-  duration_ms?: number;
-  started_at?: string;
-  ended_at: string;
-  repository?: string;
-  branch?: string;
-  commit?: string;
-  jira_ids?: string[];
-}
-
-export interface BuildLlmCallInput {
-  provider: string;
-  surface: string;
-  callId: string;
-  providerRequestId?: string;
-  providerSessionId?: string;
-  providerTurnId?: string;
-  sessionId?: string;
-  turnId?: string;
-  agentId?: string;
-  parentAgentId?: string;
-  agentType?: string;
-  model?: string;
-  billingMode?: UsageBillingMode;
-  status?: LlmCallStatus;
-  correlation: LlmCallCorrelation;
-  usage?: {
-    inputTokens?: number;
-    cachedInputTokens?: number;
-    cacheCreationInputTokens?: number;
-    outputTokens?: number;
-    reasoningOutputTokens?: number;
-    totalTokens?: number;
-  };
-  costUsd?: number;
-  durationMs?: number;
-  startedAt?: string;
-  endedAt: string;
-  git?: AgentWatchEvent['git'];
-  featureCandidates?: FeatureCandidate[];
-}
-
-/** Build the normalized record after a backend OTLP consumer decodes it. */
 export function buildLlmCall(input: BuildLlmCallInput): LlmCallEvent {
-  const jiraIds = (input.featureCandidates ?? []).filter((candidate) => candidate.type === 'ticket').map((candidate) => candidate.value);
+  const jiraIds = ticketValues(input.featureCandidates);
   const providerRequestId = input.providerRequestId ?? input.callId;
+
   return compact({
-    schemaVersion: '1',
+    schemaVersion: EVENT_SCHEMA_VERSION,
     id: deriveEventId({
       provider: input.provider,
       providerEventType: 'llm.call',
@@ -111,6 +52,8 @@ export function buildLlmCall(input: BuildLlmCallInput): LlmCallEvent {
     parent_agent_id: input.parentAgentId,
     agent_type: input.agentType,
     model: input.model,
+    // 'unknown' is the absence of a verdict, not a billing mode; emitting it
+    // would make the field look answered.
     billing_mode: input.billingMode && input.billingMode !== 'unknown' ? input.billingMode : undefined,
     status: input.status ?? 'completed',
     correlation: input.correlation,
@@ -131,6 +74,20 @@ export function buildLlmCall(input: BuildLlmCallInput): LlmCallEvent {
   });
 }
 
-function compact<T extends object>(value: T): T {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
+/**
+ * Ticket keys out of mixed feature evidence.
+ *
+ * @param candidates - Evidence collected during enrichment.
+ * @returns The ticket values, in order.
+ */
+function ticketValues(candidates: readonly FeatureCandidate[] | undefined): string[] {
+  const tickets: string[] = [];
+
+  for (const candidate of candidates ?? []) {
+    if (candidate.type !== 'ticket') continue;
+
+    tickets.push(candidate.value);
+  }
+
+  return tickets;
 }

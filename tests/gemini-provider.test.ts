@@ -25,8 +25,10 @@ describe('Gemini provider', () => {
 
   function setupContext(): SetupContext {
     const config = defaultConfig();
+
     config.endpoint = 'https://backend.example.com';
     config.installationId = 'inst-1';
+
     return {
       env: world.env,
       paths: resolvePaths(world.env),
@@ -39,12 +41,14 @@ describe('Gemini provider', () => {
   describe('detection', () => {
     it('is not detected in a clean environment', async () => {
       const result = await detectGemini(world.env);
+
       expect(result.detected).toBe(false);
     });
 
     it('detects via ~/.gemini directory', async () => {
       await fs.mkdir(path.join(world.home, '.gemini'), { recursive: true });
       const result = await detectGemini(world.env);
+
       expect(result.detected).toBe(true);
       expect(result.evidence[0]).toContain('.gemini');
       expect(result.hooksInstalled).toBe(false);
@@ -52,16 +56,19 @@ describe('Gemini provider', () => {
 
     it('detects via executable on PATH', async () => {
       const binDir = path.join(world.home, 'bin');
+
       await fs.mkdir(binDir, { recursive: true });
       await fs.writeFile(path.join(binDir, 'gemini'), '#!/bin/sh\n', { mode: 0o755 });
       world.env.vars['PATH'] = binDir;
       const result = await detectGemini(world.env);
+
       expect(result.detected).toBe(true);
     });
 
     it('detects via GEMINI_CLI environment variable', async () => {
       world.env.vars['GEMINI_CLI'] = '1';
       const result = await detectGemini(world.env);
+
       expect(result.detected).toBe(true);
       expect(result.evidence[0]).toContain('GEMINI_CLI');
     });
@@ -71,14 +78,17 @@ describe('Gemini provider', () => {
     it('installs hooks into a fresh settings.json', async () => {
       const context = setupContext();
       const outcome = await installGeminiHooks(context);
+
       expect(outcome.ok).toBe(true);
       expect(outcome.changed).toBe(true);
 
       const settings = await readJson(geminiSettingsPath(world.env));
+
       for (const eventName of GEMINI_HOOK_EVENTS) {
         expect(settings.hooks[eventName]).toHaveLength(1);
         expect(settings.hooks[eventName][0].hooks[0].command).toBe(HOOK_CMD);
       }
+
       expect(settings.hooks.BeforeTool[0].matcher).toBe('*');
       expect(settings.hooks.SessionStart[0].matcher).toBeUndefined();
       expect(settings.hooks.AfterAgent[0].hooks[0].timeout).toBe(30_000);
@@ -87,6 +97,7 @@ describe('Gemini provider', () => {
 
     it('preserves existing configuration and user hooks', async () => {
       const settingsPath = geminiSettingsPath(world.env);
+
       await writeJson(settingsPath, {
         model: 'gemini-2.5-pro',
         hooks: {
@@ -95,6 +106,7 @@ describe('Gemini provider', () => {
       });
       await installGeminiHooks(setupContext());
       const settings = await readJson(settingsPath);
+
       expect(settings.model).toBe('gemini-2.5-pro');
       expect(settings.hooks.BeforeTool).toHaveLength(2);
       expect(settings.hooks.BeforeTool[0].hooks[0].command).toBe('my-linter --check');
@@ -102,12 +114,15 @@ describe('Gemini provider', () => {
 
     it('uninstalls hooks cleanly', async () => {
       const context = setupContext();
+
       await installGeminiHooks(context);
       const outcome = await uninstallGeminiHooks(context);
+
       expect(outcome.ok).toBe(true);
       expect(outcome.changed).toBe(true);
 
       const settings = await readJson(geminiSettingsPath(world.env));
+
       expect(settings.hooks).toBeUndefined();
     });
   });
@@ -116,12 +131,15 @@ describe('Gemini provider', () => {
     it('configures native OTel in settings.json', async () => {
       const configurator = new GeminiOtelConfigurator();
       const context = setupContext();
+
       context.config.token = 'token-123';
       const outcome = await configurator.configure(context);
+
       expect(outcome.ok).toBe(true);
       expect(outcome.changed).toBe(true);
 
       const settings = await readJson(geminiSettingsPath(world.env));
+
       // Gemini reads GEMINI_TELEMETRY_ENABLED; GEMINI_ENABLE_TELEMETRY (the
       // name this used to write) appears nowhere in the CLI, so telemetry
       // never initialized at all.
@@ -138,10 +156,12 @@ describe('Gemini provider', () => {
     it('sends the ingest token in OTEL_EXPORTER_OTLP_HEADERS, not via a helper', async () => {
       const configurator = new GeminiOtelConfigurator();
       const context = setupContext();
+
       context.config.token = 'token-123';
       await configurator.configure(context);
 
       const settings = await readJson(geminiSettingsPath(world.env));
+
       // Gemini CLI has no otelHeadersHelper (that is a Claude Code setting), so
       // the exporter previously posted with no Authorization header and the
       // fail-closed gateway answered 401 to every batch.
@@ -153,10 +173,12 @@ describe('Gemini provider', () => {
       await writeJson(geminiSettingsPath(world.env), { otelHeadersHelper: '/usr/local/bin/agentwatch otel-headers' });
       const configurator = new GeminiOtelConfigurator();
       const context = setupContext();
+
       context.config.token = 'token-123';
       await configurator.configure(context);
 
       const settings = await readJson(geminiSettingsPath(world.env));
+
       expect(settings.otelHeadersHelper).toBeUndefined();
     });
 
@@ -164,22 +186,27 @@ describe('Gemini provider', () => {
       await writeJson(geminiSettingsPath(world.env), { otelHeadersHelper: '/opt/other-tool headers' });
       const configurator = new GeminiOtelConfigurator();
       const context = setupContext();
+
       context.config.token = 'token-123';
       await configurator.configure(context);
 
       const settings = await readJson(geminiSettingsPath(world.env));
+
       expect(settings.otelHeadersHelper).toBe('/opt/other-tool headers');
     });
 
     it('uninstalls native OTel cleanly', async () => {
       const configurator = new GeminiOtelConfigurator();
       const context = setupContext();
+
       await configurator.configure(context);
       const outcome = await configurator.uninstall(context);
+
       expect(outcome.ok).toBe(true);
       expect(outcome.changed).toBe(true);
 
       const settings = await readJson(geminiSettingsPath(world.env));
+
       expect(settings.env).toBeUndefined();
     });
   });
@@ -196,6 +223,7 @@ describe('Gemini provider', () => {
         },
         context
       );
+
       expect(sessionEvents).toHaveLength(1);
       expect(sessionEvents[0]!.event.type).toBe('session.started');
       expect(sessionEvents[0]!.agent.provider).toBe('gemini');
@@ -210,6 +238,7 @@ describe('Gemini provider', () => {
         },
         context
       );
+
       expect(promptEvents).toHaveLength(1);
       expect(promptEvents[0]!.event.type).toBe('prompt.submitted');
       expect(promptEvents[0]!.session.turnId).toBe('turn-gem-1');
@@ -226,6 +255,7 @@ describe('Gemini provider', () => {
         },
         context
       );
+
       expect(toolEvents).toHaveLength(1);
       expect(toolEvents[0]!.event.type).toBe('shell.started');
       expect(toolEvents[0]!.tool?.name).toBe('Bash');
@@ -238,6 +268,7 @@ describe('Gemini provider', () => {
         },
         context
       );
+
       expect(stopEvents).toHaveLength(1);
       expect(stopEvents[0]!.event.type).toBe('generation.completed');
     });

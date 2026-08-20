@@ -1,299 +1,272 @@
-import { z } from 'zod';
-import type { AgentWatchEvent, CanonicalEventType } from '../../events/canonical-event.js';
-import { deriveEventId, sha256Hex } from '../../events/event-id.js';
-import type { HookContext } from '../provider.js';
-import { classifyTool, contentEvidence, extractFilePath, parseMcpToolName, toolCompleteType, toolStartType } from '../shared/tooling.js';
+import type { AgentWatchEvent, CanonicalEventType, EventPatch } from '../../events/types/events.types.js';
+import { sha256Hex } from '../../events/event-id.js';
+import { baseEvent, promptPatch, responsePatch, toolPatch, withPatch } from '../shared/event-builder.js';
+import { classifyTool, parseMcpToolName, toolCompleteType, toolStartType } from '../shared/tooling.js';
+import type { HookContext, ToolStatus } from '../types/provider.types.js';
+import {
+  ANTIGRAVITY_DISPLAY_NAME,
+  ANTIGRAVITY_HOOK_EVENT_BY_ARGS,
+  ANTIGRAVITY_PROVIDER_ID
+} from './constants/antigravity.constants.js';
+import { antigravityPayloadSchema } from './schemas/antigravity.schema.js';
+import type { AntigravityArgsKey, AntigravityHookEvent, AntigravityPayload, AntigravityToolCall } from './types/antigravity.types.js';
+
+export type { AntigravityHookEvent, AntigravityPayload } from './types/antigravity.types.js';
+
+const ARGS_KEYS = Object.keys(ANTIGRAVITY_HOOK_EVENT_BY_ARGS) as AntigravityArgsKey[];
 
 /**
- * Antigravity hook payloads, translated to canonical events.
+ * Which hook this payload is.
  *
- * The payload is protojson of `exa.hooks_pb.HookArgs`
- * (`third_party/jetski/hooks_pb/hooks.proto`, read off the `agy` binary), and
- * it differs from every other agent we support in two ways that no amount of
- * field renaming can paper over:
+ * `HookArgs` carries no event-name field: the event is whichever member of its
+ * oneof is set. Anything that is not a recognizable `HookArgs` returns
+ * undefined, so a schema change shows up as no telemetry rather than as
+ * mis-attributed telemetry.
  *
- * - There is no event-name field. `HookArgs` is a `common` block plus a oneof,
- *   and the event is whichever member of that oneof is set. Reading a
- *   `hookEventName` — a field that exists in no version of this schema — is
- *   how this provider previously produced `agent.other` with no session id for
- *   every hook, which the turn tracker then discarded.
- * - Identity is nested in `common`, and tool arguments are PascalCase
- *   (`TargetFile`, `CommandLine`) rather than the snake_case used elsewhere.
- *
- * The two-level execution model matters for attribution: an *execution* is one
- * agent run — the turn — and `PreInvocation`/`PostInvocation` bracket the
- * individual model calls inside it (`invocation_num`). Treating an invocation
- * as a turn boundary emits one turn summary per model call and inflates every
- * per-turn aggregate, so only `Stop` closes a turn here.
- */
-
-const toolCallSchema = z
-  .object({
-    name: z.string().optional(),
-    /** `google.protobuf.Struct`: an arbitrary JSON object. */
-    args: z.unknown().optional()
-  })
-  .passthrough();
-
-/** proto3 JSON encodes int32 as a number and int64 as a string. */
-const protoInt = z.union([z.number(), z.string()]).optional();
-
-const commonSchema = z
-  .object({
-    conversationId: z.string().optional(),
-    workspacePaths: z.array(z.string()).optional(),
-    transcriptPath: z.string().optional(),
-    artifactDirectoryPath: z.string().optional(),
-    executionId: z.string().optional(),
-    modelName: z.string().optional(),
-    isBattleMode: z.boolean().optional(),
-    lastUserInput: z.string().optional()
-  })
-  .passthrough();
-
-const payloadSchema = z
-  .object({
-    common: commonSchema.optional(),
-    preToolHookArgs: z.object({ toolCall: toolCallSchema.optional(), stepIdx: protoInt }).passthrough().optional(),
-    postToolHookArgs: z
-      .object({ toolCall: toolCallSchema.optional(), stepIdx: protoInt, error: z.unknown().optional(), result: z.unknown().optional() })
-      .passthrough()
-      .optional(),
-    preInvocationHookArgs: z.object({ invocationNum: protoInt, initialNumSteps: protoInt }).passthrough().optional(),
-    postInvocationHookArgs: z
-      .object({ invocationNum: protoInt, initialNumSteps: protoInt, modelOutput: z.string().optional(), modelThinking: z.string().optional() })
-      .passthrough()
-      .optional(),
-    stopHookArgs: z
-      .object({
-        executionNum: protoInt,
-        terminationReason: z.string().optional(),
-        error: z.unknown().optional(),
-        fullyIdle: z.boolean().optional(),
-        finalModelOutput: z.string().optional()
-      })
-      .passthrough()
-      .optional(),
-    sessionStartHookArgs: z.object({}).passthrough().optional()
-  })
-  .passthrough();
-
-export type AntigravityPayload = z.infer<typeof payloadSchema>;
-
-/** oneof member -> the hook Antigravity fired, in `hooks.json` naming. */
-const HOOK_EVENT_BY_ARGS = {
-  preToolHookArgs: 'PreToolUse',
-  postToolHookArgs: 'PostToolUse',
-  preInvocationHookArgs: 'PreInvocation',
-  postInvocationHookArgs: 'PostInvocation',
-  stopHookArgs: 'Stop',
-  sessionStartHookArgs: 'SessionStart'
-} as const;
-
-type AntigravityArgsKey = keyof typeof HOOK_EVENT_BY_ARGS;
-export type AntigravityHookEvent = (typeof HOOK_EVENT_BY_ARGS)[AntigravityArgsKey];
-
-const ARGS_KEYS = Object.keys(HOOK_EVENT_BY_ARGS) as AntigravityArgsKey[];
-
-/**
- * Which hook this payload is. Returns undefined for anything that is not a
- * recognizable `HookArgs`, so a schema change shows up as no telemetry rather
- * than as mis-attributed telemetry.
+ * @param rawPayload - Raw JSON from the hook's stdin.
+ * @returns The hook name, or undefined.
  */
 export function antigravityHookEvent(rawPayload: unknown): AntigravityHookEvent | undefined {
-  const parsed = payloadSchema.safeParse(rawPayload);
+  const parsed = antigravityPayloadSchema.safeParse(rawPayload);
+
   if (!parsed.success) return undefined;
+
   const key = ARGS_KEYS.find((candidate) => parsed.data[candidate] !== undefined);
-  return key ? HOOK_EVENT_BY_ARGS[key] : undefined;
+
+  return key ? ANTIGRAVITY_HOOK_EVENT_BY_ARGS[key] : undefined;
 }
 
 /**
- * Working directory for git and repo-config lookups. Antigravity reports a
- * workspace list rather than a single `cwd`; the first entry is the primary
- * workspace root.
+ * Working directory for git and repo-config lookups.
+ *
+ * Antigravity reports a workspace list rather than a single `cwd`; the first
+ * entry is the primary workspace root.
+ *
+ * @param rawPayload - Raw JSON from the hook's stdin.
+ * @returns The primary workspace path, or undefined.
  */
 export function antigravityCwd(rawPayload: unknown): string | undefined {
-  const parsed = payloadSchema.safeParse(rawPayload);
+  const parsed = antigravityPayloadSchema.safeParse(rawPayload);
+
   if (!parsed.success) return undefined;
+
   return parsed.data.common?.workspacePaths?.[0];
 }
 
+/**
+ * Translate one Antigravity hook payload into canonical events.
+ *
+ * The two-level execution model matters for attribution: an *execution* is one
+ * agent run — the turn — and PreInvocation/PostInvocation bracket the individual
+ * model calls inside it. Treating an invocation as a turn boundary would emit
+ * one turn summary per model call and inflate every per-turn aggregate, so only
+ * `Stop` closes a turn here.
+ *
+ * @param rawPayload - Raw JSON from the hook's stdin.
+ * @param context - Environment and effective config.
+ * @returns The canonical events, or an empty list for an unusable payload.
+ */
 export function parseAntigravityHookEvent(rawPayload: unknown, context: HookContext): AgentWatchEvent[] {
-  const parsed = payloadSchema.safeParse(rawPayload);
+  const parsed = antigravityPayloadSchema.safeParse(rawPayload);
+
   if (!parsed.success) return [];
+
   const payload = parsed.data;
   const hook = antigravityHookEvent(rawPayload);
+
   if (!hook) return [];
 
-  const event = baseEvent(payload, hook);
-
-  switch (hook) {
-    case 'SessionStart':
-      break;
-    case 'PreInvocation': {
-      // Antigravity has no "user prompt submitted" hook: the prompt is carried
-      // on `common.lastUserInput` by every hook of the execution. The first
-      // invocation of an execution is therefore where the turn's prompt is
-      // recorded; later invocations are model calls inside the same turn.
-      if (!isFirstInvocation(payload.preInvocationHookArgs?.invocationNum)) break;
-      applyPrompt(event, payload, context);
-      break;
-    }
-    case 'PostInvocation':
-      event.metadata = {
-        ...event.metadata,
-        invocationNum: numeric(payload.postInvocationHookArgs?.invocationNum)
-      };
-      break;
-    case 'PreToolUse':
-    case 'PostToolUse':
-      applyToolFields(event, payload, hook, context);
-      break;
-    case 'Stop':
-      applyResponse(event, payload, context);
-      break;
-  }
-
-  return [event];
-}
-
-function baseEvent(payload: AntigravityPayload, hook: AntigravityHookEvent): AgentWatchEvent {
-  const common = payload.common;
-  const sessionId = common?.conversationId;
-  // An execution is the turn. `StopHookArgs.executionNum` numbers executions
-  // within a conversation, and Stop fires once per execution.
-  const turnId = common?.executionId;
-  const toolCall = toolCallOf(payload, hook);
-  const stepIdx = stepIdxOf(payload, hook);
-
-  return {
-    schemaVersion: '1',
-    id: deriveEventId({
-      provider: 'antigravity',
-      providerEventType: hook,
-      sessionId,
-      turnId,
-      toolUseId: stepIdx,
-      payloadFingerprint: sha256Hex(JSON.stringify(fingerprintParts(payload, hook, toolCall?.name)))
-    }),
-    timestamp: new Date().toISOString(),
-    event: { type: canonicalType(payload, hook), providerEventType: hook },
-    agent: { provider: 'antigravity', name: 'Google Antigravity' },
-    session: { id: sessionId, providerId: sessionId, turnId },
-    ai: common?.modelName ? { model: common.modelName, billingMode: 'unknown' } : undefined,
-    metadata: {
-      provider: compact({
-        transcriptPath: common?.transcriptPath,
-        artifactDirectoryPath: common?.artifactDirectoryPath,
-        stepIdx,
-        isBattleMode: common?.isBattleMode,
-        terminationReason: payload.stopHookArgs?.terminationReason,
-        fullyIdle: payload.stopHookArgs?.fullyIdle
-      })
-    }
-  };
-}
-
-function canonicalType(payload: AntigravityPayload, hook: AntigravityHookEvent): CanonicalEventType {
-  switch (hook) {
-    case 'SessionStart':
-      return 'session.started';
-    case 'Stop':
-      return 'generation.completed';
-    case 'PreInvocation':
-      return isFirstInvocation(payload.preInvocationHookArgs?.invocationNum) ? 'prompt.submitted' : 'agent.other';
-    case 'PostInvocation':
-      return 'agent.other';
-    case 'PreToolUse':
-      return toolStartType(classifyTool(payload.preToolHookArgs?.toolCall?.name));
-    case 'PostToolUse':
-      return payload.postToolHookArgs?.error !== undefined ? 'tool.failed' : toolCompleteType(classifyTool(payload.postToolHookArgs?.toolCall?.name));
-  }
+  return [withPatch(antigravityBaseEvent(payload, hook), hookPatch(payload, hook, context))];
 }
 
 /**
- * The invocation counter's base is not documented, so both 0 and 1 are treated
- * as the execution's first model call. A repeat is harmless: the prompt record
- * is keyed by the event id, which is stable for one execution and one prompt.
+ * The provider-independent part of the event.
+ *
+ * @param payload - Parsed hook payload.
+ * @param hook - Which hook fired.
+ * @returns The base event.
+ */
+function antigravityBaseEvent(payload: AntigravityPayload, hook: AntigravityHookEvent): AgentWatchEvent {
+  const common = payload.common;
+  const stepIdx = stepIdxOf(payload, hook);
+
+  return baseEvent({
+    provider: ANTIGRAVITY_PROVIDER_ID,
+    displayName: ANTIGRAVITY_DISPLAY_NAME,
+    providerEventType: hook,
+    eventType: canonicalType(payload, hook),
+    sessionId: common?.conversationId,
+    // An execution is the turn: `StopHookArgs.executionNum` numbers executions
+    // within a conversation, and Stop fires once per execution.
+    turnId: common?.executionId,
+    toolUseId: stepIdx,
+    payloadFingerprint: sha256Hex(JSON.stringify(fingerprintParts(payload, hook))),
+    ai: common?.modelName ? { model: common.modelName, billingMode: 'unknown' } : undefined,
+    providerMetadata: {
+      transcriptPath: common?.transcriptPath,
+      artifactDirectoryPath: common?.artifactDirectoryPath,
+      stepIdx,
+      isBattleMode: common?.isBattleMode,
+      terminationReason: payload.stopHookArgs?.terminationReason,
+      fullyIdle: payload.stopHookArgs?.fullyIdle
+    },
+    timestamp: new Date().toISOString()
+  });
+}
+
+/**
+ * What this particular hook contributes on top of the base event.
+ *
+ * @param payload - Parsed hook payload.
+ * @param hook - Which hook fired.
+ * @param context - Environment and effective config.
+ * @returns The patch; empty for a hook we model but read nothing from.
+ */
+function hookPatch(payload: AntigravityPayload, hook: AntigravityHookEvent, context: HookContext): EventPatch {
+  if (hook === 'PreInvocation') {
+    // Antigravity has no "user prompt submitted" hook: the prompt is carried on
+    // `common.lastUserInput` by every hook of the execution. The first
+    // invocation is therefore where the turn's prompt is recorded; later
+    // invocations are model calls inside the same turn.
+    if (!isFirstInvocation(payload.preInvocationHookArgs?.invocationNum)) return {};
+
+    return promptPatch(payload.common?.lastUserInput ?? '', context.config.capture);
+  }
+
+  if (hook === 'PostInvocation') {
+    return { metadata: { invocationNum: numeric(payload.postInvocationHookArgs?.invocationNum) } };
+  }
+
+  if (hook === 'PreToolUse' || hook === 'PostToolUse') return antigravityToolPatch(payload, hook, context);
+
+  if (hook === 'Stop') return responsePatch(payload.stopHookArgs?.finalModelOutput ?? '', context.config.capture);
+
+  return {};
+}
+
+/**
+ * Tool fields for one of Antigravity's two tool hooks.
+ *
+ * @param payload - Parsed hook payload.
+ * @param hook - Which of the two fired.
+ * @param context - Environment and effective config.
+ * @returns The patch.
+ */
+function antigravityToolPatch(payload: AntigravityPayload, hook: 'PreToolUse' | 'PostToolUse', context: HookContext): EventPatch {
+  const toolCall = toolCallOf(payload, hook);
+  const kind = classifyTool(toolCall?.name);
+  const failed = hook === 'PostToolUse' && payload.postToolHookArgs?.error !== undefined;
+  const mcp = kind === 'mcp' && toolCall?.name ? parseMcpToolName(toolCall.name) : undefined;
+
+  return toolPatch(
+    {
+      name: toolCall?.name,
+      status: toolStatus(hook, failed),
+      kind,
+      input: toolCall?.args,
+      output: hook === 'PostToolUse' ? payload.postToolHookArgs?.result : undefined,
+      error: failed ? payload.postToolHookArgs?.error : undefined,
+      providerFields: mcp ? { mcpServer: mcp.server, mcpTool: mcp.tool } : undefined
+    },
+    context.config.capture
+  );
+}
+
+/**
+ * Whether a tool hook reports a start, a failure, or a completion.
+ *
+ * @param hook - Which of the two tool hooks fired.
+ * @param failed - Whether the post-tool payload carried an error.
+ * @returns The tool status.
+ */
+function toolStatus(hook: 'PreToolUse' | 'PostToolUse', failed: boolean): ToolStatus {
+  if (hook === 'PreToolUse') return 'started';
+
+  return failed ? 'failed' : 'completed';
+}
+
+/**
+ * Canonical type for a hook.
+ *
+ * @param payload - Parsed hook payload.
+ * @param hook - Which hook fired.
+ * @returns The canonical event type.
+ */
+function canonicalType(payload: AntigravityPayload, hook: AntigravityHookEvent): CanonicalEventType {
+  if (hook === 'SessionStart') return 'session.started';
+
+  if (hook === 'Stop') return 'generation.completed';
+
+  if (hook === 'PreInvocation') {
+    return isFirstInvocation(payload.preInvocationHookArgs?.invocationNum) ? 'prompt.submitted' : 'agent.other';
+  }
+
+  if (hook === 'PostInvocation') return 'agent.other';
+
+  if (hook === 'PreToolUse') return toolStartType(classifyTool(payload.preToolHookArgs?.toolCall?.name));
+
+  if (payload.postToolHookArgs?.error !== undefined) return 'tool.failed';
+
+  return toolCompleteType(classifyTool(payload.postToolHookArgs?.toolCall?.name));
+}
+
+/**
+ * Whether an invocation counter names the execution's first model call.
+ *
+ * The counter's base is not documented, so both 0 and 1 are treated as first. A
+ * repeat is harmless: the prompt record is keyed by the event id, which is
+ * stable for one execution and one prompt.
+ *
+ * @param invocationNum - The reported counter, in either proto3 JSON encoding.
+ * @returns True when this is the first invocation.
  */
 function isFirstInvocation(invocationNum: unknown): boolean {
   const value = numeric(invocationNum);
+
   return value === undefined || value <= 1;
 }
 
-function applyPrompt(event: AgentWatchEvent, payload: AntigravityPayload, context: HookContext): void {
-  const prompt = payload.common?.lastUserInput ?? '';
-  event.metadata = { ...event.metadata, prompt: contentEvidence(prompt) };
-  if (context.config.capture.prompts && prompt) {
-    event.metadata = { ...event.metadata, promptText: prompt };
-  }
-}
-
-function applyResponse(event: AgentWatchEvent, payload: AntigravityPayload, context: HookContext): void {
-  const response = payload.stopHookArgs?.finalModelOutput ?? '';
-  event.metadata = { ...event.metadata, response: response ? contentEvidence(response) : undefined };
-  if (context.config.capture.responses && response) {
-    event.metadata = { ...event.metadata, responseText: response };
-  }
-}
-
-function applyToolFields(
-  event: AgentWatchEvent,
-  payload: AntigravityPayload,
-  hook: 'PreToolUse' | 'PostToolUse',
-  context: HookContext
-): void {
-  const args = hook === 'PreToolUse' ? payload.preToolHookArgs : payload.postToolHookArgs;
-  const toolCall = args?.toolCall;
-  const kind = classifyTool(toolCall?.name);
-  const failed = hook === 'PostToolUse' && payload.postToolHookArgs?.error !== undefined;
-
-  event.tool = {
-    name: toolCall?.name,
-    status: hook === 'PreToolUse' ? 'started' : failed ? 'failed' : 'completed'
-  };
-
-  const provider = (event.metadata?.['provider'] ?? {}) as Record<string, unknown>;
-  if (kind === 'mcp' && toolCall?.name) {
-    const { server, tool } = parseMcpToolName(toolCall.name);
-    provider['mcpServer'] = server;
-    provider['mcpTool'] = tool;
-  }
-
-  const toolInput = toolCall?.args;
-  if (kind === 'shell' && context.config.capture.toolInput) {
-    // `run_command` names its command `CommandLine`.
-    const command = readString(toolInput, ['CommandLine', 'command']);
-    if (command) event.metadata = { ...event.metadata, command };
-  }
-  const filePath = extractFilePath(toolInput);
-  if (filePath && (kind === 'file-read' || kind === 'file-edit') && context.config.capture.files) {
-    event.metadata = { ...event.metadata, filePath };
-  }
-  if (context.config.capture.toolInput && toolInput !== undefined) {
-    event.metadata = { ...event.metadata, toolInput };
-  }
-  const result = payload.postToolHookArgs?.result;
-  if (context.config.capture.toolOutput && result !== undefined) {
-    event.metadata = { ...event.metadata, toolOutput: result };
-  }
-  if (failed) {
-    event.metadata = { ...event.metadata, error: contentEvidence(JSON.stringify(payload.postToolHookArgs?.error)) };
-  }
-
-  event.metadata = { ...event.metadata, provider: compact(provider) };
-}
-
-function toolCallOf(payload: AntigravityPayload, hook: AntigravityHookEvent) {
+/**
+ * The tool call one of the tool hooks carries.
+ *
+ * @param payload - Parsed hook payload.
+ * @param hook - Which hook fired.
+ * @returns The call, or undefined for a non-tool hook.
+ */
+function toolCallOf(payload: AntigravityPayload, hook: AntigravityHookEvent): AntigravityToolCall | undefined {
   if (hook === 'PreToolUse') return payload.preToolHookArgs?.toolCall;
+
   if (hook === 'PostToolUse') return payload.postToolHookArgs?.toolCall;
+
   return undefined;
 }
 
+/**
+ * The step index of a tool hook, as a string id.
+ *
+ * @param payload - Parsed hook payload.
+ * @param hook - Which hook fired.
+ * @returns The index, or undefined for a non-tool hook.
+ */
 function stepIdxOf(payload: AntigravityPayload, hook: AntigravityHookEvent): string | undefined {
-  const raw = hook === 'PreToolUse' ? payload.preToolHookArgs?.stepIdx : hook === 'PostToolUse' ? payload.postToolHookArgs?.stepIdx : undefined;
-  const value = numeric(raw);
+  const value = numeric(rawStepIdx(payload, hook));
+
   return value === undefined ? undefined : String(value);
+}
+
+/**
+ * The step index as the payload encodes it.
+ *
+ * @param payload - Parsed hook payload.
+ * @param hook - Which hook fired.
+ * @returns The raw value, or undefined for a non-tool hook.
+ */
+function rawStepIdx(payload: AntigravityPayload, hook: AntigravityHookEvent): unknown {
+  if (hook === 'PreToolUse') return payload.preToolHookArgs?.stepIdx;
+
+  if (hook === 'PostToolUse') return payload.postToolHookArgs?.stepIdx;
+
+  return undefined;
 }
 
 /**
@@ -301,42 +274,49 @@ function stepIdxOf(payload: AntigravityPayload, hook: AntigravityHookEvent): str
  *
  * A prompt is identified by its text and nothing else: the invocation counter's
  * base is undocumented, so the first-invocation test admits both 0 and 1, and
- * including the counter here would give the same prompt two ids and append it
- * to the turn twice. Every other event stays keyed by its own counter, which is
+ * including the counter here would give the same prompt two ids and append it to
+ * the turn twice. Every other event stays keyed by its own counter, which is
  * what keeps successive invocations and tool calls apart.
+ *
+ * @param payload - Parsed hook payload.
+ * @param hook - Which hook fired.
+ * @returns The parts to hash.
  */
-function fingerprintParts(payload: AntigravityPayload, hook: AntigravityHookEvent, toolName: string | undefined): unknown[] {
+function fingerprintParts(payload: AntigravityPayload, hook: AntigravityHookEvent): unknown[] {
   if (hook === 'PreInvocation' && isFirstInvocation(payload.preInvocationHookArgs?.invocationNum)) {
     return ['prompt', payload.common?.lastUserInput ?? ''];
   }
-  return [payload.common?.modelName, toolName, invocationOf(payload, hook)];
+
+  return [payload.common?.modelName, toolCallOf(payload, hook)?.name, invocationOf(payload, hook)];
 }
 
+/**
+ * The invocation counter of an invocation hook.
+ *
+ * @param payload - Parsed hook payload.
+ * @param hook - Which hook fired.
+ * @returns The counter, or undefined for other hooks.
+ */
 function invocationOf(payload: AntigravityPayload, hook: AntigravityHookEvent): number | undefined {
   if (hook === 'PreInvocation') return numeric(payload.preInvocationHookArgs?.invocationNum);
+
   if (hook === 'PostInvocation') return numeric(payload.postInvocationHookArgs?.invocationNum);
+
   return undefined;
 }
 
+/**
+ * A proto3 JSON integer as a number, whichever encoding it arrived in.
+ *
+ * @param value - A number or its string form.
+ * @returns The finite number, or undefined.
+ */
 function numeric(value: unknown): number | undefined {
   if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
-  if (typeof value === 'string' && value.trim() !== '') {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
-}
 
-function readString(value: unknown, keys: string[]): string | undefined {
-  if (typeof value !== 'object' || value === null) return undefined;
-  const record = value as Record<string, unknown>;
-  for (const key of keys) {
-    const candidate = record[key];
-    if (typeof candidate === 'string' && candidate.length > 0) return candidate;
-  }
-  return undefined;
-}
+  if (typeof value !== 'string' || value.trim() === '') return undefined;
 
-function compact(record: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
+  const parsed = Number(value);
+
+  return Number.isFinite(parsed) ? parsed : undefined;
 }

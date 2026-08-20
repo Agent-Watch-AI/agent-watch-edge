@@ -1,132 +1,86 @@
-import fs from 'node:fs/promises';
-import { sha256Hex } from '../events/event-id.js';
-import type { ReadTurnUsageRetry, TurnUsage } from './claude-transcript.js';
+import { asRecord, firstStringOf } from '../core/object.js';
+import { accumulateUsage, messageIdFor, parseJsonLine, readTranscriptTail, readUntilSettled } from './transcript.js';
+import type { ReadTurnUsageRetry, TranscriptUsageEntry, TurnUsage } from './types/transcript.types.js';
 
 /**
  * Forward-compatible token usage from Cursor's transcript JSONL.
  *
  * Today (verified 2026-08) Cursor transcript rows carry only role/message with
  * tool_use blocks — no usage, no timestamps, no message ids — so this reader
- * returns undefined and Cursor turn summaries stay usage_status=pending.
- * Cursor has logged the enrichment request; the parser already accepts
- * `usage` / `message.usage` objects with Anthropic-style token fields, so
- * tokens appear here without a code change once the format grows them.
+ * returns undefined and Cursor turn summaries stay usage_status=pending. Cursor
+ * has logged the enrichment request; the parser already accepts `usage` and
+ * `message.usage` objects with Anthropic-style token fields, so tokens will
+ * appear here without a code change once the format grows them.
  *
- * Rows have no timestamps, so unlike the Claude reader there is no time
- * window: a turn claims every not-yet-claimed usage row, and exactly-once
- * attribution rests entirely on the persisted message-id ledger
- * (excludeMessageIds). Rows without an id claim through a stable content hash.
+ * Rows have no timestamps, so unlike the Claude reader there is no time window:
+ * a turn claims every not-yet-claimed usage row, and exactly-once attribution
+ * rests entirely on the persisted message-id ledger.
+ *
+ * @param transcriptPath - Path Cursor reported in the hook payload.
+ * @param retry - How long to wait for the transcript flush to settle.
+ * @param excludeMessageIds - Rows another turn already claimed.
+ * @returns The turn's usage, or undefined while the format carries none.
  */
-const TRANSCRIPT_TAIL_BYTES = 4 * 1024 * 1024;
-
 export async function readCursorTurnUsage(
   transcriptPath: string,
   retry?: ReadTurnUsageRetry,
   excludeMessageIds?: ReadonlySet<string>
 ): Promise<TurnUsage | undefined> {
-  const attempts = Math.max(1, retry?.attempts ?? 1);
-  const delayMs = retry?.delayMs ?? 0;
-  const minSettleMs = retry?.minSettleMs ?? 0;
-  let previous: TurnUsage | undefined;
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const usage = await readOnce(transcriptPath, excludeMessageIds);
-    // Today's Cursor format has no usage rows at all: retrying cannot change
-    // that, and the settle loop would add attempts×delay of pure latency to
-    // every Stop. Wait out the flush only once usage rows actually exist.
-    if (usage === undefined && previous === undefined) return undefined;
-    const settled = attempt * delayMs >= minSettleMs;
-    if (settled && usage && previous && JSON.stringify(usage) === JSON.stringify(previous)) return usage;
-    previous = usage;
-    if (attempt < attempts - 1) await sleep(delayMs);
-  }
-  return previous;
+  return readUntilSettled(() => readOnce(transcriptPath, excludeMessageIds), retry, { bailOnFirstEmpty: true });
 }
 
+/**
+ * One pass over the transcript tail.
+ *
+ * @param transcriptPath - Transcript file.
+ * @param excludeMessageIds - Rows another turn already claimed.
+ * @returns The usage found in this pass.
+ */
 async function readOnce(transcriptPath: string, excludeMessageIds?: ReadonlySet<string>): Promise<TurnUsage | undefined> {
-  let raw: string;
-  try {
-    const stat = await fs.stat(transcriptPath);
-    if (stat.size > TRANSCRIPT_TAIL_BYTES) {
-      const handle = await fs.open(transcriptPath, 'r');
-      try {
-        const buffer = Buffer.alloc(TRANSCRIPT_TAIL_BYTES);
-        const { bytesRead } = await handle.read(buffer, 0, TRANSCRIPT_TAIL_BYTES, stat.size - TRANSCRIPT_TAIL_BYTES);
-        raw = buffer.subarray(0, bytesRead).toString('utf8');
-        // Drop the first, almost certainly partial, line.
-        raw = raw.slice(raw.indexOf('\n') + 1);
-      } finally {
-        await handle.close();
-      }
-    } else {
-      raw = await fs.readFile(transcriptPath, 'utf8');
-    }
-  } catch {
-    return undefined;
-  }
+  const raw = await readTranscriptTail(transcriptPath);
 
-  const byMessageId = new Map<string, { model?: string; usage: Record<string, unknown> }>();
+  if (raw === undefined) return undefined;
+
+  const byMessageId = new Map<string, TranscriptUsageEntry>();
+
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    let entry: Record<string, unknown>;
-    try {
-      entry = JSON.parse(line) as Record<string, unknown>;
-    } catch {
-      continue;
-    }
-    const message = asRecord(entry['message']);
-    const usage = asRecord(entry['usage']) ?? asRecord(message?.['usage']);
-    if (!usage) continue;
-    const rawId = firstStringOf(message?.['id'], entry['id'], entry['message_id']);
-    const id = rawId ?? `anon-${sha256Hex(line)}`;
-    if (excludeMessageIds?.has(id)) continue;
-    const model = firstStringOf(message?.['model'], entry['model']);
-    byMessageId.set(id, { model, usage });
+
+    const entry = usageRow(line, excludeMessageIds);
+
+    if (entry) byMessageId.set(entry.id, entry.value);
   }
-  if (byMessageId.size === 0) return undefined;
 
-  const result: TurnUsage = {};
-  const modelTokens = new Map<string, number>();
-  for (const { model, usage } of byMessageId.values()) {
-    result.inputTokens = add(result.inputTokens, usage['input_tokens']);
-    result.outputTokens = add(result.outputTokens, usage['output_tokens']);
-    result.cachedInputTokens = add(result.cachedInputTokens, usage['cache_read_input_tokens']);
-    result.cacheCreationInputTokens = add(result.cacheCreationInputTokens, usage['cache_creation_input_tokens']);
-    if (model) {
-      const weight = finiteOrZero(usage['input_tokens']) + finiteOrZero(usage['output_tokens']) + finiteOrZero(usage['cache_read_input_tokens']) + finiteOrZero(usage['cache_creation_input_tokens']);
-      modelTokens.set(model, (modelTokens.get(model) ?? 0) + weight);
-    }
-  }
-  let dominantTokens = -1;
-  for (const [model, tokens] of modelTokens) {
-    if (tokens > dominantTokens) {
-      result.model = model;
-      dominantTokens = tokens;
-    }
-  }
-  result.messageIds = [...byMessageId.keys()];
-  return result;
+  return accumulateUsage(byMessageId);
 }
 
-function firstStringOf(...values: unknown[]): string | undefined {
-  for (const value of values) {
-    if (typeof value === 'string' && value.length > 0) return value;
-  }
-  return undefined;
+/** A usable transcript row, reduced to what the accumulator needs. */
+interface IdentifiedEntry {
+  readonly id: string;
+  readonly value: TranscriptUsageEntry;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-}
+/**
+ * The usage of one transcript row, when it reports any and no other turn has
+ * claimed it.
+ *
+ * @param line - Verbatim JSONL line.
+ * @param excludeMessageIds - Rows another turn already claimed.
+ * @returns The entry, or undefined when the row carries no usage.
+ */
+function usageRow(line: string, excludeMessageIds?: ReadonlySet<string>): IdentifiedEntry | undefined {
+  const entry = parseJsonLine(line);
 
-function add(current: number | undefined, value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return current;
-  return (current ?? 0) + value;
-}
+  if (!entry) return undefined;
 
-function finiteOrZero(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
-}
+  const message = asRecord(entry['message']);
+  const usage = asRecord(entry['usage']) ?? asRecord(message?.['usage']);
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  if (!usage) return undefined;
+
+  const id = messageIdFor(firstStringOf(message?.['id'], entry['id'], entry['message_id']), line);
+
+  if (excludeMessageIds?.has(id)) return undefined;
+
+  return { id, value: { model: firstStringOf(message?.['model'], entry['model']), usage } };
 }

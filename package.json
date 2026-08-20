@@ -1,6 +1,6 @@
 {
   "name": "@agentwatch-ai/bridge",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Connect Claude Code, Codex and Cursor telemetry to your backend with turn, Git and ticket-key attribution.",
   "license": "MIT",
   "type": "module",
@@ -43,6 +43,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src tests",
+    "lint:fix": "eslint src tests --fix",
     "test": "vitest run",
     "test:watch": "vitest",
     "example": "node example/server.mjs",
@@ -75,8 +76,11 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
+    "@stylistic/eslint-plugin": "^5.10.0",
     "@types/node": "^22.10.0",
     "eslint": "^9.17.0",
+    "eslint-plugin-import-x": "^4.17.1",
+    "eslint-plugin-jsdoc": "^63.3.3",
     "patch-package": "^8.0.1",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.19.0",

@@ -1,166 +1,155 @@
 import process from 'node:process';
-import type { Env } from '../core/env.js';
+import { loadConfig } from '../config/config-store.js';
 import { debugLog, warnLog } from '../core/logger.js';
+import { runHookPipeline } from '../pipeline/hook-pipeline.js';
 import { getProvider } from '../providers/registry.js';
-import type { AgentProvider } from '../providers/provider.js';
-import { loadEffectiveConfig } from '../config/repo-config.js';
-import { enrichEvents } from '../events/enrich.js';
-import { trackTurn } from '../turns/turn-tracker.js';
-import type { TurnSummaryEvent } from '../turns/turn-summary.js';
-import { deliverEvents } from '../transport/delivery.js';
-import { BackendCooldown } from '../transport/cooldown.js';
-import path from 'node:path';
-import { buildCliContext, buildDeliveryStats, buildQueue, buildTransport } from './context.js';
+import type { AgentProvider } from '../providers/types/provider.types.js';
+import { resolvePaths } from '../storage/paths.js';
+import { MAX_STDIN_BYTES, STDIN_TIMEOUT_MS } from './constants/cli.constants.js';
+import type { HookRunOptions } from './types/cli.types.js';
 
-const MAX_STDIN_BYTES = 10 * 1024 * 1024;
-const STDIN_TIMEOUT_MS = 5000;
-
-export interface HookRunOptions {
-  env: Env;
-  /** Raw stdin payload; tests inject a string instead of reading process.stdin. */
-  input?: string;
-  dryRun?: boolean;
-  writeStdout?: (text: string) => void;
-}
+export type { HookRunOptions } from './types/cli.types.js';
 
 /**
- * The hook fast path: read → normalize → enrich → deliver/enqueue → respond →
- * exit. This runs inside the coding agent's critical path, so it must be
- * quick, and it must NEVER fail the agent: any internal error degrades to the
- * provider's safe no-op response with exit code 0.
+ * The `hook` command: read stdin, run the flow, answer the agent.
+ *
+ * This runs inside the coding agent's critical path, and it must NEVER fail the
+ * agent. Every failure — an unknown agent, an unreadable payload, a broken
+ * config, a stage that throws — degrades to the provider's safe response with
+ * exit code 0. Telemetry is worth strictly less than the developer's session.
+ *
+ * @param agentId - Value of `--agent`.
+ * @param options - Environment, injected stdin, dry-run flag, stdout sink.
+ * @returns The process exit code; always one the agent tolerates.
  */
 export async function runHook(agentId: string, options: HookRunOptions): Promise<number> {
-  const writeStdout = options.writeStdout ?? ((text: string) => process.stdout.write(text));
   const provider = getProvider(agentId);
+
   if (!provider) {
     warnLog(`unknown agent "${agentId}"; passing through`);
+
     return 0;
   }
 
-  let exitCode = 0;
-  let rawPayload: unknown;
-  try {
-    const input = options.input ?? (await readStdin());
-    rawPayload = input.trim() === '' ? {} : JSON.parse(input);
-  } catch (error) {
-    debugLog('failed to read/parse hook payload:', error);
-    rawPayload = undefined;
-  }
+  const payload = await readPayload(options);
 
   try {
-    const response = provider.getHookResponse(rawPayload);
-    if (rawPayload !== undefined) {
-      await processPayload(agentId, rawPayload, options);
-    }
-    if (response.stdout) writeStdout(response.stdout);
-    exitCode = response.exitCode;
+    const response = provider.getHookResponse(payload);
+
+    if (payload !== undefined) await processPayload(provider, payload, options);
+
+    if (response.stdout) writeStdout(options, response.stdout);
+
+    return response.exitCode;
   } catch (error) {
     // Telemetry must never break the coding agent.
     debugLog('hook processing failed:', error);
-    exitCode = 0;
-  }
-  return exitCode;
-}
 
-async function processPayload(agentId: string, rawPayload: unknown, options: HookRunOptions): Promise<void> {
-  const provider = getProvider(agentId);
-  if (!provider) return;
-  const baseContext = await buildCliContext(options.env);
-  const payloadCwd = resolvePayloadCwd(provider, rawPayload, options.env.cwd);
-  // Repository-level .agentwatch.json overrides the global config for
-  // content capture derived from this payload; identity, endpoints, emission
-  // toggles and delivery tuning stay global-only.
-  const effective = await loadEffectiveConfig(baseContext.paths, payloadCwd);
-  const context = { ...baseContext, config: effective.config };
-
-  const events = await provider.parseHookEvent(rawPayload, { env: options.env, config: context.config });
-  if (events.length === 0) {
-    debugLog('no canonical events produced');
-    return;
+    return 0;
   }
-  const enriched = await enrichEvents(events, { config: context.config, cwd: payloadCwd, home: options.env.home });
-
-  // Lifecycle events are internal assembly state. Only turn.summary leaves
-  // this path; llm.call records arrive through the native OTLP path.
-  const outbound: TurnSummaryEvent[] = [];
-  // Turn tracking always runs: besides producing the summary it resolves
-  // token usage and mirrors it onto the raw generation.completed event.
-  try {
-    const summary = await trackTurn({
-      agentId,
-      rawPayload,
-      events: enriched,
-      config: context.config,
-      turnsDir: context.paths.turnsDir,
-      locksDir: context.paths.locksDir,
-      env: options.env,
-      cwd: payloadCwd,
-      readOnly: options.dryRun === true
-    });
-    if (summary && context.config.emit.turnSummaries) outbound.push(summary);
-  } catch (error) {
-    debugLog('turn summary failed:', error);
-  }
-
-  if (options.dryRun) {
-    const writeStdout = options.writeStdout ?? ((text: string) => process.stdout.write(text));
-    writeStdout(JSON.stringify({ events: outbound }, null, 2) + '\n');
-    return;
-  }
-  const queue = buildQueue(context);
-  const transport = buildTransport(context);
-  const cooldown = new BackendCooldown(path.join(context.paths.dataDir, 'backend-cooldown.json'), options.env.now);
-  const stats = buildDeliveryStats(context);
-  const outcome = await deliverEvents(outbound, transport, queue, context.config.delivery.drainBatchSize, cooldown, stats);
-  debugLog(`delivery: sent=${outcome.delivered} queued=${outcome.queued} drained=${outcome.drained} rejected=${outcome.rejected}`);
 }
 
 /**
- * Where this payload happened. Most agents report a top-level `cwd`; a provider
- * that nests it (Antigravity carries `common.workspacePaths`) supplies
- * `resolveCwd`. Without this the git context, the repository `.agentwatch.json`
- * and every branch-derived ticket key would be resolved against the directory
- * the hook process happened to start in.
+ * Run one payload through the hook flow and print a dry run's result.
+ *
+ * @param provider - The agent's provider.
+ * @param payload - Decoded hook payload.
+ * @param options - Environment, dry-run flag and stdout sink.
  */
-function resolvePayloadCwd(provider: AgentProvider, rawPayload: unknown, fallback: string): string {
-  const reported = (rawPayload as Record<string, unknown> | undefined)?.['cwd'];
-  if (typeof reported === 'string' && reported !== '') return reported;
-  const resolved = provider.resolveCwd?.(rawPayload);
-  return typeof resolved === 'string' && resolved !== '' ? resolved : fallback;
+async function processPayload(provider: AgentProvider, payload: unknown, options: HookRunOptions): Promise<void> {
+  const paths = resolvePaths(options.env);
+  const loaded = await loadConfig(paths);
+  const result = await runHookPipeline({
+    provider,
+    env: options.env,
+    paths,
+    globalConfig: loaded.config,
+    payload,
+    dryRun: options.dryRun === true
+  });
+
+  if (!options.dryRun) return;
+
+  writeStdout(options, JSON.stringify({ events: result.state.outbound }, null, 2) + '\n');
 }
 
+/**
+ * Decode the hook payload.
+ *
+ * An empty payload is a valid `{}` — some hooks fire with no body — while an
+ * unreadable one becomes undefined, which tells the caller to answer the agent
+ * without processing anything.
+ *
+ * @param options - Environment and injected stdin.
+ * @returns The decoded payload, or undefined.
+ */
+async function readPayload(options: HookRunOptions): Promise<unknown> {
+  try {
+    const input = options.input ?? (await readStdin());
+
+    return input.trim() === '' ? {} : JSON.parse(input);
+  } catch (error) {
+    debugLog('failed to read/parse hook payload:', error);
+
+    return undefined;
+  }
+}
+
+/**
+ * Write to the hook's stdout.
+ *
+ * @param options - Carries the injectable sink.
+ * @param text - Exactly what the agent's protocol expects.
+ */
+function writeStdout(options: HookRunOptions, text: string): void {
+  const write = options.writeStdout ?? ((value: string) => process.stdout.write(value));
+
+  write(text);
+}
+
+/**
+ * Read stdin to the end, bounded by size and time.
+ *
+ * Both bounds exist because the writer is the agent, not us: a hook that waited
+ * forever, or buffered an unbounded payload, would take the agent's session
+ * down with it.
+ *
+ * @returns The payload text; whatever arrived, if the timeout fires first.
+ */
 function readStdin(): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve(Buffer.concat(chunks).toString('utf8'));
-    }, STDIN_TIMEOUT_MS);
 
-    const onData = (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > MAX_STDIN_BYTES) {
-        cleanup();
-        reject(new Error('hook payload exceeds size limit'));
-        return;
-      }
-      chunks.push(chunk);
-    };
-    const onEnd = () => {
-      cleanup();
-      resolve(Buffer.concat(chunks).toString('utf8'));
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const cleanup = () => {
+    const cleanup = (): void => {
       clearTimeout(timer);
       process.stdin.off('data', onData);
       process.stdin.off('end', onEnd);
       process.stdin.off('error', onError);
     };
+    const finish = (): void => {
+      cleanup();
+      resolve(Buffer.concat(chunks).toString('utf8'));
+    };
+    const onData = (chunk: Buffer): void => {
+      size += chunk.length;
+
+      if (size > MAX_STDIN_BYTES) {
+        cleanup();
+        reject(new Error('hook payload exceeds size limit'));
+
+        return;
+      }
+
+      chunks.push(chunk);
+    };
+    const onEnd = (): void => finish();
+    const onError = (error: Error): void => {
+      cleanup();
+      reject(error);
+    };
+    const timer = setTimeout(finish, STDIN_TIMEOUT_MS);
+
     process.stdin.on('data', onData);
     process.stdin.on('end', onEnd);
     process.stdin.on('error', onError);

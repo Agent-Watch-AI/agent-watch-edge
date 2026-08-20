@@ -1,195 +1,172 @@
-import { z } from 'zod';
-import type { AgentWatchEvent, CanonicalEventType } from '../../events/canonical-event.js';
-import { deriveEventId, sha256Hex } from '../../events/event-id.js';
-import type { HookContext } from '../provider.js';
-import { classifyTool, contentEvidence, extractFilePath, parseMcpToolName, toolCompleteType, toolStartType } from '../shared/tooling.js';
+import type { AgentWatchEvent, CanonicalEventType, EventPatch } from '../../events/types/events.types.js';
+import { sha256Hex } from '../../events/event-id.js';
+import { baseEvent, promptPatch, responsePatch, toolPatch, withPatch } from '../shared/event-builder.js';
+import { classifyTool, parseMcpToolName, toolCompleteType, toolStartType } from '../shared/tooling.js';
+import type { HookContext, ToolStatus } from '../types/provider.types.js';
+import {
+  CLAUDE_DISPLAY_NAME,
+  CLAUDE_EVENT_TYPE_MAP,
+  CLAUDE_PROVIDER_ID,
+  CLAUDE_TOOL_EVENTS,
+  CLAUDE_TOOL_START_EVENTS,
+  CLAUDE_UNKNOWN_EVENT
+} from './constants/claude.constants.js';
+import { claudePayloadSchema } from './schemas/claude.schema.js';
+import type { ClaudePayload } from './types/claude.types.js';
+
+export type { ClaudePayload } from './types/claude.types.js';
 
 /**
- * Claude Code hook payload (verified against code.claude.com/docs/en/hooks,
- * 2026-08). Everything optional and passthrough: payloads are untrusted and
- * new fields must never crash the agent's hook.
+ * Translate one Claude Code hook payload into canonical events.
+ *
+ * An unrecognizable payload yields no events rather than an error: the hook has
+ * to answer the agent either way, and a Claude Code release that changes its
+ * schema must cost telemetry, not the developer's session.
+ *
+ * @param rawPayload - Raw JSON from the hook's stdin.
+ * @param context - Environment and effective config.
+ * @returns The canonical events, or an empty list.
  */
-const claudePayloadSchema = z
-  .object({
-    hook_event_name: z.string().optional(),
-    session_id: z.string().optional(),
-    prompt_id: z.string().optional(),
-    transcript_path: z.string().optional(),
-    cwd: z.string().optional(),
-    permission_mode: z.string().optional(),
-    agent_id: z.string().optional(),
-    agent_type: z.string().optional(),
-    tool_name: z.string().optional(),
-    tool_use_id: z.string().optional(),
-    tool_input: z.unknown().optional(),
-    tool_response: z.unknown().optional(),
-    tool_error: z.unknown().optional(),
-    prompt: z.string().optional(),
-    source: z.string().optional(),
-    model: z.string().optional(),
-    reason: z.string().optional(),
-    last_assistant_message: z.string().nullable().optional(),
-    stop_hook_active: z.boolean().optional(),
-    denialReason: z.string().optional()
-  })
-  .passthrough();
-
-export type ClaudePayload = z.infer<typeof claudePayloadSchema>;
-
-const EVENT_TYPE_MAP: Record<string, CanonicalEventType> = {
-  SessionStart: 'session.started',
-  SessionEnd: 'session.ended',
-  UserPromptSubmit: 'prompt.submitted',
-  PermissionRequest: 'permission.requested',
-  Stop: 'generation.completed',
-  SubagentStart: 'subagent.started',
-  SubagentStop: 'subagent.completed',
-  PreCompact: 'compaction.started',
-  PostCompact: 'compaction.completed'
-};
-
 export function parseClaudeHookEvent(rawPayload: unknown, context: HookContext): AgentWatchEvent[] {
   const parsed = claudePayloadSchema.safeParse(rawPayload);
+
   if (!parsed.success) return [];
+
   const payload = parsed.data;
-  const providerEventType = payload.hook_event_name ?? 'unknown';
+  const providerEventType = payload.hook_event_name ?? CLAUDE_UNKNOWN_EVENT;
 
-  const event = baseEvent(payload, providerEventType, context);
-
-  switch (providerEventType) {
-    case 'SessionStart':
-      event.metadata = { ...event.metadata, sessionSource: payload.source };
-      if (payload.model) event.ai = { ...event.ai, model: payload.model };
-      break;
-    case 'SessionEnd':
-      event.metadata = { ...event.metadata, sessionEndReason: payload.reason };
-      break;
-    case 'UserPromptSubmit': {
-      const prompt = payload.prompt ?? '';
-      event.metadata = { ...event.metadata, prompt: contentEvidence(prompt) };
-      if (context.config.capture.prompts) {
-        event.metadata = { ...event.metadata, promptText: prompt };
-      }
-      break;
-    }
-    case 'PreToolUse':
-    case 'PostToolUse':
-    case 'PostToolUseFailure':
-    case 'PermissionRequest':
-      applyToolFields(event, payload, providerEventType, context);
-      break;
-    case 'Stop': {
-      const response = payload.last_assistant_message ?? '';
-      event.metadata = {
-        ...event.metadata,
-        stopHookActive: payload.stop_hook_active,
-        response: response ? contentEvidence(response) : undefined
-      };
-      if (context.config.capture.responses && response) {
-        event.metadata = { ...event.metadata, responseText: response };
-      }
-      break;
-    }
-    case 'SubagentStart':
-    case 'SubagentStop':
-      event.session.agentId = payload.agent_id;
-      event.metadata = { ...event.metadata, agentType: payload.agent_type };
-      break;
-    default:
-      break;
-  }
-
-  return [event];
+  return [withPatch(claudeBaseEvent(payload, providerEventType), hookPatch(payload, providerEventType, context))];
 }
 
-function baseEvent(payload: ClaudePayload, providerEventType: string, _context: HookContext): AgentWatchEvent {
-  const eventType = canonicalType(payload, providerEventType);
-  const timestamp = new Date().toISOString();
-  return {
-    schemaVersion: '1',
-    id: deriveEventId({
-      provider: 'claude',
-      providerEventType,
-      sessionId: payload.session_id,
-      toolUseId: payload.tool_use_id,
+/**
+ * The provider-independent part of the event.
+ *
+ * @param payload - Parsed hook payload.
+ * @param providerEventType - Claude's own name for this hook.
+ * @returns The base event.
+ */
+function claudeBaseEvent(payload: ClaudePayload, providerEventType: string): AgentWatchEvent {
+  return baseEvent({
+    provider: CLAUDE_PROVIDER_ID,
+    displayName: CLAUDE_DISPLAY_NAME,
+    providerEventType,
+    eventType: canonicalType(payload, providerEventType),
+    sessionId: payload.session_id,
+    // prompt_id groups every event of one prompt→response turn and matches
+    // OTel prompt.id, which is what makes cost joins possible downstream.
+    turnId: payload.prompt_id,
+    agentId: payload.agent_id,
+    toolUseId: payload.tool_use_id,
+    promptId: payload.prompt_id,
+    // Hash only: it disambiguates otherwise-identical events (two Stops in one
+    // session) without any content reaching the id.
+    payloadFingerprint: sha256Hex(JSON.stringify(payload)),
+    providerMetadata: {
       promptId: payload.prompt_id,
-      // Payload fingerprint (hash only) disambiguates otherwise-identical
-      // events (e.g. two Stop events in one session) without leaking content.
-      payloadFingerprint: sha256Hex(JSON.stringify(payload))
-    }),
-    timestamp,
-    event: { type: eventType, providerEventType },
-    agent: { provider: 'claude', name: 'Claude Code' },
-    session: {
-      id: payload.session_id,
-      providerId: payload.session_id,
-      // prompt_id groups every event of one prompt→response turn and matches
-      // OTel prompt.id, which is what makes cost joins possible downstream.
-      turnId: payload.prompt_id,
-      agentId: payload.agent_id
+      permissionMode: payload.permission_mode,
+      agentType: payload.agent_type
     },
-    metadata: {
-      provider: compact({
-        promptId: payload.prompt_id,
-        permissionMode: payload.permission_mode,
-        agentType: payload.agent_type
-      })
-    }
-  };
+    timestamp: new Date().toISOString()
+  });
 }
 
+/**
+ * What this particular hook contributes on top of the base event.
+ *
+ * @param payload - Parsed hook payload.
+ * @param providerEventType - Claude's own name for this hook.
+ * @param context - Environment and effective config.
+ * @returns The patch; empty for a hook we model but read nothing from.
+ */
+function hookPatch(payload: ClaudePayload, providerEventType: string, context: HookContext): EventPatch {
+  const capture = context.config.capture;
+
+  if (providerEventType === 'SessionStart') {
+    return {
+      metadata: { sessionSource: payload.source },
+      ai: payload.model ? { model: payload.model } : undefined
+    };
+  }
+
+  if (providerEventType === 'SessionEnd') return { metadata: { sessionEndReason: payload.reason } };
+
+  if (providerEventType === 'UserPromptSubmit') return promptPatch(payload.prompt ?? '', capture);
+
+  if (CLAUDE_TOOL_EVENTS.has(providerEventType)) return claudeToolPatch(payload, providerEventType, context);
+
+  if (providerEventType === 'Stop') {
+    const response = responsePatch(payload.last_assistant_message ?? '', capture);
+
+    return { ...response, metadata: { stopHookActive: payload.stop_hook_active, ...response.metadata } };
+  }
+
+  if (providerEventType === 'SubagentStart' || providerEventType === 'SubagentStop') {
+    return { session: { agentId: payload.agent_id }, metadata: { agentType: payload.agent_type } };
+  }
+
+  return {};
+}
+
+/**
+ * Tool fields for one of Claude's four tool hooks.
+ *
+ * @param payload - Parsed hook payload.
+ * @param providerEventType - Claude's own name for this hook.
+ * @param context - Environment and effective config.
+ * @returns The patch.
+ */
+function claudeToolPatch(payload: ClaudePayload, providerEventType: string, context: HookContext): EventPatch {
+  const kind = classifyTool(payload.tool_name);
+  const mcp = kind === 'mcp' && payload.tool_name ? parseMcpToolName(payload.tool_name) : undefined;
+
+  return toolPatch(
+    {
+      name: payload.tool_name,
+      status: toolStatus(providerEventType),
+      kind,
+      toolUseId: payload.tool_use_id,
+      input: payload.tool_input,
+      output: payload.tool_response,
+      error: providerEventType === 'PostToolUseFailure' ? payload.tool_error : undefined,
+      providerFields: mcp ? { mcpServer: mcp.server, mcpTool: mcp.tool } : undefined
+    },
+    context.config.capture
+  );
+}
+
+/**
+ * Whether a tool hook reports a start, a failure, or a completion.
+ *
+ * @param providerEventType - Claude's own name for this hook.
+ * @returns The tool status.
+ */
+function toolStatus(providerEventType: string): ToolStatus {
+  if (CLAUDE_TOOL_START_EVENTS.has(providerEventType)) return 'started';
+
+  if (providerEventType === 'PostToolUseFailure') return 'failed';
+
+  return 'completed';
+}
+
+/**
+ * Canonical type for a hook, falling back to the tool classification.
+ *
+ * @param payload - Parsed hook payload.
+ * @param providerEventType - Claude's own name for this hook.
+ * @returns The canonical event type.
+ */
 function canonicalType(payload: ClaudePayload, providerEventType: string): CanonicalEventType {
-  const direct = EVENT_TYPE_MAP[providerEventType];
+  const direct = CLAUDE_EVENT_TYPE_MAP[providerEventType];
+
   if (direct) return direct;
+
   const kind = classifyTool(payload.tool_name);
-  switch (providerEventType) {
-    case 'PreToolUse':
-      return toolStartType(kind);
-    case 'PostToolUse':
-      return toolCompleteType(kind);
-    case 'PostToolUseFailure':
-      return 'tool.failed';
-    default:
-      return 'agent.other';
-  }
-}
 
-function applyToolFields(event: AgentWatchEvent, payload: ClaudePayload, providerEventType: string, context: HookContext): void {
-  const kind = classifyTool(payload.tool_name);
-  event.tool = {
-    name: payload.tool_name,
-    status: providerEventType === 'PreToolUse' || providerEventType === 'PermissionRequest' ? 'started' : providerEventType === 'PostToolUseFailure' ? 'failed' : 'completed'
-  };
-  const provider = (event.metadata?.['provider'] ?? {}) as Record<string, unknown>;
-  provider['toolUseId'] = payload.tool_use_id;
+  if (providerEventType === 'PreToolUse') return toolStartType(kind);
 
-  if (kind === 'mcp' && payload.tool_name) {
-    const { server, tool } = parseMcpToolName(payload.tool_name);
-    provider['mcpServer'] = server;
-    provider['mcpTool'] = tool;
-  }
-  if (kind === 'shell' && context.config.capture.toolInput) {
-    const command = (payload.tool_input as Record<string, unknown> | undefined)?.['command'];
-    if (typeof command === 'string') event.metadata = { ...event.metadata, command };
-  }
-  const filePath = extractFilePath(payload.tool_input);
-  // capture.files gates every per-file signal, not just Git changedFiles.
-  if (filePath && (kind === 'file-read' || kind === 'file-edit') && context.config.capture.files) {
-    // Absolute for now; the enrichment stage relativizes against the repo root.
-    event.metadata = { ...event.metadata, filePath };
-  }
-  if (context.config.capture.toolInput && payload.tool_input !== undefined) {
-    event.metadata = { ...event.metadata, toolInput: payload.tool_input };
-  }
-  if (context.config.capture.toolOutput && payload.tool_response !== undefined) {
-    event.metadata = { ...event.metadata, toolOutput: payload.tool_response };
-  }
-  if (providerEventType === 'PostToolUseFailure' && payload.tool_error !== undefined) {
-    event.metadata = { ...event.metadata, error: contentEvidence(JSON.stringify(payload.tool_error)) };
-  }
-  event.metadata = { ...event.metadata, provider: compact(provider) };
-}
+  if (providerEventType === 'PostToolUse') return toolCompleteType(kind);
 
-function compact(record: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
+  if (providerEventType === 'PostToolUseFailure') return 'tool.failed';
+
+  return 'agent.other';
 }

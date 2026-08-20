@@ -6,12 +6,14 @@ describe('event ids', () => {
   it('is deterministic for identical inputs', () => {
     const a = deriveEventId({ provider: 'claude', providerEventType: 'PostToolUse', sessionId: 's1', toolUseId: 't1' });
     const b = deriveEventId({ provider: 'claude', providerEventType: 'PostToolUse', sessionId: 's1', toolUseId: 't1' });
+
     expect(a).toBe(b);
     expect(a).toMatch(/^evt_[0-9a-f]{40}$/);
   });
 
   it('differs when any identity component differs', () => {
     const base = { provider: 'claude', providerEventType: 'PostToolUse', sessionId: 's1', toolUseId: 't1' };
+
     expect(deriveEventId(base)).not.toBe(deriveEventId({ ...base, toolUseId: 't2' }));
     expect(deriveEventId(base)).not.toBe(deriveEventId({ ...base, providerEventType: 'PreToolUse' }));
     expect(deriveEventId(base)).not.toBe(deriveEventId({ ...base, provider: 'codex' }));
@@ -20,6 +22,7 @@ describe('event ids', () => {
   it('does not embed raw content', () => {
     const secret = 'super-secret-prompt';
     const id = deriveEventId({ provider: 'claude', providerEventType: 'UserPromptSubmit', payloadFingerprint: sha256Hex(secret) });
+
     expect(id).not.toContain(secret);
   });
 
@@ -37,6 +40,7 @@ describe('feature candidates', () => {
 
   it('keeps only uppercase keys, deduplicated', () => {
     const candidates = featureCandidatesFromBranch('fix/abc-12-and-ABC-12-plus-XY-9');
+
     expect(candidates.map((candidate) => candidate.value)).toEqual(['ABC-12', 'XY-9']);
   });
 

@@ -1,158 +1,118 @@
+import { asRecord } from '../../core/object.js';
+import type { UnknownRecord } from '../../core/types/core.types.js';
+import { backupFile } from '../../storage/atomic-file.js';
 import { readJsonFile } from '../../storage/json-file.js';
-import { backupFile, writeFileAtomic } from '../../storage/atomic-file.js';
-import { isAgentWatchHookCommand, type SetupContext, type SetupOutcome } from '../provider.js';
+import { registerOurHandlers, stripOurHandlers, sweepUnregisteredEvents, withHooksBlock, writeJsonValidated } from '../shared/hook-config.js';
+import { withHookInstall, withoutAgent } from '../shared/install-record.js';
+import type { SetupContext, SetupOutcome } from '../types/provider.types.js';
 import { geminiSettingsPath } from './gemini.detect.js';
+import {
+  GEMINI_HOOK_EVENTS,
+  GEMINI_HOOK_TIMEOUT_MILLISECONDS,
+  GEMINI_MATCHED_EVENTS,
+  GEMINI_PROVIDER_ID
+} from './constants/gemini.constants.js';
 
-export const GEMINI_HOOK_EVENTS = [
-  'SessionStart',
-  'SessionEnd',
-  'BeforeAgent',
-  'AfterAgent',
-  'BeforeTool',
-  'AfterTool',
-  'Notification',
-  'PreCompress'
-] as const;
+export { GEMINI_HOOK_EVENTS } from './constants/gemini.constants.js';
 
-const MATCHED_EVENTS = new Set(['BeforeAgent', 'AfterAgent', 'BeforeTool', 'AfterTool', 'Notification', 'PreCompress']);
-// Gemini CLI interprets this value as milliseconds (its default is 60,000).
-// `30` made AgentWatch hooks time out almost immediately.
-const HOOK_TIMEOUT_MILLISECONDS = 30_000;
-
-interface HookEntry {
-  matcher?: string;
-  hooks: { type: string; command: string; timeout?: number }[];
-  [key: string]: unknown;
-}
-
-function isAgentWatchHandler(hook: unknown): boolean {
-  return typeof hook === 'object' && hook !== null && typeof (hook as { command?: unknown }).command === 'string' && isAgentWatchHookCommand((hook as { command: string }).command);
-}
-
-function withoutAgentWatchHandlers(entries: unknown[]): unknown[] {
-  const out: unknown[] = [];
-  for (const entry of entries) {
-    if (typeof entry !== 'object' || entry === null || !Array.isArray((entry as HookEntry).hooks)) {
-      out.push(entry);
-      continue;
-    }
-    const kept = (entry as HookEntry).hooks.filter((hook) => !isAgentWatchHandler(hook));
-    if (kept.length === (entry as HookEntry).hooks.length) out.push(entry);
-    else if (kept.length > 0) out.push({ ...(entry as HookEntry), hooks: kept });
-  }
-  return out;
-}
-
+/**
+ * Register AgentWatch's hooks in Gemini CLI's `settings.json`.
+ *
+ * @param context - Environment, paths, config and the hook command to write.
+ * @returns Whether the file changed, what to tell the user, and the next
+ *   install state.
+ */
 export async function installGeminiHooks(context: SetupContext): Promise<SetupOutcome> {
   const settingsPath = geminiSettingsPath(context.env);
   const read = await readJsonFile(settingsPath);
+
   if (read.state === 'invalid') {
     return { ok: false, changed: false, messages: [`refusing to modify unparseable ${settingsPath} (${read.error})`] };
   }
-  const settings: Record<string, unknown> = read.state === 'ok' && isRecord(read.value) ? read.value : {};
-  if (read.state === 'ok' && !isRecord(read.value)) {
+
+  if (read.state === 'ok' && !asRecord(read.value)) {
     return { ok: false, changed: false, messages: [`refusing to modify ${settingsPath}: top level is not an object`] };
   }
 
-  const before = JSON.stringify(settings);
-  const hooks: Record<string, unknown> = isRecord(settings['hooks']) ? (settings['hooks'] as Record<string, unknown>) : {};
-  settings['hooks'] = hooks;
+  const settings: UnknownRecord = (read.state === 'ok' ? asRecord(read.value) : undefined) ?? {};
+  const hooks = asRecord(settings['hooks']) ?? {};
+  const registered = registerOurHandlers(hooks, GEMINI_HOOK_EVENTS, hookEntryFor(context.hookCommand));
+  const nextSettings: UnknownRecord = { ...settings, hooks: sweepUnregisteredEvents(registered, GEMINI_HOOK_EVENTS) };
+  const changed = JSON.stringify(nextSettings) !== JSON.stringify(settings);
 
-  for (const eventName of GEMINI_HOOK_EVENTS) {
-    const existing: unknown[] = Array.isArray(hooks[eventName]) ? (hooks[eventName] as unknown[]) : [];
-    const entries = withoutAgentWatchHandlers(existing);
-    entries.push({
-      ...(MATCHED_EVENTS.has(eventName) ? { matcher: '*' } : {}),
-      hooks: [{ type: 'command', command: context.hookCommand, timeout: HOOK_TIMEOUT_MILLISECONDS }]
-    } satisfies HookEntry);
-    hooks[eventName] = entries;
-  }
-
-  for (const [eventName, value] of Object.entries(hooks)) {
-    if ((GEMINI_HOOK_EVENTS as readonly string[]).includes(eventName) || !Array.isArray(value)) continue;
-    const filtered = withoutAgentWatchHandlers(value);
-    if (filtered.length !== value.length || JSON.stringify(filtered) !== JSON.stringify(value)) {
-      if (filtered.length === 0) delete hooks[eventName];
-      else hooks[eventName] = filtered;
-    }
-  }
-
-  const changed = JSON.stringify(settings) !== before;
   if (changed) {
     await backupFile(settingsPath, context.paths.backupsDir, context.env.now());
-    await writeSettingsValidated(settingsPath, settings);
+    await writeJsonValidated(settingsPath, nextSettings);
   }
-
-  context.installState.agents['gemini'] = {
-    ...context.installState.agents['gemini'],
-    hooksInstalledAt: context.env.now().toISOString(),
-    hookConfigPath: settingsPath,
-    hookEvents: [...GEMINI_HOOK_EVENTS],
-    hookCommand: context.hookCommand,
-    otelOwnedKeys: context.installState.agents['gemini']?.otelOwnedKeys ?? [],
-    notes: context.installState.agents['gemini']?.notes ?? []
-  };
 
   return {
     ok: true,
     changed,
-    messages: [
-      `hooks registered in ${settingsPath}`
-    ]
+    messages: [`hooks registered in ${settingsPath}`],
+    installState: withHookInstall(context.installState, GEMINI_PROVIDER_ID, {
+      hookConfigPath: settingsPath,
+      hookEvents: GEMINI_HOOK_EVENTS,
+      hookCommand: context.hookCommand,
+      installedAt: context.env.now()
+    })
   };
 }
 
+/**
+ * Remove AgentWatch's hooks from Gemini CLI's `settings.json`.
+ *
+ * The agent is forgotten entirely rather than just having its hook fields
+ * cleared: Gemini's hooks and its telemetry live in the same file, so once that
+ * file has nothing of ours left there is nothing to describe.
+ *
+ * @param context - Environment, paths and current install state.
+ * @returns Whether the file changed, what to tell the user, and the next
+ *   install state.
+ */
 export async function uninstallGeminiHooks(context: SetupContext): Promise<SetupOutcome> {
   const settingsPath = geminiSettingsPath(context.env);
   const read = await readJsonFile(settingsPath);
+  const forgotten = withoutAgent(context.installState, GEMINI_PROVIDER_ID);
+
   if (read.state === 'missing') {
-    delete context.installState.agents['gemini'];
-    return { ok: true, changed: false, messages: ['no Gemini settings file'] };
+    return { ok: true, changed: false, messages: ['no Gemini settings file'], installState: forgotten };
   }
+
   if (read.state === 'invalid') {
     return { ok: false, changed: false, messages: [`refusing to modify unparseable ${settingsPath} (${read.error})`] };
   }
-  if (!isRecord(read.value)) {
+
+  const settings = asRecord(read.value);
+
+  if (!settings) {
     return { ok: false, changed: false, messages: [`refusing to modify ${settingsPath}: top level is not an object`] };
   }
-  const settings = read.value as Record<string, unknown>;
-  const hooks = isRecord(settings['hooks']) ? (settings['hooks'] as Record<string, unknown>) : undefined;
+
+  const hooks = asRecord(settings['hooks']);
+
   if (!hooks) {
-    delete context.installState.agents['gemini'];
-    return { ok: true, changed: false, messages: ['no hooks block in settings.json'] };
+    return { ok: true, changed: false, messages: ['no hooks block in settings.json'], installState: forgotten };
   }
 
-  let changed = false;
-  for (const [eventName, entries] of Object.entries(hooks)) {
-    if (!Array.isArray(entries)) continue;
-    const filtered = withoutAgentWatchHandlers(entries);
-    if (JSON.stringify(filtered) !== JSON.stringify(entries)) {
-      changed = true;
-      if (filtered.length === 0) delete hooks[eventName];
-      else hooks[eventName] = filtered;
-    }
-  }
-  if (Object.keys(hooks).length === 0) delete settings['hooks'];
+  const stripped = stripOurHandlers(hooks);
 
-  if (changed) {
+  if (stripped.changed) {
     await backupFile(settingsPath, context.paths.backupsDir, context.env.now());
-    await writeSettingsValidated(settingsPath, settings);
+    await writeJsonValidated(settingsPath, withHooksBlock(settings, stripped.hooks));
   }
-  delete context.installState.agents['gemini'];
 
-  return {
-    ok: true,
-    changed,
-    messages: ['AgentWatch hooks removed']
-  };
+  return { ok: true, changed: stripped.changed, messages: ['AgentWatch hooks removed'], installState: forgotten };
 }
 
-async function writeSettingsValidated(targetPath: string, settings: Record<string, unknown>): Promise<void> {
-  const serialized = `${JSON.stringify(settings, null, 2)}\n`;
-  JSON.parse(serialized);
-  await writeFileAtomic(targetPath, serialized);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+/**
+ * Our entry for one event: a matcher group holding one handler.
+ *
+ * @param hookCommand - Command line agents will invoke.
+ * @returns A factory producing the entry for a given event name.
+ */
+function hookEntryFor(hookCommand: string): (eventName: string) => unknown {
+  return (eventName: string) => ({
+    ...(GEMINI_MATCHED_EVENTS.has(eventName) ? { matcher: '*' } : {}),
+    hooks: [{ type: 'command', command: hookCommand, timeout: GEMINI_HOOK_TIMEOUT_MILLISECONDS }]
+  });
 }

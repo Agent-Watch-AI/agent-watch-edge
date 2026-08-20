@@ -1,208 +1,181 @@
-import { z } from 'zod';
-import type { AgentWatchEvent, CanonicalEventType } from '../../events/canonical-event.js';
-import { deriveEventId, sha256Hex } from '../../events/event-id.js';
-import type { HookContext } from '../provider.js';
-import { classifyTool, contentEvidence, extractFilePath, parseMcpToolName, toolCompleteType, toolStartType } from '../shared/tooling.js';
+import type { AgentWatchEvent, CanonicalEventType, EventPatch } from '../../events/types/events.types.js';
+import { sha256Hex } from '../../events/event-id.js';
+import { baseEvent, promptPatch, responsePatch, toolPatch, withPatch } from '../shared/event-builder.js';
+import { classifyTool, parseMcpToolName, toolCompleteType, toolStartType } from '../shared/tooling.js';
+import type { HookContext, ToolStatus } from '../types/provider.types.js';
+import {
+  GEMINI_DISPLAY_NAME,
+  GEMINI_EVENT_TYPE_MAP,
+  GEMINI_PROMPT_EVENTS,
+  GEMINI_PROVIDER_ID,
+  GEMINI_STOP_EVENTS,
+  GEMINI_TOOL_COMPLETE_EVENTS,
+  GEMINI_TOOL_EVENTS,
+  GEMINI_TOOL_START_EVENTS,
+  GEMINI_UNKNOWN_EVENT
+} from './constants/gemini.constants.js';
+import { geminiPayloadSchema } from './schemas/gemini.schema.js';
+import type { GeminiPayload } from './types/gemini.types.js';
 
-const geminiPayloadSchema = z
-  .object({
-    hook_event_name: z.string().optional(),
-    session_id: z.string().optional(),
-    thread_id: z.string().optional(),
-    turn_id: z.string().optional(),
-    prompt_id: z.string().optional(),
-    transcript_path: z.string().optional(),
-    cwd: z.string().optional(),
-    permission_mode: z.string().optional(),
-    agent_id: z.string().optional(),
-    agent_type: z.string().optional(),
-    tool_name: z.string().optional(),
-    tool_use_id: z.string().optional(),
-    tool_input: z.unknown().optional(),
-    tool_response: z.unknown().optional(),
-    tool_error: z.unknown().optional(),
-    prompt: z.string().optional(),
-    prompt_response: z.string().optional(),
-    source: z.string().optional(),
-    model: z.string().optional(),
-    reason: z.string().optional(),
-    last_assistant_message: z.string().nullable().optional(),
-    stop_hook_active: z.boolean().optional(),
-    denialReason: z.string().optional()
-  })
-  .passthrough();
+export type { GeminiPayload } from './types/gemini.types.js';
 
-export type GeminiPayload = z.infer<typeof geminiPayloadSchema>;
-
-const EVENT_TYPE_MAP: Record<string, CanonicalEventType> = {
-  SessionStart: 'session.started',
-  SessionEnd: 'session.ended',
-  // Current Gemini CLI hook names.
-  BeforeAgent: 'prompt.submitted',
-  AfterAgent: 'generation.completed',
-  PreCompress: 'compaction.started',
-  // Kept for payload compatibility with old installations. New hook
-  // registrations use the names above.
-  UserPromptSubmit: 'prompt.submitted',
-  PermissionRequest: 'permission.requested',
-  Stop: 'generation.completed',
-  SubagentStart: 'subagent.started',
-  SubagentStop: 'subagent.completed',
-  PreCompact: 'compaction.started',
-  PostCompact: 'compaction.completed'
-};
-
+/**
+ * Translate one Gemini CLI hook payload into canonical events.
+ *
+ * Both the current hook names and the ones earlier installations registered are
+ * accepted: a user who has not re-run setup still sends the old shape, and
+ * dropping it would silently stop their telemetry.
+ *
+ * @param rawPayload - Raw JSON from the hook's stdin.
+ * @param context - Environment and effective config.
+ * @returns The canonical events, or an empty list for an unusable payload.
+ */
 export function parseGeminiHookEvent(rawPayload: unknown, context: HookContext): AgentWatchEvent[] {
   const parsed = geminiPayloadSchema.safeParse(rawPayload);
+
   if (!parsed.success) return [];
+
   const payload = parsed.data;
-  const providerEventType = payload.hook_event_name ?? 'unknown';
+  const providerEventType = payload.hook_event_name ?? GEMINI_UNKNOWN_EVENT;
 
-  const event = baseEvent(payload, providerEventType, context);
+  return [withPatch(geminiBaseEvent(payload, providerEventType), hookPatch(payload, providerEventType, context))];
+}
 
-  switch (providerEventType) {
-    case 'SessionStart':
-      event.metadata = { ...event.metadata, sessionSource: payload.source };
-      if (payload.model) event.ai = { ...event.ai, model: payload.model };
-      break;
-    case 'SessionEnd':
-      event.metadata = { ...event.metadata, sessionEndReason: payload.reason };
-      break;
-    case 'BeforeAgent':
-    case 'UserPromptSubmit': {
-      const prompt = payload.prompt ?? '';
-      event.metadata = { ...event.metadata, prompt: contentEvidence(prompt) };
-      if (context.config.capture.prompts) {
-        event.metadata = { ...event.metadata, promptText: prompt };
-      }
-      break;
-    }
-    case 'BeforeTool':
-    case 'AfterTool':
-    case 'PreToolUse':
-    case 'PostToolUse':
-    case 'PostToolUseFailure':
-    case 'PermissionRequest':
-      applyToolFields(event, payload, providerEventType, context);
-      break;
-    case 'AfterAgent':
-    case 'Stop': {
-      const response = payload.prompt_response ?? payload.last_assistant_message ?? '';
-      event.metadata = {
-        ...event.metadata,
-        stopHookActive: payload.stop_hook_active,
-        response: response ? contentEvidence(response) : undefined
-      };
-      if (context.config.capture.responses && response) {
-        event.metadata = { ...event.metadata, responseText: response };
-      }
-      break;
-    }
-    case 'SubagentStart':
-    case 'SubagentStop':
-      event.session.agentId = payload.agent_id;
-      event.metadata = { ...event.metadata, agentType: payload.agent_type };
-      break;
-    default:
-      break;
+/**
+ * The provider-independent part of the event.
+ *
+ * @param payload - Parsed hook payload.
+ * @param providerEventType - Gemini's own name for this hook.
+ * @returns The base event.
+ */
+function geminiBaseEvent(payload: GeminiPayload, providerEventType: string): AgentWatchEvent {
+  const sessionId = payload.session_id ?? payload.thread_id;
+
+  return baseEvent({
+    provider: GEMINI_PROVIDER_ID,
+    displayName: GEMINI_DISPLAY_NAME,
+    providerEventType,
+    eventType: canonicalType(payload, providerEventType),
+    sessionId,
+    turnId: payload.turn_id ?? payload.prompt_id,
+    agentId: payload.agent_id,
+    toolUseId: payload.tool_use_id,
+    // A narrow fingerprint on purpose: hashing the whole payload would fold the
+    // prompt and response text into the id, and these fields are enough to keep
+    // sibling events of one turn distinct.
+    payloadFingerprint: sha256Hex(JSON.stringify([payload.cwd, payload.model, payload.source, payload.tool_name, payload.tool_use_id])),
+    ai: payload.model ? { model: payload.model, billingMode: 'unknown' } : undefined,
+    providerMetadata: {
+      permissionMode: payload.permission_mode,
+      agentType: payload.agent_type,
+      toolUseId: payload.tool_use_id,
+      transcriptPath: payload.transcript_path
+    },
+    timestamp: new Date().toISOString()
+  });
+}
+
+/**
+ * What this particular hook contributes on top of the base event.
+ *
+ * @param payload - Parsed hook payload.
+ * @param providerEventType - Gemini's own name for this hook.
+ * @param context - Environment and effective config.
+ * @returns The patch; empty for a hook we model but read nothing from.
+ */
+function hookPatch(payload: GeminiPayload, providerEventType: string, context: HookContext): EventPatch {
+  const capture = context.config.capture;
+
+  if (providerEventType === 'SessionStart') {
+    return {
+      metadata: { sessionSource: payload.source },
+      ai: payload.model ? { model: payload.model } : undefined
+    };
   }
 
-  return [event];
+  if (providerEventType === 'SessionEnd') return { metadata: { sessionEndReason: payload.reason } };
+
+  if (GEMINI_PROMPT_EVENTS.has(providerEventType)) return promptPatch(payload.prompt ?? '', capture);
+
+  if (GEMINI_TOOL_EVENTS.has(providerEventType)) return geminiToolPatch(payload, providerEventType, context);
+
+  if (GEMINI_STOP_EVENTS.has(providerEventType)) {
+    // Gemini reports the answer as `prompt_response`; the other name is what
+    // installations registered before the rename still send.
+    const response = responsePatch(payload.prompt_response ?? payload.last_assistant_message ?? '', capture);
+
+    return { ...response, metadata: { stopHookActive: payload.stop_hook_active, ...response.metadata } };
+  }
+
+  if (providerEventType === 'SubagentStart' || providerEventType === 'SubagentStop') {
+    return { session: { agentId: payload.agent_id }, metadata: { agentType: payload.agent_type } };
+  }
+
+  return {};
 }
 
-function baseEvent(payload: GeminiPayload, providerEventType: string, _context: HookContext): AgentWatchEvent {
-  const eventType = canonicalType(payload, providerEventType);
-  const sessionId = payload.session_id ?? payload.thread_id;
-  const turnId = payload.turn_id ?? payload.prompt_id;
-  const rawFingerprint = JSON.stringify([payload.cwd, payload.model, payload.source, payload.tool_name, payload.tool_use_id]);
+/**
+ * Tool fields for one of Gemini's tool hooks.
+ *
+ * @param payload - Parsed hook payload.
+ * @param providerEventType - Gemini's own name for this hook.
+ * @param context - Environment and effective config.
+ * @returns The patch.
+ */
+function geminiToolPatch(payload: GeminiPayload, providerEventType: string, context: HookContext): EventPatch {
+  const kind = classifyTool(payload.tool_name);
+  const failed = providerEventType === 'PostToolUseFailure';
+  const mcp = kind === 'mcp' && payload.tool_name ? parseMcpToolName(payload.tool_name) : undefined;
 
-  return {
-    schemaVersion: '1',
-    id: deriveEventId({
-      provider: 'gemini',
-      providerEventType,
-      sessionId,
-      turnId,
+  return toolPatch(
+    {
+      name: payload.tool_name,
+      status: toolStatus(providerEventType),
+      kind,
       toolUseId: payload.tool_use_id,
-      payloadFingerprint: sha256Hex(rawFingerprint)
-    }),
-    timestamp: new Date().toISOString(),
-    event: { type: eventType, providerEventType },
-    agent: { provider: 'gemini', name: 'Gemini CLI' },
-    session: {
-      id: sessionId,
-      providerId: sessionId,
-      turnId,
-      agentId: payload.agent_id
+      input: payload.tool_input,
+      output: payload.tool_response,
+      error: failed ? payload.tool_error : undefined,
+      providerFields: {
+        ...(mcp ? { mcpServer: mcp.server, mcpTool: mcp.tool } : {}),
+        denialReason: payload.denialReason
+      }
     },
-    ai: payload.model ? { model: payload.model, billingMode: 'unknown' } : undefined,
-    metadata: {
-      provider: compact({
-        permissionMode: payload.permission_mode,
-        agentType: payload.agent_type,
-        toolUseId: payload.tool_use_id,
-        transcriptPath: payload.transcript_path
-      })
-    }
-  };
+    context.config.capture
+  );
 }
 
+/**
+ * Whether a tool hook reports a start, a failure, or a completion.
+ *
+ * @param providerEventType - Gemini's own name for this hook.
+ * @returns The tool status.
+ */
+function toolStatus(providerEventType: string): ToolStatus {
+  if (GEMINI_TOOL_START_EVENTS.has(providerEventType)) return 'started';
+
+  if (providerEventType === 'PostToolUseFailure') return 'failed';
+
+  return 'completed';
+}
+
+/**
+ * Canonical type for a hook, falling back to the tool classification.
+ *
+ * @param payload - Parsed hook payload.
+ * @param providerEventType - Gemini's own name for this hook.
+ * @returns The canonical event type.
+ */
 function canonicalType(payload: GeminiPayload, providerEventType: string): CanonicalEventType {
-  const direct = EVENT_TYPE_MAP[providerEventType];
+  const direct = GEMINI_EVENT_TYPE_MAP[providerEventType];
+
   if (direct) return direct;
 
-  const toolClassification = classifyTool(payload.tool_name);
-  if (providerEventType === 'BeforeTool' || providerEventType === 'PreToolUse') {
-    return toolStartType(toolClassification);
-  }
-  if (providerEventType === 'AfterTool' || providerEventType === 'PostToolUse' || providerEventType === 'PostToolUseFailure') {
-    return toolCompleteType(toolClassification);
-  }
-  return 'agent.other';
-}
-
-function applyToolFields(event: AgentWatchEvent, payload: GeminiPayload, providerEventType: string, context: HookContext): void {
   const kind = classifyTool(payload.tool_name);
-  const isFailure = providerEventType === 'PostToolUseFailure';
-  const isStart = providerEventType === 'BeforeTool' || providerEventType === 'PreToolUse' || providerEventType === 'PermissionRequest';
 
-  event.tool = {
-    name: payload.tool_name,
-    status: isStart ? 'started' : isFailure ? 'failed' : 'completed'
-  };
+  if (GEMINI_TOOL_START_EVENTS.has(providerEventType)) return toolStartType(kind);
 
-  const provider = (event.metadata?.['provider'] ?? {}) as Record<string, unknown>;
-  provider['toolUseId'] = payload.tool_use_id;
+  if (GEMINI_TOOL_COMPLETE_EVENTS.has(providerEventType)) return toolCompleteType(kind);
 
-  if (kind === 'mcp' && payload.tool_name) {
-    const { server, tool } = parseMcpToolName(payload.tool_name);
-    provider['mcpServer'] = server;
-    provider['mcpTool'] = tool;
-  }
-  if (kind === 'shell' && context.config.capture.toolInput) {
-    const command = (payload.tool_input as Record<string, unknown> | undefined)?.['command'];
-    if (typeof command === 'string') event.metadata = { ...event.metadata, command };
-  }
-  const filePath = extractFilePath(payload.tool_input);
-  if (filePath && (kind === 'file-read' || kind === 'file-edit') && context.config.capture.files) {
-    event.metadata = { ...event.metadata, filePath };
-  }
-  if (context.config.capture.toolInput && payload.tool_input !== undefined) {
-    event.metadata = { ...event.metadata, toolInput: payload.tool_input };
-  }
-  if (context.config.capture.toolOutput && payload.tool_response !== undefined) {
-    event.metadata = { ...event.metadata, toolOutput: payload.tool_response };
-  }
-  if (isFailure && payload.tool_error !== undefined) {
-    event.metadata = { ...event.metadata, error: contentEvidence(JSON.stringify(payload.tool_error)) };
-  }
-  if (payload.denialReason) {
-    provider['denialReason'] = payload.denialReason;
-  }
-
-  event.metadata = { ...event.metadata, provider: compact(provider) };
-}
-
-function compact(record: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
+  return 'agent.other';
 }

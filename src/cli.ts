@@ -4,7 +4,8 @@ import { realEnv } from './core/env.js';
 import { setVerbose } from './core/logger.js';
 // Parsing lives in its own module so tests can import it without executing
 // main(); command modules stay lazily loaded off the hook critical path.
-import { parseArgs } from './cli/args.js';
+import { boolFlag, parseArgs, stringFlag } from './cli/args.js';
+import type { ParsedArgs } from './cli/types/cli.types.js';
 
 const HELP = `agentwatch — telemetry bridge for AI coding agents
 
@@ -42,68 +43,95 @@ Configuration:
                             are global-only and ignored there
 `;
 
+/**
+ * Dispatch one CLI invocation.
+ *
+ * Command modules are imported lazily: the `hook` subcommand runs on the coding
+ * agent's critical path, and loading setup, doctor and status on the way to it
+ * would cost every hook their startup.
+ *
+ * @returns The process exit code.
+ */
 async function main(): Promise<number> {
   const parsed = parseArgs(process.argv.slice(2));
-  if (parsed.flags['verbose']) setVerbose(true);
+
+  if (boolFlag(parsed, 'verbose')) setVerbose(true);
+
   const env = realEnv();
 
   switch (parsed.command) {
     case 'hook': {
       const { runHook } = await import('./cli/hook.js');
-      const agent = typeof parsed.flags['agent'] === 'string' ? (parsed.flags['agent'] as string) : '';
-      return runHook(agent, { env, dryRun: parsed.flags['dry-run'] === true });
+
+      return runHook(stringFlag(parsed, 'agent') ?? '', { env, dryRun: boolFlag(parsed, 'dry-run') });
     }
     case 'setup': {
       const { runSetup } = await import('./cli/setup.js');
+
       return runSetup({
         env,
         setupUrl: parsed.positional[0],
-        endpoint: typeof parsed.flags['endpoint'] === 'string' ? (parsed.flags['endpoint'] as string) : undefined,
-        token: typeof parsed.flags['token'] === 'string' ? (parsed.flags['token'] as string) : undefined,
-        developerEmail: typeof parsed.flags['developer-email'] === 'string' ? (parsed.flags['developer-email'] as string) : undefined,
-        otel: typeof parsed.flags['otel'] === 'string' ? (parsed.flags['otel'] as string) : undefined,
-        yes: parsed.flags['yes'] === true || parsed.flags['non-interactive'] === true
+        endpoint: stringFlag(parsed, 'endpoint'),
+        token: stringFlag(parsed, 'token'),
+        developerEmail: stringFlag(parsed, 'developer-email'),
+        otel: stringFlag(parsed, 'otel'),
+        yes: boolFlag(parsed, 'yes') || boolFlag(parsed, 'non-interactive')
       });
     }
     case 'status': {
       const { runStatus } = await import('./cli/status.js');
+
       return runStatus(env);
     }
     case 'doctor': {
       const { runDoctor } = await import('./cli/doctor.js');
-      return runDoctor(env, { json: parsed.flags['json'] === true });
+
+      return runDoctor(env, { json: boolFlag(parsed, 'json') });
     }
     case 'uninstall': {
       const { runUninstall } = await import('./cli/uninstall.js');
-      return runUninstall({
-        env,
-        agent: typeof parsed.flags['agent'] === 'string' ? (parsed.flags['agent'] as string) : undefined,
-        purge: parsed.flags['purge'] === true
-      });
+
+      return runUninstall({ env, agent: stringFlag(parsed, 'agent'), purge: boolFlag(parsed, 'purge') });
     }
     case 'agents': {
       const { runAgents } = await import('./cli/misc.js');
+
       return runAgents(env);
     }
     case 'config': {
       const { runConfig } = await import('./cli/misc.js');
+
       return runConfig(env);
     }
     case 'otel-headers': {
       const { runOtelHeaders } = await import('./cli/misc.js');
+
       return runOtelHeaders(env);
     }
-    default: {
-      if (parsed.flags['version']) {
-        const { createRequire } = await import('node:module');
-        const pkg = createRequire(import.meta.url)('../package.json') as { version: string };
-        process.stdout.write(pkg.version + '\n');
-        return 0;
-      }
-      process.stdout.write(HELP);
-      return parsed.command === undefined || parsed.command === 'help' ? 0 : 1;
-    }
+    default:
+      return runFallback(parsed);
   }
+}
+
+/**
+ * Handle `--version`, `help`, and an unrecognized command.
+ *
+ * @param parsed - Parsed arguments.
+ * @returns The process exit code.
+ */
+async function runFallback(parsed: ParsedArgs): Promise<number> {
+  if (boolFlag(parsed, 'version')) {
+    const { createRequire } = await import('node:module');
+    const pkg = createRequire(import.meta.url)('../package.json') as { version: string };
+
+    process.stdout.write(pkg.version + '\n');
+
+    return 0;
+  }
+
+  process.stdout.write(HELP);
+
+  return parsed.command === undefined || parsed.command === 'help' ? 0 : 1;
 }
 
 main().then(

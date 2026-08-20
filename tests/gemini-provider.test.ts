@@ -122,9 +122,53 @@ describe('Gemini provider', () => {
       expect(outcome.changed).toBe(true);
 
       const settings = await readJson(geminiSettingsPath(world.env));
-      expect(settings.env.GEMINI_ENABLE_TELEMETRY).toBe('1');
+      // Gemini reads GEMINI_TELEMETRY_ENABLED; GEMINI_ENABLE_TELEMETRY (the
+      // name this used to write) appears nowhere in the CLI, so telemetry
+      // never initialized at all.
+      expect(settings.env.GEMINI_TELEMETRY_ENABLED).toBe('true');
+      expect(settings.env.GEMINI_ENABLE_TELEMETRY).toBeUndefined();
+      expect(settings.env.GEMINI_TELEMETRY_TARGET).toBe('local');
+      // grpc|http only: 'http/json' makes Gemini throw FatalConfigError.
+      expect(settings.env.GEMINI_TELEMETRY_OTLP_PROTOCOL).toBe('http');
       expect(settings.env.OTEL_LOGS_EXPORTER).toBe('otlp');
       expect(settings.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://backend.example.com/v1/otlp');
+      expect(settings.env.GEMINI_TELEMETRY_OTLP_ENDPOINT).toBe('https://backend.example.com/v1/otlp');
+    });
+
+    it('sends the ingest token in OTEL_EXPORTER_OTLP_HEADERS, not via a helper', async () => {
+      const configurator = new GeminiOtelConfigurator();
+      const context = setupContext();
+      context.config.token = 'token-123';
+      await configurator.configure(context);
+
+      const settings = await readJson(geminiSettingsPath(world.env));
+      // Gemini CLI has no otelHeadersHelper (that is a Claude Code setting), so
+      // the exporter previously posted with no Authorization header and the
+      // fail-closed gateway answered 401 to every batch.
+      expect(settings.env.OTEL_EXPORTER_OTLP_HEADERS).toBe('Authorization=Bearer token-123');
+      expect(settings.otelHeadersHelper).toBeUndefined();
+    });
+
+    it('removes an otelHeadersHelper entry left by an older version', async () => {
+      await writeJson(geminiSettingsPath(world.env), { otelHeadersHelper: '/usr/local/bin/agentwatch otel-headers' });
+      const configurator = new GeminiOtelConfigurator();
+      const context = setupContext();
+      context.config.token = 'token-123';
+      await configurator.configure(context);
+
+      const settings = await readJson(geminiSettingsPath(world.env));
+      expect(settings.otelHeadersHelper).toBeUndefined();
+    });
+
+    it('leaves a foreign otelHeadersHelper alone', async () => {
+      await writeJson(geminiSettingsPath(world.env), { otelHeadersHelper: '/opt/other-tool headers' });
+      const configurator = new GeminiOtelConfigurator();
+      const context = setupContext();
+      context.config.token = 'token-123';
+      await configurator.configure(context);
+
+      const settings = await readJson(geminiSettingsPath(world.env));
+      expect(settings.otelHeadersHelper).toBe('/opt/other-tool headers');
     });
 
     it('uninstalls native OTel cleanly', async () => {

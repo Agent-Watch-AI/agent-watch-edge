@@ -91,7 +91,8 @@ const PROVIDER_LABELS: Record<string, string> = {
   claude: 'claude-code',
   codex: 'codex',
   cursor: 'cursor',
-  gemini: 'gemini'
+  gemini: 'gemini',
+  antigravity: 'antigravity'
 };
 
 export function buildTurnSummary(input: BuildTurnSummaryInput): TurnSummaryEvent {

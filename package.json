@@ -46,7 +46,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "example": "node example/server.mjs",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "prepare": "npm run build"
   },
   "repository": {
     "type": "git",

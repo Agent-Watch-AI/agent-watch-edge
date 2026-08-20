@@ -2,6 +2,7 @@ import process from 'node:process';
 import type { Env } from '../core/env.js';
 import { debugLog, warnLog } from '../core/logger.js';
 import { getProvider } from '../providers/registry.js';
+import type { AgentProvider } from '../providers/provider.js';
 import { loadEffectiveConfig } from '../config/repo-config.js';
 import { enrichEvents } from '../events/enrich.js';
 import { trackTurn } from '../turns/turn-tracker.js';
@@ -65,7 +66,7 @@ async function processPayload(agentId: string, rawPayload: unknown, options: Hoo
   const provider = getProvider(agentId);
   if (!provider) return;
   const baseContext = await buildCliContext(options.env);
-  const payloadCwd = typeof (rawPayload as Record<string, unknown>)?.['cwd'] === 'string' ? ((rawPayload as Record<string, unknown>)['cwd'] as string) : options.env.cwd;
+  const payloadCwd = resolvePayloadCwd(provider, rawPayload, options.env.cwd);
   // Repository-level .agentwatch.json overrides the global config for
   // content capture derived from this payload; identity, endpoints, emission
   // toggles and delivery tuning stay global-only.
@@ -112,6 +113,20 @@ async function processPayload(agentId: string, rawPayload: unknown, options: Hoo
   const stats = buildDeliveryStats(context);
   const outcome = await deliverEvents(outbound, transport, queue, context.config.delivery.drainBatchSize, cooldown, stats);
   debugLog(`delivery: sent=${outcome.delivered} queued=${outcome.queued} drained=${outcome.drained} rejected=${outcome.rejected}`);
+}
+
+/**
+ * Where this payload happened. Most agents report a top-level `cwd`; a provider
+ * that nests it (Antigravity carries `common.workspacePaths`) supplies
+ * `resolveCwd`. Without this the git context, the repository `.agentwatch.json`
+ * and every branch-derived ticket key would be resolved against the directory
+ * the hook process happened to start in.
+ */
+function resolvePayloadCwd(provider: AgentProvider, rawPayload: unknown, fallback: string): string {
+  const reported = (rawPayload as Record<string, unknown> | undefined)?.['cwd'];
+  if (typeof reported === 'string' && reported !== '') return reported;
+  const resolved = provider.resolveCwd?.(rawPayload);
+  return typeof resolved === 'string' && resolved !== '' ? resolved : fallback;
 }
 
 function readStdin(): Promise<string> {

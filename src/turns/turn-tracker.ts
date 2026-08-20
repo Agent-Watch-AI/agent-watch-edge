@@ -55,10 +55,16 @@ export async function trackTurn(options: TrackTurnOptions): Promise<TurnSummaryE
       }
       if (type === 'prompt.submitted') {
         // Event ids are payload-derived, so on old Claude versions without
-        // prompt_id two identical prompts share an id. The record file must
-        // still be distinct per submission, or the second append overwrites
-        // the first and the second turn closes with no state at all.
-        await store.append(sessionId, `${event.id}-${event.timestamp}`, promptRecord(event));
+        // prompt_id two identical prompts share an id. Without a turn id the
+        // record file must therefore be distinct per submission, or the second
+        // append overwrites the first and the second turn closes with no state
+        // at all. With a turn id the id already separates turns, and collapsing
+        // repeats inside one turn is what it should do: Antigravity has no
+        // prompt hook, so the prompt is recorded from the execution's first
+        // invocation, and a re-fired invocation hook must not append the same
+        // prompt twice.
+        const key = event.session.turnId ? event.id : `${event.id}-${event.timestamp}`;
+        await store.append(sessionId, key, promptRecord(event));
       } else if (TOOL_COMPLETION_TYPES.has(type)) {
         await store.append(sessionId, event.id, toolRecord(event));
       } else if (type === 'agent.other' && responseFromStop(event) !== undefined) {
@@ -377,6 +383,8 @@ function resolveSurface(provider: string, env: Env): string {
   // Cursor hooks fire from the editor's agent; is_background_agent is only
   // available on sessionStart, not on Stop, so v1 reports a single surface.
   if (provider === 'cursor') return 'ide';
+  // Antigravity is an editor agent as well.
+  if (provider === 'antigravity') return 'ide';
   return 'cli';
 }
 

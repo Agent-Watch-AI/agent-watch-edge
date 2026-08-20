@@ -149,3 +149,67 @@ describe('rejected-event accounting', () => {
     }
   });
 });
+
+describe('lost-event accounting', () => {
+  it('records events the queue gave up on, instead of losing them silently', async () => {
+    const dirs = tempDirs();
+    try {
+      const queue = new EventQueue({
+        queueDir: dirs.queueDir,
+        locksDir: dirs.locksDir,
+        maxEvents: 100,
+        maxAttempts: 1,
+        maxEventAgeDays: 7
+      });
+      const stats = new DeliveryStats(dirs.statsFile, () => new Date('2026-08-20T10:00:00.000Z'), dirs.locksDir);
+      // A backend that refuses everything: the batch is queued, the single
+      // permitted attempt fails, and the entry is abandoned.
+      const transport = new HttpTransport({
+        eventsUrl: 'https://backend.example/v1/events',
+        timeoutMs: 1000,
+        fetchFn: async () => new Response('{"message":"schema_invalid"}', { status: 422 })
+      });
+
+      await queue.enqueue([summary('evt_lost')], transport.destination);
+      const drained = await queue.drain(transport, 10, stats);
+
+      expect(drained.dropped).toBe(1);
+      expect(await queue.pendingCount()).toBe(0);
+      const snapshot = await stats.read();
+      expect(snapshot?.totalDropped).toBe(1);
+      expect(snapshot?.lastDroppedAt).toBe('2026-08-20T10:00:00.000Z');
+    } finally {
+      await fs.rm(path.dirname(dirs.queueDir), { recursive: true, force: true });
+    }
+  });
+
+  it('records the status a refused direct send came back with', async () => {
+    const dirs = tempDirs();
+    try {
+      const queue = new EventQueue({
+        queueDir: dirs.queueDir,
+        locksDir: dirs.locksDir,
+        maxEvents: 100,
+        maxAttempts: 5,
+        maxEventAgeDays: 7
+      });
+      const stats = new DeliveryStats(dirs.statsFile, () => new Date('2026-08-20T10:00:00.000Z'), dirs.locksDir);
+      const transport = new HttpTransport({
+        eventsUrl: 'https://backend.example/v1/events',
+        timeoutMs: 1000,
+        fetchFn: async () => new Response('{"message":"no event passed validation"}', { status: 422 })
+      });
+
+      const outcome = await deliverEvents([summary('evt_refused')], transport, queue, 10, undefined, stats);
+
+      // The event is kept — a permanent status can be a temporary backend bug —
+      // but the reason it was kept is now on the record.
+      expect(outcome.queued).toBe(1);
+      const snapshot = await stats.read();
+      expect(snapshot?.lastRefusalStatus).toBe(422);
+      expect(snapshot?.lastRefusalAt).toBe('2026-08-20T10:00:00.000Z');
+    } finally {
+      await fs.rm(path.dirname(dirs.queueDir), { recursive: true, force: true });
+    }
+  });
+});

@@ -3,7 +3,7 @@
 [![npm](https://img.shields.io/npm/v/@agentwatch-ai/bridge)](https://www.npmjs.com/package/@agentwatch-ai/bridge)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A lightweight, zero-daemon telemetry bridge for AI coding agents (**Claude Code**, **OpenAI Codex**, **Cursor**, and **Gemini CLI**).
+A lightweight, zero-daemon telemetry bridge for AI coding agents (**Claude Code**, **OpenAI Codex**, **Cursor**, **Gemini CLI**, and **Google Antigravity**).
 
 It connects agent lifecycle hooks and native OpenTelemetry (OTLP) to your observability backend to attribute LLM usage, costs, tool calls, Git branches, and ticket keys (e.g., `PAY-142`) — without model proxies, MITM intercepts, or background daemons.
 
@@ -35,6 +35,7 @@ agentwatch doctor
 | **OpenAI Codex** | `~/.codex/hooks.json` | Logs, Traces (`~/.codex/config.toml`) | Full support |
 | **Gemini CLI** | `~/.gemini/settings.json` | Logs, Traces, Metrics | Full support |
 | **Cursor** | `~/.cursor/hooks.json` | None | Partial support |
+| **Google Antigravity** | `~/.gemini/config/hooks.json` | None | Partial support |
 
 ### Agent Limitations & Notes
 
@@ -44,6 +45,12 @@ agentwatch doctor
   * Requires trusting new hooks: launch `codex`, type `/hooks`, and approve AgentWatch entries.
 * **Gemini CLI**:
   * Running sessions must be restarted after setup to load new hooks and OpenTelemetry configuration.
+  * Telemetry is enabled through `GEMINI_TELEMETRY_ENABLED` with `GEMINI_TELEMETRY_TARGET=local`, and the ingest token travels in `OTEL_EXPORTER_OTLP_HEADERS`. Gemini CLI does not support Claude Code's `otelHeadersHelper`.
+* **Google Antigravity**:
+  * **No native token usage**: Antigravity exposes no OpenTelemetry exporter configuration and no readable transcript usage, so `turn.summary` events remain `usage_status: "pending"` and carry no cost.
+  * **Turns, not model calls**: a turn is one *execution*. `PreInvocation`/`PostInvocation` bracket the individual model calls inside an execution, and only the `Stop` hook closes a turn.
+  * The prompt is read from `common.lastUserInput` — Antigravity has no user-prompt hook of its own.
+  * Running sessions must be restarted after `agentwatch setup` to load new hooks.
 * **Cursor**:
   * **No native token usage**: Cursor exposes no token usage in hooks or transcripts, so `turn.summary` events remain `usage_status: "pending"`.
   * **Cursor CLI**: Currently emits only shell hook events. Full hook lifecycle is available only in Cursor IDE sessions.
@@ -84,7 +91,7 @@ agentwatch uninstall --purge                              # Also delete ~/.agent
 | `--token <token>` | Bearer token for backend authentication | — |
 | `--developer-email <email>` | Identity attached to turn summaries | `git config user.email` |
 | `--otel <signals>` | OTLP signals exported by agents: `logs`, `traces`, `metrics`, `all`, or `none` | `logs` |
-| `--agent <id>` | Limit command to a single agent (`claude`, `codex`, `cursor`, `gemini`) | All detected |
+| `--agent <id>` | Limit command to a single agent (`claude`, `codex`, `cursor`, `gemini`, `antigravity`) | All detected |
 | `--yes`, `--non-interactive` | Non-interactive mode (fail instead of prompting on missing args) | `false` |
 | `--purge` | Used with `uninstall`: removes `~/.agentwatch` and local queues | `false` |
 | `--dry-run` | Used with `hook`: prints canonical events to stdout instead of sending | `false` |

@@ -3,9 +3,13 @@ import type { CanonicalEventType } from '../../events/canonical-event.js';
 
 export type ToolKind = 'shell' | 'mcp' | 'file-read' | 'file-edit' | 'other';
 
-const SHELL_TOOLS = new Set(['Bash', 'shell', 'local_shell', 'exec_command']);
+// `run_command`, `edit_file` and `write_to_file` are Antigravity's names,
+// read off the tool schemas in the `agy` binary. Names it uses that are not
+// listed here fall through to 'other' -> tool.completed, which is accurate
+// rather than guessed.
+const SHELL_TOOLS = new Set(['Bash', 'shell', 'local_shell', 'exec_command', 'run_command']);
 const FILE_READ_TOOLS = new Set(['Read', 'read_file', 'view_image']);
-const FILE_EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'apply_patch']);
+const FILE_EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'apply_patch', 'edit_file', 'write_to_file']);
 
 export function classifyTool(toolName: string | undefined): ToolKind {
   if (!toolName) return 'other';
@@ -58,7 +62,9 @@ export function contentEvidence(text: string): { length: number; sha256: string 
 export function extractFilePath(toolInput: unknown): string | undefined {
   if (typeof toolInput !== 'object' || toolInput === null) return undefined;
   const record = toolInput as Record<string, unknown>;
-  for (const key of ['file_path', 'path', 'notebook_path', 'filePath']) {
+  // Antigravity's tool arguments are PascalCase (`TargetFile`); every other
+  // provider uses snake_case or camelCase.
+  for (const key of ['file_path', 'path', 'notebook_path', 'filePath', 'TargetFile', 'AbsolutePath']) {
     const value = record[key];
     if (typeof value === 'string' && value.length > 0) return value;
   }

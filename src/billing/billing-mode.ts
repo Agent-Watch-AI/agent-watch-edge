@@ -13,7 +13,8 @@ export async function detectBillingMode(agentId: string, env: Env): Promise<Usag
   try {
     if (agentId === 'claude') return await detectClaude(env);
     if (agentId === 'codex') return await detectCodex(env);
-    if (agentId === 'gemini') return await detectGemini(env);
+    // Antigravity signs in through the same ~/.gemini Google account state.
+    if (agentId === 'gemini' || agentId === 'antigravity') return await detectGemini(env);
   } catch {
     // fall through
   }

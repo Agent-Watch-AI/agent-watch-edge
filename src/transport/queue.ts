@@ -102,15 +102,11 @@ export class EventQueue {
    * Send due queued events through the transport. Serialized by a lock so
    * concurrent hook invocations don't double-send; bounded by maxBatch.
    *
-   * `statsRecorder.recordRejected` must not throw; failures must be swallowed
-   * by the implementation — drain runs on the coding agent's hook critical
-   * path and is not wrapped against recorder errors.
+   * The recorder's methods must not throw; failures must be swallowed by the
+   * implementation — drain runs on the coding agent's hook critical path and is
+   * not wrapped against recorder errors.
    */
-  async drain(
-    transport: EventTransport,
-    maxBatch: number,
-    statsRecorder?: { recordRejected(count: number): Promise<void> }
-  ): Promise<DrainStats> {
+  async drain(transport: EventTransport, maxBatch: number, statsRecorder?: DrainStatsRecorder): Promise<DrainStats> {
     const release = await acquireLock(this.options.locksDir, 'queue-drain', this.now);
     if (!release) return { sent: 0, failed: 0, dropped: 0, rejected: 0, skipped: true };
     try {
@@ -151,7 +147,10 @@ export class EventQueue {
       // backlog defer the same late-sorting entries on every drain.
       due.sort((a, b) => Date.parse(a.entry.firstQueuedAt) - Date.parse(b.entry.firstQueuedAt));
       const batch = due.slice(0, maxBatch);
-      if (batch.length === 0) return stats;
+      if (batch.length === 0) {
+        await report(statsRecorder, stats);
+        return stats;
+      }
 
       const events = batch.map(({ entry }) => entry.event as unknown as ProductEvent);
       const result = await transport.send(events);
@@ -162,8 +161,8 @@ export class EventQueue {
         if (rejected > 0) {
           stats.rejected += rejected;
           debugLog(`backend permanently rejected ${rejected} event(s) from the drained batch`);
-          await statsRecorder?.recordRejected(rejected);
         }
+        await report(statsRecorder, stats);
         return stats;
       }
 
@@ -190,17 +189,18 @@ export class EventQueue {
             if (rejected > 0) {
               stats.rejected += rejected;
               debugLog(`backend permanently rejected ${rejected} event(s) from an isolation probe`);
-              await statsRecorder?.recordRejected(rejected);
             }
           } else {
             await this.recordFailure(file, entry, nowMs, stats);
           }
         }
+        await report(statsRecorder, stats);
         return stats;
       }
       for (const { file, entry } of batch) {
         await this.recordFailure(file, entry, nowMs, stats);
       }
+      await report(statsRecorder, stats);
       return stats;
     } finally {
       await release();
@@ -263,6 +263,9 @@ export class EventQueue {
   private async recordFailure(file: string, entry: z.infer<typeof queueEntrySchema>, nowMs: number, stats: DrainStats): Promise<void> {
     const attempts = entry.attempts + 1;
     if (attempts >= this.options.maxAttempts) {
+      // Out of attempts: the event is gone for good, which is exactly what the
+      // dropped counter has to survive to say.
+      debugLog(`dropping a queued event after ${attempts} failed attempt(s)`);
       await fs.rm(file, { force: true });
       stats.dropped++;
       return;
@@ -327,6 +330,22 @@ export class EventQueue {
       await fs.rm(full, { force: true });
     }
   }
+}
+
+export interface DrainStatsRecorder {
+  recordRejected(count: number): Promise<void>;
+  recordDropped(count: number): Promise<void>;
+}
+
+/**
+ * Persist what this pass lost. Called once per drain rather than at each drop
+ * site: the stats file is lock-serialized, and one write per pass keeps drain
+ * off the agent's critical path.
+ */
+async function report(recorder: DrainStatsRecorder | undefined, stats: DrainStats): Promise<void> {
+  if (!recorder) return;
+  if (stats.rejected > 0) await recorder.recordRejected(stats.rejected);
+  if (stats.dropped > 0) await recorder.recordDropped(stats.dropped);
 }
 
 /**

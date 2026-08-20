@@ -1,6 +1,40 @@
-import type { AgentProvider } from '../provider.js';
+import type { AgentProvider, HookContext, ProviderHookResponse } from '../provider.js';
 import { detectAntigravity } from './antigravity.detect.js';
 import { installAntigravityHooks, uninstallAntigravityHooks } from './antigravity.hooks.js';
-import { parseGeminiHookEvent } from '../gemini/gemini.adapter.js';
-export const antigravityProvider: AgentProvider = { id: 'antigravity', displayName: 'Google Antigravity', detect: detectAntigravity, installHooks: installAntigravityHooks, uninstallHooks: uninstallAntigravityHooks, parseHookEvent: async (payload, context) => (await parseGeminiHookEvent(normalize(payload), context)).map((event) => ({ ...event, agent: { provider: 'antigravity', name: 'Google Antigravity' } })), getHookResponse: () => ({ stdout: '{}', exitCode: 0 }) };
-function normalize(raw: unknown): unknown { if (typeof raw !== 'object' || raw === null) return raw; const p = raw as Record<string, unknown>; const event = p['hookEventName']; const mapping: Record<string, string> = { PreToolUse: 'BeforeTool', PostToolUse: 'AfterTool', PreInvocation: 'BeforeAgent', PostInvocation: 'AfterAgent', Stop: 'SessionEnd' }; return { ...p, hook_event_name: typeof event === 'string' ? mapping[event] ?? event : 'unknown', session_id: p['conversationId'], cwd: Array.isArray(p['workspacePaths']) ? p['workspacePaths'][0] : undefined, transcript_path: p['transcriptPath'], model: p['modelName'], tool_name: (p['toolCall'] as Record<string, unknown> | undefined)?.['name'], tool_input: (p['toolCall'] as Record<string, unknown> | undefined)?.['args'], tool_error: p['error'] }; }
+import { antigravityCwd, antigravityHookEvent, parseAntigravityHookEvent } from './antigravity.adapter.js';
+
+/**
+ * `decision` is a required field of both `PreToolHookResult` and
+ * `StopHookResult`, and Antigravity has a dedicated `PreToolHookDeniedError`
+ * for a pre-tool hook that does not answer. A single `{}` for every hook — the
+ * previous behavior — therefore did not merely fail to observe: it blocked
+ * every tool call the agent tried to make. The remaining result messages
+ * (`PostToolHookResult`, the invocation hooks, `SessionStartHookResult`) carry
+ * no decision, so silence is correct for those.
+ */
+const HOOK_DECISION: Record<string, Record<string, string>> = {
+  PreToolUse: { decision: 'allow' },
+  Stop: { decision: 'stop' }
+};
+
+export const antigravityProvider: AgentProvider = {
+  id: 'antigravity',
+  displayName: 'Google Antigravity',
+  detect: detectAntigravity,
+  installHooks: installAntigravityHooks,
+  uninstallHooks: uninstallAntigravityHooks,
+  parseHookEvent: async (payload: unknown, context: HookContext) => parseAntigravityHookEvent(payload, context),
+  getHookResponse: (payload: unknown): ProviderHookResponse => {
+    const hook = antigravityHookEvent(payload);
+    // An unreadable payload is answered as a pre-tool allow: the one payload
+    // shape we cannot classify is also the one where staying silent would
+    // stall the agent, and telemetry must never do that.
+    const decision = hook === undefined ? HOOK_DECISION['PreToolUse'] : HOOK_DECISION[hook];
+    return { stdout: JSON.stringify(decision ?? {}), exitCode: 0 };
+  },
+  resolveCwd: antigravityCwd
+  // No nativeTelemetry: Antigravity exposes no OTLP exporter configuration, so
+  // there is no llm.call ledger source and turn summaries stay
+  // usage_status=pending. Adding a configurator would claim a capability the
+  // agent does not have.
+};

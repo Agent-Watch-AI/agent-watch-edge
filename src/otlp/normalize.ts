@@ -1,3 +1,12 @@
+/**
+ * OTLP/JSON -> llm.call.
+ *
+ * Exported as `@agentwatch-ai/bridge/otlp` for a backend that wants to decode
+ * agent telemetry itself. The AgentWatch platform has its own copy of this
+ * logic in `@agent-watch/otlp`, and the two have to be changed together:
+ * provider detection, the completed-request filter and the usage attribute
+ * names are the parts that silently disagree when they drift.
+ */
 import type { FeatureCandidate, UsageBillingMode } from '../events/canonical-event.js';
 import { buildLlmCall, type LlmCallEvent } from '../events/llm-call.js';
 import { sha256Hex } from '../events/event-id.js';
@@ -81,12 +90,13 @@ function normalizeLogRecord(log: Attributes, attrs: Attributes, options: Normali
   const eventName = firstString(attrs, ['event.name', 'name']) ?? bodyString(log['body']);
   const eventType = firstString(attrs, ['event.type', 'event.kind', 'type', 'sse_event.type', 'response.type']);
   const provider = detectProvider(eventName, eventType, attrs);
-  if (!provider || !isCompletedLlmRequest(provider, eventName, eventType)) return undefined;
+  if (!provider || !isCompletedLlmRequest(provider, attrs, eventName, eventType)) return undefined;
 
   const endedAt = otlpTimestamp(log) ?? firstString(attrs, ['event.timestamp', 'timestamp']) ?? options.receivedAt;
   if (!endedAt) return undefined;
   const sessionId = firstString(attrs, provider === 'claude' ? ['session.id'] : ['conversation.id', 'thread.id', 'session.id']);
-  const turnId = firstString(attrs, ['prompt.id', 'turn.id', 'turn_id']);
+  // Gemini names the turn `prompt_id`; the dotted form is Claude's.
+  const turnId = firstString(attrs, ['prompt.id', 'prompt_id', 'turn.id', 'turn_id']);
   const threadId = firstString(attrs, ['thread.id']);
   const requestId = firstString(attrs, ['request_id', 'request.id', 'response.id', 'response_id', 'client_request_id']);
   const sequence = firstString(attrs, ['event.sequence', 'sequence']);
@@ -118,14 +128,7 @@ function normalizeLogRecord(log: Attributes, attrs: Attributes, options: Normali
     billingMode: correlated?.billingMode ?? billingMode(attrs),
     status: firstString(attrs, ['error', 'error.message']) ? 'failed' : 'completed',
     correlation: correlated?.turnId ? 'exact' : productTurnId ? 'turn' : 'session',
-    usage: {
-      inputTokens: firstNumber(attrs, ['input_tokens', 'input_token_count', 'gen_ai.usage.input_tokens', 'codex.turn.token_usage.input_tokens']),
-      cachedInputTokens: firstNumber(attrs, ['cache_read_tokens', 'cached_input_tokens', 'cached_input_token_count', 'gen_ai.usage.cache_read.input_tokens']),
-      cacheCreationInputTokens: firstNumber(attrs, ['cache_creation_tokens', 'cache_write_input_tokens', 'gen_ai.usage.cache_write.input_tokens']),
-      outputTokens: firstNumber(attrs, ['output_tokens', 'output_token_count', 'gen_ai.usage.output_tokens', 'codex.turn.token_usage.output_tokens']),
-      reasoningOutputTokens: firstNumber(attrs, ['reasoning_output_tokens', 'reasoning_token_count', 'codex.usage.reasoning_output_tokens']),
-      totalTokens: firstNumber(attrs, ['total_tokens', 'codex.usage.total_tokens', 'codex.turn.token_usage.total_tokens'])
-    },
+    usage: readUsage(attrs),
     costUsd: firstNumber(attrs, ['cost_usd', 'cost.usd']),
     durationMs,
     // endedAt can be an unparseable attribute string; NaN arithmetic would
@@ -137,10 +140,38 @@ function normalizeLogRecord(log: Attributes, attrs: Attributes, options: Normali
   });
 }
 
+/**
+ * Token counts, under every name an agent gives them.
+ * `cached_content_token_count`, `thoughts_token_count` and
+ * `total_token_count` are Gemini's; omitting the first prices a cache read at
+ * full input cost.
+ */
+function readUsage(attrs: Attributes) {
+  return {
+    inputTokens: firstNumber(attrs, ['input_tokens', 'input_token_count', 'gen_ai.usage.input_tokens', 'codex.turn.token_usage.input_tokens']),
+    cachedInputTokens: firstNumber(attrs, [
+      'cache_read_tokens',
+      'cached_input_tokens',
+      'cached_input_token_count',
+      'cached_content_token_count',
+      'gen_ai.usage.cache_read.input_tokens'
+    ]),
+    cacheCreationInputTokens: firstNumber(attrs, ['cache_creation_tokens', 'cache_write_input_tokens', 'gen_ai.usage.cache_write.input_tokens']),
+    outputTokens: firstNumber(attrs, ['output_tokens', 'output_token_count', 'gen_ai.usage.output_tokens', 'codex.turn.token_usage.output_tokens']),
+    reasoningOutputTokens: firstNumber(attrs, ['reasoning_output_tokens', 'reasoning_token_count', 'thoughts_token_count', 'codex.usage.reasoning_output_tokens']),
+    totalTokens: firstNumber(attrs, ['total_tokens', 'total_token_count', 'codex.usage.total_tokens', 'codex.turn.token_usage.total_tokens'])
+  };
+}
+
 function detectProvider(eventName: string | undefined, eventType: string | undefined, attrs: Attributes): 'claude' | 'codex' | 'gemini' | undefined {
   const names = `${eventName ?? ''} ${eventType ?? ''}`;
-  if (/gemini[._](api_request|llm_request)|gemini_code/.test(names) || firstString(attrs, ['gen_ai.system']) === 'gemini') return 'gemini';
-  if (/codex[._](sse_event|api_request)|response\.completed/.test(names) && firstString(attrs, ['conversation.id', 'thread.id'])) return 'codex';
+  if (isGeminiLog(names, attrs)) return 'gemini';
+  // The `codex.` / `codex_` prefix is unambiguous — no other agent produces
+  // it — so a conversation or thread id is not needed to claim the record.
+  // `response.completed` is generic, and there a session attribute is what
+  // stops another provider's record being misclassified.
+  if (/codex[._](sse_event|api_request)/.test(names)) return 'codex';
+  if (/response\.completed/.test(names) && firstString(attrs, ['conversation.id', 'thread.id'])) return 'codex';
   if (/claude_code[._](api_request|llm_request)/.test(names) && firstString(attrs, ['session.id'])) return 'claude';
   // Older Claude logs may use the bare event name. Do not let that generic
   // alias steal a provider-qualified Codex record that also carries a
@@ -151,11 +182,39 @@ function detectProvider(eventName: string | undefined, eventType: string | undef
   return undefined;
 }
 
-function isCompletedLlmRequest(provider: 'claude' | 'codex' | 'gemini', eventName?: string, eventType?: string): boolean {
+/**
+ * Gemini CLI's real event names are `gemini_cli.api_request`,
+ * `gemini_cli.api_response` and `gemini_cli.api_error`, and the attribute that
+ * names the provider is `gen_ai.provider.name` (`gcp.gen_ai` /
+ * `gcp.vertex_ai`), never `gen_ai.system`.
+ */
+function isGeminiLog(names: string, attrs: Attributes): boolean {
+  if (/gemini[._\w]*[._](api_request|api_response|api_error|llm_request)|gemini_code/.test(names)) return true;
+  const system = firstString(attrs, ['gen_ai.system', 'gen_ai.provider.name']);
+  return system === 'gemini' || system === 'gcp.gen_ai' || system === 'gcp.vertex_ai';
+}
+
+function isCompletedLlmRequest(provider: 'claude' | 'codex' | 'gemini', attrs: Attributes, eventName?: string, eventType?: string): boolean {
   const names = `${eventName ?? ''} ${eventType ?? ''}`;
   if (provider === 'claude') return /api_request/.test(names);
-  if (provider === 'gemini') return /api_request|generate_content|generateContent|response\.completed/.test(names) || names.trim() === '';
+  if (provider === 'gemini') return isCompletedGeminiRequest(names, attrs);
   return /codex[._]api_request|response\.completed/.test(names);
+}
+
+/**
+ * Gemini splits a call across a request record and a response record, and only
+ * the response carries token counts, so counting the request too would double
+ * every Gemini call. An error is still a call that happened. An unfamiliar name
+ * is admitted only when the record actually reports usage.
+ */
+function isCompletedGeminiRequest(names: string, attrs: Attributes): boolean {
+  if (/api_request/.test(names)) return false;
+  if (/api_response|api_error|generate_content|generateContent|response\.completed/.test(names)) return true;
+  return names.trim() === '' || reportsUsage(attrs);
+}
+
+function reportsUsage(attrs: Attributes): boolean {
+  return Object.values(readUsage(attrs)).some((value) => value !== undefined);
 }
 
 function attributes(value: unknown): Attributes {

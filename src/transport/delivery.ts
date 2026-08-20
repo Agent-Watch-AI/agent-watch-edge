@@ -56,6 +56,11 @@ export async function deliverEvents(
     debugLog('direct send failed', result.error ?? `status ${result.status}`);
     if (result.retryable) {
       if (cooldown) await cooldown.trip(BACKEND_COOLDOWN_MS);
+    } else if (stats) {
+      // A refusal the transport will not retry is the whole diagnosis: without
+      // it a developer sees only a backlog that grows and then empties itself
+      // when the entries age out.
+      await stats.recordRefusal(result.status);
     }
     // Product records are never discarded on the direct path. A permanent
     // response can be caused by a temporarily incompatible route/schema and

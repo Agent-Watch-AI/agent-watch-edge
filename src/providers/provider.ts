@@ -66,6 +66,13 @@ export interface AgentProvider {
   uninstallHooks(context: SetupContext): Promise<SetupOutcome>;
   parseHookEvent(payload: unknown, context: HookContext): Promise<AgentWatchEvent[]>;
   getHookResponse(payload: unknown): ProviderHookResponse;
+  /**
+   * Working directory this payload was produced in, when the provider does not
+   * report it as a top-level `cwd`. Git context, repository config and ticket
+   * candidates all hang off this path, so a provider that nests it (Antigravity
+   * reports `common.workspacePaths`) has to say where it is.
+   */
+  resolveCwd?(payload: unknown): string | undefined;
   nativeTelemetry?: NativeTelemetryConfigurator;
 }
 

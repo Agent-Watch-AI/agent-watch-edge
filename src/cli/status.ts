@@ -73,10 +73,21 @@ export async function runStatus(env: Env): Promise<number> {
   }
   println(pending === 0 ? `${symbols.ok} healthy` : `${symbols.warn} backlog`);
   println(`${pending} pending event(s)`);
-  const rejectedStats = await deliveryStats.read();
-  if (rejectedStats && rejectedStats.totalRejected > 0) {
-    const last = rejectedStats.lastRejectedAt ? ` (last ${rejectedStats.lastRejectedCount} at ${rejectedStats.lastRejectedAt})` : '';
-    println(`${symbols.warn} ${rejectedStats.totalRejected} event(s) permanently rejected by the backend${last}`);
+  const stats = await deliveryStats.read();
+  if (stats && stats.totalRejected > 0) {
+    const last = stats.lastRejectedAt ? ` (last ${stats.lastRejectedCount} at ${stats.lastRejectedAt})` : '';
+    println(`${symbols.warn} ${stats.totalRejected} event(s) permanently rejected by the backend${last}`);
+  }
+  if (stats && stats.totalDropped > 0) {
+    const last = stats.lastDroppedAt ? ` (last ${stats.lastDroppedCount} at ${stats.lastDroppedAt})` : '';
+    // Attempts exhausted, past the age bound, or unreadable on disk: whichever
+    // it was, the event is gone and used to be gone silently.
+    println(`${symbols.warn} ${stats.totalDropped} event(s) lost from the local queue${last}`);
+    println(dim(`  the queue gives up after ${context.config.delivery.maxAttempts} attempts or ${context.config.delivery.maxEventAgeDays} day(s)`));
+  }
+  if (stats && stats.lastRefusalStatus > 0) {
+    println(`${symbols.warn} backend last refused a batch with HTTP ${stats.lastRefusalStatus}${stats.lastRefusalAt ? ` at ${stats.lastRefusalAt}` : ''}`);
+    println(dim('  a refusal is not retried on its own; check the endpoint, the token and the event schema'));
   }
   return 0;
 }

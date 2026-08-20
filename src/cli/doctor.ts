@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import type { Env } from '../core/env.js';
 import { providers } from '../providers/registry.js';
 import type { SetupContext } from '../providers/provider.js';
@@ -80,6 +81,8 @@ export async function runDoctor(env: Env, options: { json?: boolean } = {}): Pro
   // Git availability
   const gitVersion = await execGitVersion();
   checks.push({ name: 'git available', level: gitVersion ? 'ok' : 'warn', detail: gitVersion ?? 'git not found on PATH' });
+
+  checks.push(await buildFreshnessCheck());
 
   // Agents
   for (const provider of providers) {
@@ -214,4 +217,57 @@ function execGitVersion(): Promise<string | undefined> {
       resolve(error ? undefined : stdout.trim());
     });
   });
+}
+
+/**
+ * Whether the running build matches the sources beside it.
+ *
+ * Only meaningful for a checkout linked with `npm link` or run from `dist`
+ * directly — a published install has no `src` and is skipped. It exists because
+ * a stale `dist` is invisible from the outside and looks exactly like a broken
+ * agent: a provider added to `src/providers/registry.ts` but never rebuilt made
+ * every hook answer `unknown agent`, for days, while the agent dutifully called
+ * it on every tool use.
+ */
+async function buildFreshnessCheck(): Promise<Check> {
+  const name = 'build up to date';
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const root = path.resolve(here, '..', '..');
+  const srcDir = path.join(root, 'src');
+  const distDir = path.join(root, 'dist');
+
+  const [srcTime, distTime] = await Promise.all([newestMtime(srcDir), newestMtime(distDir)]);
+  if (srcTime === undefined || distTime === undefined) {
+    return { name, level: 'ok', detail: 'published install (no sources to compare)' };
+  }
+  if (srcTime <= distTime) return { name, level: 'ok', detail: 'dist is newer than src' };
+
+  return {
+    name,
+    level: 'warn',
+    detail: 'src is newer than dist — run `npm run build`; the installed CLI is running stale code'
+  };
+}
+
+/** Newest mtime under a directory, or undefined when it does not exist. */
+async function newestMtime(dir: string): Promise<number | undefined> {
+  let newest: number | undefined;
+  const walk = async (current: string): Promise<void> => {
+    const entries = await fs.readdir(current, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        await walk(full);
+        continue;
+      }
+      const stat = await fs.stat(full);
+      if (newest === undefined || stat.mtimeMs > newest) newest = stat.mtimeMs;
+    }
+  };
+  try {
+    await walk(dir);
+  } catch {
+    return undefined;
+  }
+  return newest;
 }

@@ -5,23 +5,58 @@ import type { Env } from '../../core/env.js';
 import type { NativeTelemetryConfigurator, NativeTelemetryStatus, SetupContext, SetupOutcome } from '../provider.js';
 import { geminiSettingsPath } from './gemini.detect.js';
 
+/**
+ * The environment Gemini CLI actually reads.
+ *
+ * Every name here was verified against the installed `@google/gemini-cli`
+ * bundle (`resolveTelemetrySettings`), because the previous set was written
+ * from Claude Code's vocabulary and Gemini reads none of it:
+ *
+ * - `GEMINI_TELEMETRY_ENABLED`, not `GEMINI_ENABLE_TELEMETRY`. The latter
+ *   appears nowhere in the CLI, and `initializeTelemetry()` returns
+ *   immediately unless the former is set, so no exporter was ever created.
+ * - `GEMINI_TELEMETRY_TARGET` must be `local`. The default is local today, but
+ *   `gcp` ships the batch to Google Cloud instead of to this backend, and that
+ *   is not a default worth inheriting.
+ * - `GEMINI_TELEMETRY_OTLP_PROTOCOL` accepts `grpc` or `http` and *throws*
+ *   `FatalConfigError` on anything else — notably on `http/json`, which is a
+ *   valid value only for the standard `OTEL_EXPORTER_OTLP_PROTOCOL`.
+ * - Auth travels in `OTEL_EXPORTER_OTLP_HEADERS`. Gemini has no
+ *   `otelHeadersHelper` (that is a Claude Code setting), so with the helper
+ *   alone the exporter posted without an Authorization header and the gateway,
+ *   which is fail-closed, answered 401 to every batch.
+ */
 export function desiredGeminiOtelEnv(context: SetupContext): Record<string, string> | undefined {
   const otlpBase = otlpBaseUrl(context.config);
   if (!otlpBase) return undefined;
   const signals = context.config.otel;
   if (!otelEnabled(context.config)) return undefined;
   const env: Record<string, string> = {
-    GEMINI_ENABLE_TELEMETRY: '1',
+    GEMINI_TELEMETRY_ENABLED: 'true',
+    GEMINI_TELEMETRY_TARGET: 'local',
+    GEMINI_TELEMETRY_OTLP_ENDPOINT: otlpBase,
+    GEMINI_TELEMETRY_OTLP_PROTOCOL: 'http',
+    GEMINI_TELEMETRY_TRACES_ENABLED: signals.traces ? 'true' : 'false',
     OTEL_METRICS_EXPORTER: signals.metrics ? 'otlp' : 'none',
     OTEL_LOGS_EXPORTER: signals.logs ? 'otlp' : 'none',
     OTEL_TRACES_EXPORTER: signals.traces ? 'otlp' : 'none',
     OTEL_EXPORTER_OTLP_PROTOCOL: 'http/json',
     OTEL_EXPORTER_OTLP_ENDPOINT: otlpBase
   };
+  if (context.config.token) {
+    env[OTLP_HEADERS_KEY] = `Authorization=Bearer ${context.config.token}`;
+  }
   return env;
 }
 
-const HEADERS_HELPER_KEY = 'otelHeadersHelper';
+/**
+ * A setting an older AgentWatch wrote here in the belief that Gemini read it.
+ * It does not, so the entry is cleaned up on the next `configure` — but only
+ * when it is ours: another tool may legitimately own the same key.
+ */
+const LEGACY_HELPER_KEY = 'otelHeadersHelper';
+
+const OTLP_HEADERS_KEY = 'OTEL_EXPORTER_OTLP_HEADERS';
 
 export class GeminiOtelConfigurator implements NativeTelemetryConfigurator {
   async supported(_env: Env): Promise<boolean> {
@@ -40,7 +75,9 @@ export class GeminiOtelConfigurator implements NativeTelemetryConfigurator {
     const env = isRecord(settings['env']) ? (settings['env'] as Record<string, unknown>) : {};
     if (disabled) {
       const recorded = context.installState.agents['gemini']?.otelOwnedKeys ?? [];
-      const leftover = recorded.some((key) => (key === HEADERS_HELPER_KEY ? settings[key] !== undefined : env[key] !== undefined));
+      const leftover =
+        recorded.some((key) => (key === LEGACY_HELPER_KEY ? settings[key] !== undefined : env[key] !== undefined)) ||
+        hasOurLegacyHelper(settings);
       return leftover
         ? { supported: true, configured: false, detail: 'disabled in config, but previous telemetry env vars remain — run `agentwatch setup`' }
         : { supported: true, configured: true, detail: 'disabled in config (otel)' };
@@ -50,7 +87,11 @@ export class GeminiOtelConfigurator implements NativeTelemetryConfigurator {
 
     const ownedKeys = context.installState.agents['gemini']?.otelOwnedKeys ?? [];
     const matches = Object.entries(desired).every(([key, value]) => env[key] === value);
-    if (matches) return { supported: true, configured: true };
+    // A helper entry left by an older version is dead weight Gemini ignores;
+    // reporting "configured" would hide that setup still has work to do. A
+    // helper belonging to another tool is none of our business.
+    if (matches && !hasOurLegacyHelper(settings)) return { supported: true, configured: true };
+    if (matches) return { supported: true, configured: false, detail: 'stale otelHeadersHelper entry — run `agentwatch setup`' };
 
     const conflicting = Object.keys(desired).filter((key) => env[key] !== undefined && env[key] !== desired[key] && !ownedKeys.includes(key));
     if (conflicting.length > 0) {
@@ -101,20 +142,13 @@ export class GeminiOtelConfigurator implements NativeTelemetryConfigurator {
     settings['env'] = envBlock;
     Object.assign(envBlock, desired);
     for (const key of ownedKeys) {
-      if (key === HEADERS_HELPER_KEY) continue;
+      if (key === LEGACY_HELPER_KEY) continue;
       if (desired[key] === undefined) delete envBlock[key];
     }
+    // Gemini never read this; leaving it behind only confuses the next reader.
+    if (hasOurLegacyHelper(settings)) delete settings[LEGACY_HELPER_KEY];
 
     const owned = new Set(Object.keys(desired));
-    if (context.config.token) {
-      const helperCommand = headersHelperCommand(context.hookCommand);
-      const existingHelper = settings[HEADERS_HELPER_KEY];
-      if (existingHelper !== undefined && typeof existingHelper === 'string' && !existingHelper.includes('agentwatch') && existingHelper !== helperCommand) {
-        return { ok: false, changed: false, messages: [`skipping native OpenTelemetry: ${HEADERS_HELPER_KEY} already set to a non-AgentWatch helper`] };
-      }
-      settings[HEADERS_HELPER_KEY] = helperCommand;
-      owned.add(HEADERS_HELPER_KEY);
-    }
 
     const changed = JSON.stringify(settings) !== before;
     if (changed) {
@@ -155,27 +189,33 @@ export class GeminiOtelConfigurator implements NativeTelemetryConfigurator {
 
     const settings = read.value as Record<string, unknown>;
     const envBlock = isRecord(settings['env']) ? (settings['env'] as Record<string, unknown>) : undefined;
+    // The fallback list covers settings written before install state existed,
+    // and keeps the names an older version wrote so they are cleaned up too.
     const ownedKeys = context.installState.agents['gemini']?.otelOwnedKeys ?? [
+      'GEMINI_TELEMETRY_ENABLED',
+      'GEMINI_TELEMETRY_TARGET',
+      'GEMINI_TELEMETRY_OTLP_ENDPOINT',
+      'GEMINI_TELEMETRY_OTLP_PROTOCOL',
+      'GEMINI_TELEMETRY_TRACES_ENABLED',
       'GEMINI_ENABLE_TELEMETRY',
       'OTEL_METRICS_EXPORTER',
       'OTEL_LOGS_EXPORTER',
       'OTEL_TRACES_EXPORTER',
       'OTEL_EXPORTER_OTLP_PROTOCOL',
       'OTEL_EXPORTER_OTLP_ENDPOINT',
-      HEADERS_HELPER_KEY
+      OTLP_HEADERS_KEY,
+      LEGACY_HELPER_KEY
     ];
 
     const before = JSON.stringify(settings);
     if (envBlock) {
       for (const key of ownedKeys) {
-        if (key === HEADERS_HELPER_KEY) continue;
+        if (key === LEGACY_HELPER_KEY) continue;
         delete envBlock[key];
       }
       if (Object.keys(envBlock).length === 0) delete settings['env'];
     }
-    if (ownedKeys.includes(HEADERS_HELPER_KEY) && typeof settings[HEADERS_HELPER_KEY] === 'string' && (settings[HEADERS_HELPER_KEY] as string).includes('agentwatch')) {
-      delete settings[HEADERS_HELPER_KEY];
-    }
+    if (hasOurLegacyHelper(settings)) delete settings[LEGACY_HELPER_KEY];
 
     const changed = JSON.stringify(settings) !== before;
     if (changed) {
@@ -199,9 +239,10 @@ export class GeminiOtelConfigurator implements NativeTelemetryConfigurator {
   }
 }
 
-export function headersHelperCommand(hookCommand: string): string {
-  const bin = hookCommand.replace(/\s+hook\s+--agent\s+\S+\s*$/, '');
-  return `${bin} otel-headers`;
+/** An `otelHeadersHelper` this tool wrote, as opposed to somebody else's. */
+function hasOurLegacyHelper(settings: Record<string, unknown>): boolean {
+  const value = settings[LEGACY_HELPER_KEY];
+  return typeof value === 'string' && value.includes('agentwatch');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

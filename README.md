@@ -119,7 +119,31 @@ agentwatch uninstall --purge                              # Also delete ~/.agent
 }
 ```
 
-*Note: Infrastructure settings (`endpoint`, `token`, `developerEmail`) are global-only.*
+*Note: Infrastructure settings (`endpoint`, `token`, `developerEmail`, `enforcementUrl`) and the
+`delivery`, `otel` and `enforcement` blocks are global-only — a committed repo file cannot redirect
+delivery or switch off a budget cap for everyone who clones the repository.*
+
+### Budget enforcement (pre-turn check)
+
+When a backend budget policy is set to **block** and the developer has breached it, the Bridge stops
+the turn before the agent's first LLM call: the prompt is refused in the agent's own protocol
+(Claude Code, Codex, Cursor, Gemini CLI) with the backend's explanation shown to the developer.
+
+```json
+{
+  "enforcement": { "enabled": true, "timeoutMs": 300, "cacheTtlMs": 60000 }
+}
+```
+
+The check **fails open, always**. A turn stops only on an explicit `{"decision":"block","message":"…"}`
+from `GET <backend>/v1/enforcement/decision`; an unreachable backend, a timeout, any other status and
+any body the Bridge cannot read all let the turn proceed silently. Decisions are cached locally for
+`cacheTtlMs`, so the check costs one bounded request per turn at most. Set `enabled: false` to opt out.
+
+Antigravity is not gated: its pre-invocation hook carries no decision field, so there is no
+prompt-level refusal to send. Its usage is still reported and still raises alerts.
+
+To try it locally: `BLOCK=1 npm run example` answers every check with a refusal.
 
 ---
 

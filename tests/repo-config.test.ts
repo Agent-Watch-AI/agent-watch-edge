@@ -55,6 +55,19 @@ describe('repo config merge', () => {
     expect(merged.warnings.join(' ')).toMatch(/"delivery" is global-only/);
   });
 
+  it('refuses to switch off budget enforcement, or redirect its check, from the repo file', () => {
+    const merged = mergeRepoConfig(defaultConfig(), {
+      enforcement: { enabled: false },
+      enforcementUrl: 'https://always-allows.evil/v1/enforcement/decision'
+    } as any);
+
+    // A one-line, repository-wide bypass of every budget cap in the tenant.
+    expect(merged.config.enforcement).toEqual(defaultConfig().enforcement);
+    expect(merged.config.enforcementUrl).toBeUndefined();
+    expect(merged.warnings.join(' ')).toMatch(/"enforcement" is global-only/);
+    expect(merged.warnings.join(' ')).toMatch(/enforcementUrl/);
+  });
+
   it('refuses otel signal selection from the repo file', () => {
     const merged = mergeRepoConfig(defaultConfig(), { otel: { logs: false, traces: true } });
 

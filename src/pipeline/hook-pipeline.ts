@@ -4,7 +4,10 @@ import { debugLog } from '../core/logger.js';
 import { next, runFlow, step, stop } from '../core/pipe.js';
 import type { FlowResult, Step, StepOutcome } from '../core/types/core.types.js';
 import { loadEffectiveConfig } from '../config/repo-config.js';
+import { DECISION_BLOCK } from '../enforcement/constants/enforcement.constants.js';
+import { resolveEnforcement } from '../enforcement/enforcement.js';
 import { enrichEvents } from '../events/enrich.js';
+import { developerIdentity } from '../git/git-context.js';
 import { BackendCooldown } from '../transport/cooldown.js';
 import { DeliveryStats } from '../transport/delivery-stats.js';
 import { deliverEvents } from '../transport/delivery.js';
@@ -14,7 +17,18 @@ import { COOLDOWN_FILE_NAME, DELIVERY_STATS_FILE_NAME } from '../transport/const
 import type { EventTransport } from '../transport/types/transport.types.js';
 import { eventsUrl } from '../config/config.js';
 import { trackTurn } from '../turns/turn-tracker.js';
-import { PAYLOAD_CWD_KEY, STAGE_DELIVER, STAGE_ENRICH, STAGE_PARSE_EVENTS, STAGE_RESOLVE_CONTEXT, STAGE_TRACK_TURN, STOP_DRY_RUN, STOP_NO_EVENTS } from './constants/pipeline.constants.js';
+import {
+  PAYLOAD_CWD_KEY,
+  PROMPT_SUBMITTED_TYPE,
+  STAGE_DELIVER,
+  STAGE_ENFORCE,
+  STAGE_ENRICH,
+  STAGE_PARSE_EVENTS,
+  STAGE_RESOLVE_CONTEXT,
+  STAGE_TRACK_TURN,
+  STOP_DRY_RUN,
+  STOP_NO_EVENTS
+} from './constants/pipeline.constants.js';
 import type { HookPipelineInput, HookPipelineState } from './types/pipeline.types.js';
 
 export type { HookPipelineInput, HookPipelineState } from './types/pipeline.types.js';
@@ -24,13 +38,15 @@ export type { HookPipelineInput, HookPipelineState } from './types/pipeline.type
  *
  * Read top to bottom, this is the whole contract of the hook path: work out
  * where we are and what the effective config says, turn the payload into
- * canonical events, attach development context, assemble the turn, deliver.
+ * canonical events, ask whether this turn may start at all, attach development
+ * context, assemble the turn, deliver.
  * Every stage takes the whole state and returns the next one, so adding or
  * reordering a step is a change to this array rather than to a call graph.
  */
 const HOOK_STAGES: readonly Step<HookPipelineState>[] = [
   step(STAGE_RESOLVE_CONTEXT, resolveContext),
   step(STAGE_PARSE_EVENTS, parseEvents),
+  step(STAGE_ENFORCE, enforce),
   step(STAGE_ENRICH, enrich),
   step(STAGE_TRACK_TURN, trackTurnStage),
   step(STAGE_DELIVER, deliver)
@@ -92,6 +108,50 @@ async function parseEvents(state: HookPipelineState): Promise<StepOutcome<HookPi
 }
 
 /**
+ * Ask the platform whether this turn may start.
+ *
+ * Only the prompt hook is a gate, and only a provider that knows how to refuse
+ * one is asked about: everything else skips the check entirely, so no tool hook
+ * pays for it. A refusal lands in the state as a sentence to show; every failure
+ * of the check leaves the state untouched, which is what makes an unreachable
+ * platform a no-op rather than an outage.
+ *
+ * A dry run never asks. It previews what would be sent, and rehearsing a refusal
+ * would block a developer for a command that promised to change nothing.
+ *
+ * @param state - Current flow state.
+ * @returns The state, carrying the refusal when there is one.
+ */
+async function enforce(state: HookPipelineState): Promise<StepOutcome<HookPipelineState>> {
+  if (state.dryRun || !state.provider.getBlockResponse || !isTurnGate(state)) return next(state);
+
+  const decision = await resolveEnforcement({
+    config: state.config,
+    paths: state.paths,
+    developerId: await developerIdentity(state.config.developerEmail, state.cwd, { home: state.env.home }),
+    now: state.env.now
+  });
+
+  if (decision.decision !== DECISION_BLOCK) return next(state);
+
+  return next({ ...state, blockMessage: decision.message });
+}
+
+/**
+ * Whether this payload is the moment before the turn's first LLM call.
+ *
+ * @param state - Current flow state.
+ * @returns True when the provider reported a submitted prompt.
+ */
+function isTurnGate(state: HookPipelineState): boolean {
+  for (const event of state.events) {
+    if (event.event.type === PROMPT_SUBMITTED_TYPE) return true;
+  }
+
+  return false;
+}
+
+/**
  * Attach development context and scrub the events.
  *
  * @param state - Current flow state.
@@ -115,6 +175,11 @@ async function enrich(state: HookPipelineState): Promise<StepOutcome<HookPipelin
  * @returns The state with its summary and outbound records.
  */
 async function trackTurnStage(state: HookPipelineState): Promise<StepOutcome<HookPipelineState>> {
+  // A refused prompt never reached a model. Recording it would leave a prompt
+  // with no turn behind it, to be folded into whichever turn came next and
+  // inflate its prompt; the flow continues so the offline queue still drains.
+  if (state.blockMessage) return next(state);
+
   // Assembly failing must not cost the *queue* its drain: a hook that produced
   // no summary still has a backlog to move, so this stage degrades to "no
   // summary" instead of ending the flow.

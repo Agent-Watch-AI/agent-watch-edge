@@ -78,6 +78,30 @@ export async function gitUserEmail(cwd: string, options: GitUserEmailOptions = {
 }
 
 /**
+ * The developer identity attached to a turn — and asked about by the pre-turn
+ * budget check.
+ *
+ * Both callers have to produce the same string: it is the value the platform
+ * stored for this developer, so a gate asking about one identity while summaries
+ * report another would match no policy at all. Hence one function rather than
+ * the same two lines in two modules.
+ *
+ * @param configuredEmail - `developerEmail` from the effective config, if set.
+ * @param cwd - Directory to fall back to `git config user.email` in.
+ * @param options - Timeout, injected HOME and runner override.
+ * @returns The identity, or undefined when neither source has one.
+ */
+export async function developerIdentity(
+  configuredEmail: string | undefined,
+  cwd: string,
+  options: GitUserEmailOptions = {}
+): Promise<string | undefined> {
+  if (configuredEmail) return configuredEmail;
+
+  return gitUserEmail(cwd, options);
+}
+
+/**
  * How this repository is named, preferring its remote identity.
  *
  * Only the credential-free normalized remote is ever reported, alongside its

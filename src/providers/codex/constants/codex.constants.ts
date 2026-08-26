@@ -60,4 +60,15 @@ export const CODEX_EVENT_TYPE_MAP: Readonly<Record<string, CanonicalEventType>> 
 /** Hooks whose canonical type depends on which tool ran. */
 export const CODEX_TOOL_EVENTS: ReadonlySet<string> = new Set(['PreToolUse', 'PostToolUse', 'PermissionRequest']);
 
+/**
+ * The one hook a budget refusal may travel on.
+ *
+ * Codex's hook result accepts `{continue, stopReason, suppressOutput,
+ * systemMessage}` under `deny_unknown_fields`, so a refusal uses only those:
+ * `continue: false` stops the turn, `stopReason` is what its parser reads and
+ * `systemMessage` is what the user is shown. Both carry the same sentence
+ * because the developer and the transcript both need it.
+ */
+export const CODEX_PROMPT_SUBMIT_EVENTS: ReadonlySet<string> = new Set(['UserPromptSubmit']);
+
 export const CODEX_UNKNOWN_EVENT = 'unknown';

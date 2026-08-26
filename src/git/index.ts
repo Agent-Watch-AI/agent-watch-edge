@@ -4,5 +4,5 @@
  */
 export type { GitContext, GitContextOptions, GitRunner, GitUserEmailOptions, RemoteParts } from './types/git.types.js';
 
-export { collectGitContext, gitUserEmail } from './git-context.js';
+export { collectGitContext, developerIdentity, gitUserEmail } from './git-context.js';
 export { normalizeRemote, remoteHash, stripRemoteCredentials } from './remote-sanitize.js';

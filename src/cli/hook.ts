@@ -2,8 +2,9 @@ import process from 'node:process';
 import { loadConfig } from '../config/config-store.js';
 import { debugLog, warnLog } from '../core/logger.js';
 import { runHookPipeline } from '../pipeline/hook-pipeline.js';
+import type { HookPipelineState } from '../pipeline/types/pipeline.types.js';
 import { getProvider } from '../providers/registry.js';
-import type { AgentProvider } from '../providers/types/provider.types.js';
+import type { AgentProvider, ProviderHookResponse } from '../providers/types/provider.types.js';
 import { resolvePaths } from '../storage/paths.js';
 import { MAX_STDIN_BYTES, STDIN_TIMEOUT_MS } from './constants/cli.constants.js';
 import type { HookRunOptions } from './types/cli.types.js';
@@ -17,6 +18,11 @@ export type { HookRunOptions } from './types/cli.types.js';
  * agent. Every failure — an unknown agent, an unreadable payload, a broken
  * config, a stage that throws — degrades to the provider's safe response with
  * exit code 0. Telemetry is worth strictly less than the developer's session.
+ *
+ * The one answer that is not passive comes from the flow: when the platform
+ * explicitly refused this developer's turn, the provider's own refusal is
+ * written instead of silence. It is still exit code 0 — a refusal the agent
+ * understands, not a hook that failed.
  *
  * @param agentId - Value of `--agent`.
  * @param options - Environment, injected stdin, dry-run flag, stdout sink.
@@ -34,9 +40,8 @@ export async function runHook(agentId: string, options: HookRunOptions): Promise
   const payload = await readPayload(options);
 
   try {
-    const response = provider.getHookResponse(payload);
-
-    if (payload !== undefined) await processPayload(provider, payload, options);
+    const result = payload === undefined ? undefined : await processPayload(provider, payload, options);
+    const response = respondToDecision(provider, payload, result);
 
     if (response.stdout) writeStdout(options, response.stdout);
 
@@ -50,13 +55,44 @@ export async function runHook(agentId: string, options: HookRunOptions): Promise
 }
 
 /**
+ * What to answer the agent with.
+ *
+ * The provider's passive response unless the flow came back carrying a refusal
+ * *and* the provider knows how to express one for this hook. A provider that
+ * returns nothing is not overridden into silence-plus-block: no refusal is sent
+ * on a protocol whose contract for it is unverified.
+ *
+ * @param provider - The agent's provider.
+ * @param payload - Decoded hook payload.
+ * @param result - Final flow state, when the payload was processed.
+ * @returns The response to write.
+ */
+function respondToDecision(provider: AgentProvider, payload: unknown, result?: HookPipelineState): ProviderHookResponse {
+  const message = result?.blockMessage;
+
+  if (message === undefined) return provider.getHookResponse(payload);
+
+  const refusal = provider.getBlockResponse?.(payload, message);
+
+  if (!refusal) return provider.getHookResponse(payload);
+
+  // The agent shows `message` through its own protocol, but a prompt that
+  // vanishes with its explanation buried in a transcript view is a support
+  // ticket: say it on stderr too.
+  warnLog(message);
+
+  return refusal;
+}
+
+/**
  * Run one payload through the hook flow and print a dry run's result.
  *
  * @param provider - The agent's provider.
  * @param payload - Decoded hook payload.
  * @param options - Environment, dry-run flag and stdout sink.
+ * @returns The flow's final state.
  */
-async function processPayload(provider: AgentProvider, payload: unknown, options: HookRunOptions): Promise<void> {
+async function processPayload(provider: AgentProvider, payload: unknown, options: HookRunOptions): Promise<HookPipelineState> {
   const paths = resolvePaths(options.env);
   const loaded = await loadConfig(paths);
   const result = await runHookPipeline({
@@ -68,9 +104,9 @@ async function processPayload(provider: AgentProvider, payload: unknown, options
     dryRun: options.dryRun === true
   });
 
-  if (!options.dryRun) return;
+  if (options.dryRun) writeStdout(options, JSON.stringify({ events: result.state.outbound }, null, 2) + '\n');
 
-  writeStdout(options, JSON.stringify({ events: result.state.outbound }, null, 2) + '\n');
+  return result.state;
 }
 
 /**

@@ -1,8 +1,9 @@
 import type { z } from 'zod';
-import type { captureSchema, configSchema, otelSchema } from '../schemas/config.schema.js';
+import type { captureSchema, configSchema, enforcementSchema, otelSchema } from '../schemas/config.schema.js';
 
 export type CaptureConfig = z.infer<typeof captureSchema>;
 export type OtelConfig = z.infer<typeof otelSchema>;
+export type EnforcementConfig = z.infer<typeof enforcementSchema>;
 export type AgentWatchConfig = z.infer<typeof configSchema>;
 
 /** Name of one native OTLP signal. */

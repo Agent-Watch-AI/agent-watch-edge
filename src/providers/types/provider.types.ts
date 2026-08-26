@@ -75,6 +75,18 @@ export interface AgentProvider {
   parseHookEvent(payload: unknown, context: HookContext): Promise<AgentWatchEvent[]>;
   getHookResponse(payload: unknown): ProviderHookResponse;
   /**
+   * The agent's own way of refusing the turn this payload belongs to, when this
+   * hook is one it can refuse.
+   *
+   * Only the prompt-submit hook of each agent is a gate: it is the last moment
+   * before the turn's first LLM call, so a refusal there costs nothing that has
+   * already been paid for. Every other payload — and every provider whose
+   * refusal contract is not verified — returns undefined, which means the turn
+   * proceeds. Blocking is a decision the platform makes; a provider only knows
+   * how to say it.
+   */
+  getBlockResponse?(payload: unknown, message: string): ProviderHookResponse | undefined;
+  /**
    * Working directory this payload was produced in, when the provider does not
    * report it as a top-level `cwd`. Git context, repository config and ticket
    * candidates all hang off this path, so a provider that nests it (Antigravity

@@ -52,4 +52,14 @@ export const CLAUDE_TOOL_EVENTS: ReadonlySet<string> = new Set(['PreToolUse', 'P
 /** Hooks that report a tool call as starting rather than finishing. */
 export const CLAUDE_TOOL_START_EVENTS: ReadonlySet<string> = new Set(['PreToolUse', 'PermissionRequest']);
 
+/**
+ * The one hook a budget refusal may travel on.
+ *
+ * `UserPromptSubmit` is the last moment before the turn's first request, and
+ * Claude Code documents `{"decision":"block","reason":…}` there as "the prompt
+ * is erased and the reason is shown to the user" — exactly the refusal this
+ * feature needs, with the platform's sentence as the reason.
+ */
+export const CLAUDE_PROMPT_SUBMIT_EVENTS: ReadonlySet<string> = new Set(['UserPromptSubmit']);
+
 export const CLAUDE_UNKNOWN_EVENT = 'unknown';

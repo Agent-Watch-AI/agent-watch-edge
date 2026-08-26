@@ -4,7 +4,7 @@ import { asRecord } from '../core/object.js';
 import { detectBillingMode } from '../billing/billing-mode.js';
 import type { AgentWatchEvent, ContentEvidence, UsageBillingMode } from '../events/types/events.types.js';
 import { sha256Hex } from '../events/event-id.js';
-import { gitUserEmail } from '../git/git-context.js';
+import { developerIdentity } from '../git/git-context.js';
 import { sanitizeValue } from '../privacy/sanitizer.js';
 import { acquireLock } from '../storage/lock.js';
 import type { ReleaseLock } from '../storage/types/storage.types.js';
@@ -255,7 +255,7 @@ async function closeTurnLocked(
     surface: resolveSurface(stopEvent.agent.provider, options.env),
     sessionId,
     turnId: stopTurnId,
-    developerId: await resolveDeveloperId(options),
+    developerId: await developerIdentity(options.config.developerEmail, options.cwd, { home: options.env.home }),
     installationId: options.config.installationId,
     git: stopEvent.git,
     featureCandidates: stopEvent.feature?.candidates,
@@ -430,18 +430,6 @@ async function readTranscriptUsage(
   if (!reader || window.startedAt === undefined || typeof transcriptPath !== 'string') return undefined;
 
   return reader(transcriptPath, window.startedAt, window.untilIso, excludeMessageIds);
-}
-
-/**
- * Developer identity for the summary: the configured one, else git's.
- *
- * @param options - Tracking options.
- * @returns The identity, or undefined when neither source has one.
- */
-async function resolveDeveloperId(options: TrackTurnOptions): Promise<string | undefined> {
-  if (options.config.developerEmail) return options.config.developerEmail;
-
-  return gitUserEmail(options.cwd, { home: options.env.home });
 }
 
 /**

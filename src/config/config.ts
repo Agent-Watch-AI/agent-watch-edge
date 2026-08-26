@@ -1,4 +1,5 @@
 import {
+  ENFORCEMENT_PATH,
   EVENTS_PATH,
   OTEL_ALL,
   OTEL_NONE,
@@ -10,8 +11,8 @@ import {
 import { configSchema } from './schemas/config.schema.js';
 import type { AgentWatchConfig, OtelConfig, OtelSignalName } from './types/config.types.js';
 
-export { captureSchema, configSchema, deliverySchema, emitSchema, otelSchema } from './schemas/config.schema.js';
-export type { AgentWatchConfig, CaptureConfig, OtelConfig, OtelSignalName } from './types/config.types.js';
+export { captureSchema, configSchema, deliverySchema, emitSchema, enforcementSchema, otelSchema } from './schemas/config.schema.js';
+export type { AgentWatchConfig, CaptureConfig, EnforcementConfig, OtelConfig, OtelSignalName } from './types/config.types.js';
 
 /**
  * The configuration a deliberate `agentwatch setup` writes: full capture.
@@ -106,6 +107,24 @@ export function otlpBaseUrl(config: AgentWatchConfig): string | undefined {
   if (!config.endpoint) return undefined;
 
   return joinUrl(config.endpoint, OTLP_BASE_PATH);
+}
+
+/**
+ * Where the pre-turn budget check asks its question.
+ *
+ * Derived from the same base as everything else, so a tenant configures one
+ * endpoint; the override exists for the same reason the other two do — a
+ * deployment that does not put every route behind one host.
+ *
+ * @param config - Effective configuration.
+ * @returns The decision URL, or undefined when no backend is configured.
+ */
+export function enforcementUrl(config: AgentWatchConfig): string | undefined {
+  if (config.enforcementUrl) return config.enforcementUrl;
+
+  if (!config.endpoint) return undefined;
+
+  return joinUrl(config.endpoint, ENFORCEMENT_PATH);
 }
 
 /**

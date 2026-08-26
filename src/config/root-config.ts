@@ -44,6 +44,25 @@ export function selectRoot(roots: Readonly<Record<string, RootOverride>> | undef
 }
 
 /**
+ * Whether this machine files identities under project roots.
+ *
+ * The offline queue asks this before it adopts a backlog that records no
+ * identity: with roots configured, an unattributed entry may belong to a tenant
+ * other than the one running, and adopting it would deliver that tenant's usage
+ * under the wrong bearer.
+ *
+ * @param config - The machine's global config, before roots are stripped.
+ * @returns True when at least one root is configured.
+ */
+export function hasProjectRoots(config: AgentWatchConfig): boolean {
+  const roots = config.roots;
+
+  if (!roots) return false;
+
+  return Object.keys(roots).length > 0;
+}
+
+/**
  * Apply the matching project root's identity to the global config.
  *
  * The `roots` block itself is stripped from the result: every consumer

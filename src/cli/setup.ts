@@ -10,6 +10,7 @@ import type { EnrollmentResult } from '../enrollment/types/enrollment.types.js';
 import { providers } from '../providers/registry.js';
 import type { AgentProvider, DetectionResult, SetupContext, SetupOutcome } from '../providers/types/provider.types.js';
 import { saveInstallState } from '../storage/install-state.js';
+import { queuePartition } from '../transport/queue-partition.js';
 import type { InstallState } from '../storage/types/storage.types.js';
 import { buildCliContext, buildHookCommand, buildQueue } from './context.js';
 import type { CliContext, SetupOptions } from './types/cli.types.js';
@@ -265,6 +266,11 @@ async function resolveDeveloperEmail(
  * backend is a routing decision only the user can make, because the previous URL
  * may belong to another organization. So: ask, never assume.
  *
+ * The backlog is read from the *previous* identity's queue partition and moved
+ * into the new one, because re-enrolling normally changes the token as well as
+ * the URL; asking about the URL and then re-pinning entries no partition drains
+ * would answer the question and still lose the events.
+ *
  * @param context - Resolved CLI context.
  * @param previousConfig - Config before this run.
  * @param config - Config this run just wrote.
@@ -281,7 +287,7 @@ async function offerBacklogRetarget(
 
   if (!previousUrl || !configuredUrl || previousUrl === configuredUrl) return;
 
-  const queue = buildQueue({ ...context, config });
+  const queue = buildQueue({ ...context, config: previousConfig });
   const stranded = await queue.pendingFor(previousUrl);
 
   if (stranded === 0) return;
@@ -296,7 +302,7 @@ async function offerBacklogRetarget(
     return;
   }
 
-  const retargeted = await queue.retarget(configuredUrl, previousUrl);
+  const retargeted = await queue.retarget(configuredUrl, previousUrl, queuePartition(context.paths.queueDir, config.token));
 
   println(retargeted ? `${symbols.ok} offline backlog re-routed to the new backend` : `${symbols.warn} queue busy; backlog not re-routed — re-run setup to retry`);
 }

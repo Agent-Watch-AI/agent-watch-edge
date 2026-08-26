@@ -20,6 +20,7 @@ export { ANY_DESTINATION, BACKEND_COOLDOWN_MS } from './constants/transport.cons
 export { HttpTransport } from './http-transport.js';
 export { edgeHeaders } from './headers.js';
 export { EventQueue } from './queue.js';
+export { queuePartition, settleLegacyQueue, unattributedCount, unattributedQueue } from './queue-partition.js';
 export { BackendCooldown } from './cooldown.js';
 export { DeliveryStats } from './delivery-stats.js';
 export { deliverEvents } from './delivery.js';

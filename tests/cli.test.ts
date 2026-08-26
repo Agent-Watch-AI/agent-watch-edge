@@ -11,7 +11,8 @@ import { resolvePaths } from '../src/storage/paths.js';
 import { EventQueue } from '../src/transport/queue.js';
 import { saveConfig } from '../src/config/config-store.js';
 import { defaultConfig } from '../src/config/config.js';
-import { makeTempEnv, readJson, type TempWorld } from './helpers.js';
+import { makeTempEnv, queueEntryFiles, readJson, readQueueEntries, type TempWorld } from './helpers.js';
+import { queuePartition } from '../src/transport/queue-partition.js';
 import { claudePostToolUseEdit, claudeUserPromptSubmit } from './fixtures/claude.js';
 
 describe('CLI commands', () => {
@@ -188,7 +189,15 @@ describe('CLI commands', () => {
 
     async function enqueuePinned(): Promise<EventQueue> {
       const paths = resolvePaths(world.env);
-      const queue = new EventQueue({ queueDir: paths.queueDir, locksDir: paths.locksDir, maxEvents: 100, maxAttempts: 3, maxEventAgeDays: 7 });
+      const config = await readJson<{ token?: string }>(paths.configFile);
+      // Seed the partition the configured identity actually drains.
+      const queue = new EventQueue({
+        queueDir: queuePartition(paths.queueDir, config.token),
+        locksDir: paths.locksDir,
+        maxEvents: 100,
+        maxAttempts: 3,
+        maxEventAgeDays: 7
+      });
 
       await queue.enqueue([{ id: 'evt_pinned', event: { type: 'turn.summary' } } as unknown as Parameters<EventQueue['enqueue']>[0][number]], 'https://backend.example.com/v1/events');
 
@@ -197,9 +206,9 @@ describe('CLI commands', () => {
 
     async function pinnedDestination(): Promise<string> {
       const paths = resolvePaths(world.env);
-      const files = await fs.readdir(paths.queueDir);
+      const queued = await readQueueEntries<{ destination?: string }>(paths.queueDir);
 
-      return JSON.parse(await fs.readFile(path.join(paths.queueDir, files[0]!), 'utf8')).destination;
+      return queued[0]!.destination!;
     }
 
     it('re-routes the offline backlog to a new backend only after asking', async () => {
@@ -269,9 +278,7 @@ describe('CLI commands', () => {
       expect(code).toBe(0);
       expect(stdout).toBe(''); // passive observer: silence on stdout
 
-      const queueFiles = await fs.readdir(paths.queueDir).catch(() => []);
-
-      expect(queueFiles).toEqual([]);
+      expect(await queueEntryFiles(paths.queueDir)).toEqual([]);
     });
 
     it('tolerates malformed stdin', async () => {

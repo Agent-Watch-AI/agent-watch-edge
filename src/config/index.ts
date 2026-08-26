@@ -19,4 +19,4 @@ export { captureSchema, configSchema, deliverySchema, emitSchema, otelSchema } f
 export { defaultConfig, enabledSignalNames, eventsUrl, joinUrl, otelEnabled, otlpBaseUrl, parseOtelSignals } from './config.js';
 export { ensureInstallationId, loadConfig, saveConfig } from './config-store.js';
 export { findRepoConfigFile, loadEffectiveConfig, mergeRepoConfig } from './repo-config.js';
-export { applyRootOverride, selectRoot } from './root-config.js';
+export { applyRootOverride, hasProjectRoots, selectRoot } from './root-config.js';

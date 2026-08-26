@@ -142,6 +142,8 @@ Longest match wins, so a checkout nested inside a workspace overrides the worksp
 
 *Caveat: agents export native OTLP to one machine-wide endpoint, so roots on different backends split the hook path but not that export. Roots on the same backend — the usual case — differ only in bearer, which `otel-headers` resolves per directory.*
 
+The offline queue is partitioned to match: `<data>/queue/<digest-of-token>/`, one directory per identity, so a drain only ever sends the backlog belonging to the token it is signing with. An idle tenant's backlog waits for that tenant's next hook rather than leaving under someone else's bearer. Upgrading from a version without partitions adopts the existing backlog automatically when the machine has a single identity; when it already has several, those entries name no tenant, so they are moved to `<data>/queue/unattributed/` and delivered to nobody — `agentwatch status` and `agentwatch doctor` say how many and where. Move them into a tenant's partition to deliver them, or delete the directory to discard them.
+
 ### Budget enforcement (pre-turn check)
 
 When a backend budget policy is set to **block** and the developer has breached it, the Edge stops

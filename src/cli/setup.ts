@@ -1,8 +1,9 @@
+import path from 'node:path';
 import process from 'node:process';
 import readline from 'node:readline/promises';
 import { defaultConfig, enabledSignalNames, eventsUrl, parseOtelSignals } from '../config/config.js';
 import { ensureInstallationId, saveConfig } from '../config/config-store.js';
-import type { AgentWatchConfig, OtelConfig } from '../config/types/config.types.js';
+import type { AgentWatchConfig, OtelConfig, RootOverride } from '../config/types/config.types.js';
 import { collectGitContext, gitUserEmail } from '../git/git-context.js';
 import { ManualEnrollmentProvider } from '../enrollment/manual-enrollment.js';
 import type { EnrollmentResult } from '../enrollment/types/enrollment.types.js';
@@ -77,21 +78,25 @@ export async function runSetup(options: SetupOptions): Promise<number> {
     return 1;
   }
 
-  const config = ensureInstallationId({
-    ...baseConfig,
+  const identity: RootOverride = {
     endpoint: enrolled.endpoint,
     token: enrolled.token,
-    developerEmail: await resolveDeveloperEmail(options, baseConfig, ask),
-    otel,
-    emit: { ...baseConfig.emit, llmCalls: true }
-  });
+    developerEmail: await resolveDeveloperEmail(options, baseConfig, ask)
+  };
+  const rootPath = options.root === undefined ? undefined : path.resolve(options.env.cwd, options.root);
+  const withIdentity = rootPath === undefined ? { ...baseConfig, ...identity } : withRootIdentity(baseConfig, rootPath, identity);
+  const config = ensureInstallationId({ ...withIdentity, otel, emit: { ...baseConfig.emit, llmCalls: true } });
 
   await saveConfig(context.paths, config);
   await offerBacklogRetarget(context, baseConfig, config, ask);
 
-  println(`${symbols.ok} backend: ${config.endpoint}`);
+  if (rootPath !== undefined) println(`${symbols.ok} project root: ${rootPath}`);
 
-  if (config.developerEmail) println(`${symbols.ok} developer: ${config.developerEmail}`);
+  println(`${symbols.ok} backend: ${identity.endpoint}`);
+
+  for (const warning of rootWarnings(baseConfig, rootPath, identity)) println(`${symbols.warn} ${warning}`);
+
+  if (identity.developerEmail) println(`${symbols.ok} developer: ${identity.developerEmail}`);
 
   println(`${symbols.ok} otel signals: ${enabledSignalNames(otel).join(', ') || 'none'}`);
   println(dim(`  config: ${context.paths.configFile}`));
@@ -103,6 +108,48 @@ export async function runSetup(options: SetupOptions): Promise<number> {
   println(dim('  run `agentwatch status` anytime, `agentwatch doctor` to diagnose'));
 
   return failures === 0 ? 0 : 1;
+}
+
+/**
+ * File an identity under a project root instead of making it the machine's own.
+ *
+ * The global endpoint is filled in only when the machine has none: agents
+ * export native OTLP straight to one machine-wide endpoint, so something has to
+ * be installable there, but an endpoint already chosen by another tenant is
+ * never overwritten.
+ *
+ * @param base - Config being edited.
+ * @param rootPath - Absolute project root.
+ * @param identity - Credentials and endpoints for work beneath it.
+ * @returns The config with the root recorded.
+ */
+function withRootIdentity(base: AgentWatchConfig, rootPath: string, identity: RootOverride): AgentWatchConfig {
+  return {
+    ...base,
+    endpoint: base.endpoint ?? identity.endpoint,
+    roots: { ...base.roots, [rootPath]: identity }
+  };
+}
+
+/**
+ * What a root install cannot make true, said out loud rather than discovered
+ * later in a tenant's missing usage ledger.
+ *
+ * @param base - Config before this run.
+ * @param rootPath - The root being written, if any.
+ * @param identity - Credentials for it.
+ * @returns Zero or one warning.
+ */
+function rootWarnings(base: AgentWatchConfig, rootPath: string | undefined, identity: RootOverride): readonly string[] {
+  if (rootPath === undefined) return [];
+
+  const machineEndpoint = base.endpoint ?? identity.endpoint;
+
+  if (machineEndpoint === identity.endpoint) return [];
+
+  return [
+    `native OTLP export stays machine-wide at ${machineEndpoint}; hook-path events for ${rootPath} go to ${identity.endpoint}`
+  ];
 }
 
 /**

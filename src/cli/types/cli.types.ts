@@ -34,6 +34,11 @@ export interface SetupOptions {
   readonly token?: string;
   /** Developer identity for turn summaries; falls back to `git config user.email`. */
   readonly developerEmail?: string;
+  /**
+   * Absolute project root to file this identity under, instead of making it the
+   * machine's default. This is what lets one machine report to two tenants.
+   */
+  readonly root?: string;
   /** OTLP signal selection: "all", "none" or a comma list of logs,traces,metrics. */
   readonly otel?: string;
   /** Non-interactive: fail instead of prompting. */

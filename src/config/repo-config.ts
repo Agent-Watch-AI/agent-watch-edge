@@ -6,6 +6,7 @@ import { debugLog } from '../core/logger.js';
 import { readJsonFile } from '../storage/json-file.js';
 import type { AgentWatchPaths } from '../storage/types/storage.types.js';
 import { loadConfig } from './config-store.js';
+import { applyRootOverride } from './root-config.js';
 import {
   GLOBAL_ONLY_BLOCKS,
   GLOBAL_ONLY_EMIT_KEYS,
@@ -101,9 +102,15 @@ export async function loadEffectiveConfig(paths: AgentWatchPaths, cwd: string): 
     return { config: global, warnings: [warning] };
   }
 
+  // Which tenant this directory reports to, before any repo file is read: a
+  // committed file may narrow what is captured, never who it belongs to.
+  const rooted = applyRootOverride(global, cwd);
+  const base = rooted.config;
+  const rootPath = rooted.root?.path;
+
   const repoConfigFile = await findRepoConfigFileSafely(cwd);
 
-  if (!repoConfigFile) return { config: global, warnings: [] };
+  if (!repoConfigFile) return { config: base, warnings: [], rootPath };
 
   const read = await readJsonFile(repoConfigFile);
 
@@ -112,14 +119,14 @@ export async function loadEffectiveConfig(paths: AgentWatchPaths, cwd: string): 
 
     for (const warning of warnings) debugLog(warning);
 
-    return { config: global, warnings, repoConfigFile };
+    return { config: base, warnings, repoConfigFile, rootPath };
   }
 
-  const merged = mergeRepoConfig(global, read.value);
+  const merged = mergeRepoConfig(base, read.value);
 
   for (const warning of merged.warnings) debugLog(warning);
 
-  return { ...merged, repoConfigFile };
+  return { ...merged, repoConfigFile, rootPath };
 }
 
 /** A repo override set with the global-only parts removed. */

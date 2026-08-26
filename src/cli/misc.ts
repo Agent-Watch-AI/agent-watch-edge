@@ -47,6 +47,8 @@ export async function runConfig(env: Env): Promise<number> {
 
   const effective = await loadEffectiveConfig(context.paths, env.cwd);
 
+  if (effective.rootPath) println(dim(`# project root: ${effective.rootPath}`));
+
   if (effective.repoConfigFile) println(dim(`# repo overrides: ${effective.repoConfigFile}`));
 
   for (const warning of effective.warnings) println(dim(`# warning: ${warning}`));
@@ -68,7 +70,10 @@ export async function runConfig(env: Env): Promise<number> {
  */
 export async function runOtelHeaders(env: Env): Promise<number> {
   const context = await buildCliContext(env);
-  const headers = context.config.token ? { Authorization: `Bearer ${context.config.token}` } : {};
+  // Effective, not global: with two tenants on one machine the token that
+  // signs this export is decided by the directory the agent is running in.
+  const effective = await loadEffectiveConfig(context.paths, env.cwd);
+  const headers = effective.config.token ? { Authorization: `Bearer ${effective.config.token}` } : {};
 
   process.stdout.write(JSON.stringify(headers));
 

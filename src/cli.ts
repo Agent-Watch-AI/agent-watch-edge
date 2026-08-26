@@ -10,7 +10,7 @@ import type { ParsedArgs } from './cli/types/cli.types.js';
 const HELP = `agentwatch — telemetry edge for AI coding agents
 
 Usage:
-  agentwatch setup [enrollment-url] [--endpoint <url>] [--token <token>] [--developer-email <email>] [--otel <signals>] [--yes]
+  agentwatch setup [enrollment-url] [--endpoint <url>] [--token <token>] [--developer-email <email>] [--root <path>] [--otel <signals>] [--yes]
   agentwatch status
   agentwatch doctor [--json]
   agentwatch uninstall [--agent <id>] [--purge]
@@ -23,6 +23,10 @@ Flags:
   --endpoint <url>          backend base URL events are sent to
   --token <token>           bearer token for the backend
   --developer-email <email> identity attached to turn summaries (default: git config user.email)
+  --root <path>             file this tenant's identity under a project root instead of the
+                            machine default, so one machine can report to two tenants: work
+                            at or below <path> uses this token, everything else keeps the
+                            machine's own. Longest matching root wins
   --otel <signals>          native OTLP signals agents export to the backend: comma list of
                             logs,traces,metrics, or "all"/"none" (default: logs — the
                             per-request usage/cost ledger the backend turns into llm.call)
@@ -39,8 +43,11 @@ Configuration:
   global                    ~/.agentwatch/config.json (written by setup)
   per repository            .agentwatch.json in the repo root — overrides the global
                             config for work in that repo; "token", "installationId",
-                            "developerEmail", "endpoint", "eventsUrl" and "otlpUrl"
-                            are global-only and ignored there
+                            "developerEmail", "endpoint", "eventsUrl", "otlpUrl" and
+                            "roots" are global-only and ignored there
+  per project root          "roots" in the global config — absolute path to the identity
+                            used beneath it (see --root). Identity only: what is captured
+                            stays machine-wide
 `;
 
 /**
@@ -74,6 +81,7 @@ async function main(): Promise<number> {
         endpoint: stringFlag(parsed, 'endpoint'),
         token: stringFlag(parsed, 'token'),
         developerEmail: stringFlag(parsed, 'developer-email'),
+        root: stringFlag(parsed, 'root'),
         otel: stringFlag(parsed, 'otel'),
         yes: boolFlag(parsed, 'yes') || boolFlag(parsed, 'non-interactive')
       });

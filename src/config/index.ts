@@ -1,5 +1,5 @@
 /**
- * What the bridge is configured to do: the global file, the repository overlay
+ * What the edge is configured to do: the global file, the repository overlay
  * on top of it, and the routes derived from the endpoint.
  */
 export type {

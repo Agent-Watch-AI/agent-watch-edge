@@ -1,4 +1,4 @@
-# LLM block enforcement — Bridge side
+# LLM block enforcement — Edge side
 
 Date: 2026-08-26
 Status: implemented
@@ -6,18 +6,18 @@ Counterpart: `agent-watch-core/docs/superpowers/specs/2026-08-26-llm-block-enfor
 
 ## Problem
 
-The platform now answers one question the Bridge can ask before a turn starts:
+The platform now answers one question the Edge can ask before a turn starts:
 
 ```
 GET /v1/enforcement/decision?developer_id=<external id>
-Authorization: Bearer aw_brg_…
+Authorization: Bearer aw_edge_…
 
 { "decision": "allow" }
 { "decision": "block", "message": "Ivan Petrov passed his $500 hard limit and has now spent $612 this month." }
 ```
 
 Nothing asks it. A policy whose action is `block` still produces only an alert.
-The Bridge is the one component in front of a developer's LLM calls, so it is
+The Edge is the one component in front of a developer's LLM calls, so it is
 the one that can act — and the one that can take an entire engineering
 organization offline if it acts on anything other than a clear refusal.
 
@@ -168,7 +168,7 @@ the only one a developer-scoped policy can be matched through.
 
 The check runs on the developer's machine, against a config file they own. It
 can be turned off by editing that file, and the whole feature can be removed by
-uninstalling the Bridge. It is a guardrail for people who are not trying to get
+uninstalling the Edge. It is a guardrail for people who are not trying to get
 around it, and the counterpart document says the same — nothing here should be
 read as a control that survives an adversary.
 
@@ -190,7 +190,7 @@ src/providers/types/provider.types.ts               # + getBlockResponse
 src/providers/{claude,codex,cursor,gemini}/*.provider.ts  # each agent's refusal shape
 src/config/{config.ts,schemas,constants,types}      # + enforcement block and URL
 src/git/git-context.ts                              # developerIdentity, shared with the turn path
-src/transport/headers.ts                            # the Bridge's request headers, shared
+src/transport/headers.ts                            # the Edge's request headers, shared
 src/cli/status.ts                                   # reports whether enforcement is on
 example/server.mjs                                  # the route, for local testing
 tests/enforcement.test.ts

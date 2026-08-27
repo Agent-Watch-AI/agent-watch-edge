@@ -1,5 +1,5 @@
 import { debugLog } from '../core/logger.js';
-import { bridgeHeaders } from '../transport/headers.js';
+import { edgeHeaders } from '../transport/headers.js';
 import { DEVELOPER_ID_PARAM } from './constants/enforcement.constants.js';
 import { decisionSchema } from './schemas/enforcement.schema.js';
 import type { DecisionRequest, EnforcementDecision } from './types/enforcement.types.js';
@@ -24,7 +24,7 @@ export async function requestDecision(request: DecisionRequest): Promise<Enforce
       method: 'GET',
       // A GET carries no body, so no content type: the identifying triple is all
       // the platform needs to resolve the tenant.
-      headers: bridgeHeaders(request.token, request.installationId),
+      headers: edgeHeaders(request.token, request.installationId),
       signal: AbortSignal.timeout(request.timeoutMs)
     });
 

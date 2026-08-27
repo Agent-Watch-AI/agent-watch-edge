@@ -1,6 +1,6 @@
 # AI Agent Instructions & Architectural Guidelines
 
-When writing, refactoring, or generating code in `@agentwatch-ai/bridge`, strictly follow these directives. `STYLEGUIDE.md` is the long form; this is the checklist.
+When writing, refactoring, or generating code in `@agentwatch-ai/edge`, strictly follow these directives. `STYLEGUIDE.md` is the long form; this is the checklist.
 
 ## 1. Code Style & Functional Programming
 - **Pure Functions**: keep functions pure, deterministic, and free of global mutations or side-effects in core domain logic. Never mutate an argument — including accumulators: return a delta and let the caller fold it.

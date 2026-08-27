@@ -71,7 +71,7 @@ export const enforcementSchema = z
   })
   .strip();
 
-/** Which records the bridge itself emits. */
+/** Which records the edge itself emits. */
 export const emitSchema = z
   .object({
     /** One flat summary per prompt→response turn, emitted on Stop. */

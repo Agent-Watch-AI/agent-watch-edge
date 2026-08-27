@@ -1,4 +1,4 @@
-# Contributing to AgentWatch Bridge
+# Contributing to AgentWatch Edge
 
 Thanks for helping! The project is TypeScript (ESM, Node >= 20), tested with Vitest.
 

@@ -1,5 +1,5 @@
 {
-  "name": "@agentwatch-ai/bridge",
+  "name": "@agentwatch-ai/edge",
   "version": "0.2.5",
   "description": "Connect Claude Code, Codex and Cursor telemetry to your backend with turn, Git and ticket-key attribution.",
   "license": "MIT",

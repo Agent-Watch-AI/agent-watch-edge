@@ -1,4 +1,4 @@
-# AgentWatch Bridge — Architecture
+# AgentWatch Edge — Architecture
 
 Status: implementation blueprint (written before code, per project process).
 Date: 2026-08-07.
@@ -13,7 +13,7 @@ Every provider-specific claim below is tagged:
 
 ## 1. Reference repository analysis
 
-`o11y-dev/opentelemetry-hooks` (MIT-declared, Python, ~6k-line single module + bash installer) bridges
+`o11y-dev/opentelemetry-hooks` (MIT-declared, Python, ~6k-line single module + bash installer) connects
 native coding-agent hooks (Cursor, Windsurf, Claude Code, Copilot, Gemini, Codex, OpenCode) to
 OpenTelemetry traces/logs. Key ideas worth reusing **[ref]**:
 
@@ -174,7 +174,7 @@ once for the backend base URL; derived endpoints (all overridable in `~/.agentwa
 `<base>/v1/events` for turn summaries, `<base>/v1/otlp` as the OTLP base (standard OTLP/HTTP
 paths append `/v1/metrics`, `/v1/logs` and `/v1/traces`; Claude aggregate metrics remain enabled
 as a compatibility path, while Codex aggregate metrics are disabled in its `[otel]` block).
-The Bridge does not convert or proxy OTLP; agents export directly. Ownership tracking: everything
+The Edge does not convert or proxy OTLP; agents export directly. Ownership tracking: everything
 we write is recorded in `~/.agentwatch/install-state.json` so uninstall removes exactly what we
 added (with match-by-marker fallbacks).
 
@@ -221,7 +221,7 @@ total and degrades only to an agent-type or `unattributed` group. Calls are idem
    explicitly versioned nowhere — pinned in per-provider modules, covered by doctor, documented
    in README.
 8. End-to-end no-loss depends on the external OTLP receiver persisting each request before it
-   acknowledges the exporter. The bridge can require and diagnose export, but cannot make a
+   acknowledges the exporter. The edge can require and diagnose export, but cannot make a
    non-durable receiver lossless.
 7. Windows support: paths module isolates XDG/APPDATA decisions; hooks themselves are
    shell-command based and untested on Windows in this MVP (documented limitation).

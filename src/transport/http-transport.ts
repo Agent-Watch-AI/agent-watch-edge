@@ -4,7 +4,7 @@ import {
   JSON_CONTENT_TYPE,
   RETRYABLE_STATUSES
 } from './constants/transport.constants.js';
-import { bridgeHeaders } from './headers.js';
+import { edgeHeaders } from './headers.js';
 import type { DeliveryResult, EventTransport, HttpTransportOptions } from './types/transport.types.js';
 
 export type { HttpTransportOptions } from './types/transport.types.js';
@@ -74,7 +74,7 @@ export class HttpTransport implements EventTransport {
   private headers(): Record<string, string> {
     return {
       [CONTENT_TYPE_HEADER]: JSON_CONTENT_TYPE,
-      ...bridgeHeaders(this.options.token, this.options.installationId)
+      ...edgeHeaders(this.options.token, this.options.installationId)
     };
   }
 }

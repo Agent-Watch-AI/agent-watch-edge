@@ -7,7 +7,7 @@ import { setVerbose } from './core/logger.js';
 import { boolFlag, parseArgs, stringFlag } from './cli/args.js';
 import type { ParsedArgs } from './cli/types/cli.types.js';
 
-const HELP = `agentwatch — telemetry bridge for AI coding agents
+const HELP = `agentwatch — telemetry edge for AI coding agents
 
 Usage:
   agentwatch setup [enrollment-url] [--endpoint <url>] [--token <token>] [--developer-email <email>] [--otel <signals>] [--yes]

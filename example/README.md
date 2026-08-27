@@ -1,6 +1,6 @@
 # Example backend
 
-A zero-dependency logging server for trying AgentWatch Bridge locally. It accepts
+A zero-dependency logging server for trying AgentWatch Edge locally. It accepts
 `turn.summary` on `/v1/events` and native agent OTLP on
 `/v1/otlp/v1/{logs,traces,metrics}`. A production receiver must normalize completed requests
 to `llm.call` and durably upsert before acknowledging OTLP.
@@ -15,7 +15,7 @@ npm run example          # http://127.0.0.1:8787
 # JSON=1 npm run example — also print each event as full JSON
 ```
 
-Terminal 2 — point the bridge at it:
+Terminal 2 — point the edge at it:
 
 ```bash
 node dist/cli.js setup --endpoint http://127.0.0.1:8787 --yes
@@ -29,7 +29,7 @@ normalized `LLM.CALL` records and `OTLP:*` diagnostics; Cursor has no native OTe
 For Codex, remember the one-time trust step: run `codex`, type `/hooks`, trust the AgentWatch
 entries.
 
-Check bridge health anytime:
+Check edge health anytime:
 
 ```bash
 node dist/cli.js status

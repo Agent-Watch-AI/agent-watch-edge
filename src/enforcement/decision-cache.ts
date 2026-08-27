@@ -81,11 +81,11 @@ export class DecisionCache {
  * Hashed rather than composed in the clear: the file would otherwise hold the
  * backend token and the developer's email next to a dollar figure, and neither
  * is needed to read an entry back. Including the URL and the token means a
- * re-pointed or re-credentialed Bridge starts with a cold cache instead of
+ * re-pointed or re-credentialed Edge starts with a cold cache instead of
  * answering from another backend's decisions.
  *
  * @param url - The decision endpoint.
- * @param token - Bridge token the question is asked with.
+ * @param token - Edge token the question is asked with.
  * @param developerId - Identity the question is about.
  * @returns The key.
  */

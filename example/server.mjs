@@ -7,9 +7,12 @@
  *   npm run example              # listens on http://127.0.0.1:8787
  *   PORT=9000 npm run example
  *   JSON=1 npm run example       # also print each event as full JSON
+ *   BLOCK=1 npm run example      # answer every enforcement check with "block"
+ *   BLOCK=dev@acme.test ...      # block just that developer
  *
  * Endpoints:
  *   POST /v1/events               turn.summary records (JSON)
+ *   GET  /v1/enforcement/decision pre-turn budget check (allow / block)
  *   POST /v1/otlp/v1/metrics
  *   POST /v1/otlp/v1/logs
  *   POST /v1/otlp/v1/traces
@@ -21,6 +24,11 @@ import { normalizeOtlpLogs } from '../dist/otlp/normalize.js';
 
 const PORT = Number(process.env.PORT ?? 8787);
 const PRINT_JSON = process.env.JSON === '1';
+// Which developer the pre-turn check refuses: "1" for everyone, an identity for
+// one person, unset for nobody. The Bridge blocks a turn only on an explicit
+// block, so leaving this unset is how the check stays invisible.
+const BLOCK = process.env.BLOCK ?? '';
+const BLOCK_MESSAGE = process.env.BLOCK_MESSAGE ?? 'You passed your $500 monthly hard limit; ask your admin to raise the cap or dismiss the alert.';
 const isTTY = process.stdout.isTTY;
 const paint = (code, text) => (isTTY ? `\u001b[${code}m${text}\u001b[0m` : text);
 const dim = (text) => paint('90', text);
@@ -195,6 +203,22 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === 'GET' && url === '/v1/enforcement/decision') {
+    const developerId = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('developer_id') ?? '';
+    if (developerId === '') {
+      log('ENFORCE', '31', `missing developer_id -> 400${auth}`);
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ message: 'developer_id is required' }));
+      return;
+    }
+    const blocked = BLOCK === '1' || BLOCK === developerId;
+    const decision = blocked ? { decision: 'block', message: BLOCK_MESSAGE } : { decision: 'allow' };
+    log('ENFORCE', blocked ? '31' : '32', `${developerId} -> ${decision.decision}${auth}`);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(decision));
+    return;
+  }
+
   if (req.method === 'GET' && url === '/') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: true, summaries: eventCount, llmCalls: llmCallCount, otlpBatches: otlpCount }));
@@ -210,6 +234,7 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(paint('1', `AgentWatch example backend listening on http://127.0.0.1:${PORT}`));
   console.log(dim('  summary: POST /v1/events'));
   console.log(dim(`  otlp:    POST /v1/otlp/v1/{logs,traces,metrics}`));
+  console.log(dim(`  budget:  GET  /v1/enforcement/decision${BLOCK === '' ? ' (allowing everyone; set BLOCK=1 to refuse)' : ` (blocking ${BLOCK === '1' ? 'everyone' : BLOCK})`}`));
   console.log(dim(`  connect the bridge:  agentwatch setup --endpoint http://127.0.0.1:${PORT} --yes`));
   console.log();
 });

@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- Budget enforcement: before a turn starts, the Bridge asks the backend
+  (`GET <backend>/v1/enforcement/decision?developer_id=…`) whether this developer may make an LLM
+  call, and refuses the prompt in the agent's own protocol when the backend answers `block` —
+  Claude Code (`{"decision":"block","reason":…}`), Codex (`{"continue":false,"stopReason":…}`),
+  Cursor (`{"continue":false,"user_message":…}`) and Gemini CLI (`{"decision":"deny","reason":…}`).
+  The backend's sentence is what the developer is shown. Antigravity has no prompt-level refusal
+  contract and is not gated.
+- The check fails open in every other case: not configured, `enforcement.enabled: false`, no
+  developer identity, a 300 ms timeout, a network error, any non-2xx status, and any body that is
+  not a `block` carrying a message. Exit code stays 0 throughout — a refusal travels in the hook
+  protocol, never as a failed hook.
+- Decisions are cached locally (`<dataDir>/enforcement-cache.json`, 60 s, keyed by a hash of URL,
+  token and identity, mode 0600); failures are never cached. New config: the `enforcement` block
+  (`enabled`, `timeoutMs`, `cacheTtlMs`) and the `enforcementUrl` override, both global-only.
+- A refused prompt records no turn state — it never reached a model — while the offline queue still
+  drains on that hook. `agentwatch status` reports whether enforcement is on, and the example
+  backend gained the route (`BLOCK=1 npm run example` refuses everything).
+
 ## 0.2.0
 
 - Package/documentation: public helpers now ship TypeScript declarations, and the

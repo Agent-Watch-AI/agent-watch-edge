@@ -62,11 +62,31 @@ function reportBackend(context: CliContext): void {
 
   if (context.config.endpoint) {
     println(`${symbols.ok} ${context.config.endpoint}`);
+    reportEnforcement(context);
 
     return;
   }
 
   println(`${symbols.off} not configured — run \`agentwatch setup\``);
+}
+
+/**
+ * Whether a budget cap marked `block` is acted on here.
+ *
+ * Worth a line of its own: it is the one setting that can stop a developer's
+ * turn, so a developer whose prompt was refused should be able to see where that
+ * came from without reading the config file.
+ *
+ * @param context - Resolved CLI context.
+ */
+function reportEnforcement(context: CliContext): void {
+  if (!context.config.enforcement.enabled) {
+    println(`${symbols.off} budget enforcement: off`);
+
+    return;
+  }
+
+  println(`${symbols.ok} budget enforcement: on — a turn stops only when the backend answers "block"`);
 }
 
 /**

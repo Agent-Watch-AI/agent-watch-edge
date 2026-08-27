@@ -43,7 +43,10 @@ export const GEMINI_EVENT_TYPE_MAP: Readonly<Record<string, CanonicalEventType>>
   PostCompact: 'compaction.completed'
 };
 
-/** Hooks reporting a prompt, across old and new naming. */
+/**
+ * Hooks reporting a prompt, across old and new naming. Also the gate a budget
+ * refusal travels on — see the provider's `getBlockResponse`.
+ */
 export const GEMINI_PROMPT_EVENTS: ReadonlySet<string> = new Set(['BeforeAgent', 'UserPromptSubmit']);
 
 /** Hooks reporting a completed generation, across old and new naming. */

@@ -1,13 +1,10 @@
 import type { ProductEvent } from '../events/product-event.js';
 import {
-  AUTHORIZATION_HEADER,
   CONTENT_TYPE_HEADER,
-  INSTALLATION_HEADER,
   JSON_CONTENT_TYPE,
-  RETRYABLE_STATUSES,
-  USER_AGENT,
-  USER_AGENT_HEADER
+  RETRYABLE_STATUSES
 } from './constants/transport.constants.js';
+import { bridgeHeaders } from './headers.js';
 import type { DeliveryResult, EventTransport, HttpTransportOptions } from './types/transport.types.js';
 
 export type { HttpTransportOptions } from './types/transport.types.js';
@@ -77,9 +74,7 @@ export class HttpTransport implements EventTransport {
   private headers(): Record<string, string> {
     return {
       [CONTENT_TYPE_HEADER]: JSON_CONTENT_TYPE,
-      [USER_AGENT_HEADER]: USER_AGENT,
-      ...(this.options.token ? { [AUTHORIZATION_HEADER]: `Bearer ${this.options.token}` } : {}),
-      ...(this.options.installationId ? { [INSTALLATION_HEADER]: this.options.installationId } : {})
+      ...bridgeHeaders(this.options.token, this.options.installationId)
     };
   }
 }

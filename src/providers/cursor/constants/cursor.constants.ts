@@ -98,4 +98,14 @@ export const CURSOR_SHELL_TOOL_NAME = 'Shell';
 /** Attachment field carrying a file path. */
 export const ATTACHMENT_FILE_PATH_KEY = 'file_path';
 
+/**
+ * The one hook a budget refusal may travel on.
+ *
+ * `beforeSubmitPrompt` is the only Cursor hook whose refusal precedes the turn's
+ * first request, and it blocks through `continue: false` rather than the
+ * `permission` field the tool and shell hooks use (verified against
+ * cursor.com/docs, 2026-08). `user_message` is what Cursor shows the developer.
+ */
+export const CURSOR_PROMPT_SUBMIT_EVENTS: ReadonlySet<string> = new Set(['beforeSubmitPrompt']);
+
 export const CURSOR_UNKNOWN_EVENT = 'unknown';

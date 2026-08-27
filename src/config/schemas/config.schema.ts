@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {
   DEFAULT_DRAIN_BATCH_SIZE,
+  DEFAULT_ENFORCEMENT_CACHE_TTL_MS,
+  DEFAULT_ENFORCEMENT_TIMEOUT_MS,
   DEFAULT_MAX_ATTEMPTS,
   DEFAULT_MAX_EVENT_AGE_DAYS,
   DEFAULT_MAX_QUEUE_EVENTS,
@@ -50,6 +52,25 @@ export const otelSchema = z
   })
   .strip();
 
+/**
+ * The pre-turn budget check.
+ *
+ * On by default: a cap a tenant marked `block` in the dashboard is meant to
+ * block, and a guardrail nobody switched on is the same notification nobody
+ * acted on. Only an explicit refusal from the platform ever stops a turn — see
+ * `src/enforcement/enforcement.ts` — so leaving it on costs a developer one
+ * bounded request per turn and nothing else.
+ */
+export const enforcementSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    /** Hard ceiling for the check; it sits between enter and the agent's first call. */
+    timeoutMs: z.number().int().positive().default(DEFAULT_ENFORCEMENT_TIMEOUT_MS),
+    /** Mirrors the platform's own cache TTL for the same decision. */
+    cacheTtlMs: z.number().int().positive().default(DEFAULT_ENFORCEMENT_CACHE_TTL_MS)
+  })
+  .strip();
+
 /** Which records the bridge itself emits. */
 export const emitSchema = z
   .object({
@@ -76,6 +97,7 @@ export const configSchema = z
     /** Overrides; derived from endpoint when absent. */
     eventsUrl: z.string().url().optional(),
     otlpUrl: z.string().url().optional(),
+    enforcementUrl: z.string().url().optional(),
     token: z.string().optional(),
     installationId: z.string().optional(),
     /** Developer identity attached to turn summaries; falls back to `git config user.email`. */
@@ -83,6 +105,7 @@ export const configSchema = z
     capture: captureSchema.default({}),
     emit: emitSchema.default({}),
     otel: otelSchema.default({}),
-    delivery: deliverySchema.default({})
+    delivery: deliverySchema.default({}),
+    enforcement: enforcementSchema.default({})
   })
   .passthrough();

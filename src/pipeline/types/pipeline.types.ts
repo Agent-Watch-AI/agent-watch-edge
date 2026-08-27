@@ -32,6 +32,15 @@ export interface HookPipelineState extends HookPipelineInput {
   readonly config: AgentWatchConfig;
   /** Canonical events the provider adapter produced. */
   readonly events: readonly AgentWatchEvent[];
+  /**
+   * The sentence the platform refused this turn with, when it refused it.
+   *
+   * Set only by the `enforce` stage and only for an explicit `block`; every
+   * failure of that check leaves it absent, which is what makes the turn
+   * proceed. Always non-empty when present — the decision schema will not parse
+   * a refusal without a message — so its presence *is* the refusal.
+   */
+  readonly blockMessage?: string;
   /** The turn summary, when this payload closed a turn. */
   readonly summary?: TurnSummaryEvent;
   /** Records this run intends to send; empty on a dry run. */

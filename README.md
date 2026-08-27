@@ -1,9 +1,9 @@
-# AgentWatch Bridge
+# AgentWatch Edge
 
-[![npm](https://img.shields.io/npm/v/@agentwatch-ai/bridge)](https://www.npmjs.com/package/@agentwatch-ai/bridge)
+[![npm](https://img.shields.io/npm/v/@agentwatch-ai/edge)](https://www.npmjs.com/package/@agentwatch-ai/edge)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A lightweight, zero-daemon telemetry bridge for AI coding agents (**Claude Code**, **OpenAI Codex**, **Cursor**, **Gemini CLI**, and **Google Antigravity**).
+A lightweight, zero-daemon telemetry edge for AI coding agents (**Claude Code**, **OpenAI Codex**, **Cursor**, **Gemini CLI**, and **Google Antigravity**).
 
 It connects agent lifecycle hooks and native OpenTelemetry (OTLP) to your observability backend to attribute LLM usage, costs, tool calls, Git branches, and ticket keys (e.g., `PAY-142`) — without model proxies, MITM intercepts, or background daemons.
 
@@ -15,7 +15,7 @@ It connects agent lifecycle hooks and native OpenTelemetry (OTLP) to your observ
 
 ```bash
 # 1. Install globally
-npm install -g @agentwatch-ai/bridge
+npm install -g @agentwatch-ai/edge
 
 # 2. Configure with your backend
 agentwatch setup --endpoint https://backend.example.com --token YOUR_TOKEN
@@ -97,7 +97,7 @@ agentwatch uninstall --purge                              # Also delete ~/.agent
 | `--dry-run` | Used with `hook`: prints canonical events to stdout instead of sending | `false` |
 | `--json` | Used with `doctor`: output machine-readable JSON | `false` |
 | `--verbose` | Print verbose diagnostic logs to stderr | `false` |
-| `--version` | Display bridge version | — |
+| `--version` | Display edge version | — |
 
 ---
 
@@ -125,7 +125,7 @@ delivery or switch off a budget cap for everyone who clones the repository.*
 
 ### Budget enforcement (pre-turn check)
 
-When a backend budget policy is set to **block** and the developer has breached it, the Bridge stops
+When a backend budget policy is set to **block** and the developer has breached it, the Edge stops
 the turn before the agent's first LLM call: the prompt is refused in the agent's own protocol
 (Claude Code, Codex, Cursor, Gemini CLI) with the backend's explanation shown to the developer.
 
@@ -137,7 +137,7 @@ the turn before the agent's first LLM call: the prompt is refused in the agent's
 
 The check **fails open, always**. A turn stops only on an explicit `{"decision":"block","message":"…"}`
 from `GET <backend>/v1/enforcement/decision`; an unreachable backend, a timeout, any other status and
-any body the Bridge cannot read all let the turn proceed silently. Decisions are cached locally for
+any body the Edge cannot read all let the turn proceed silently. Decisions are cached locally for
 `cacheTtlMs`, so the check costs one bounded request per turn at most. Set `enabled: false` to opt out.
 
 Antigravity is not gated: its pre-invocation hook carries no decision field, so there is no
@@ -156,9 +156,9 @@ To try it locally: `BLOCK=1 npm run example` answers every check with a refusal.
 ### Backend SDK Helpers
 
 ```ts
-import type { ProductEvent } from '@agentwatch-ai/bridge/events';
-import { normalizeOtlpLogs } from '@agentwatch-ai/bridge/otlp';
-import { aggregateTurnUsage } from '@agentwatch-ai/bridge/aggregate-turn';
+import type { ProductEvent } from '@agentwatch-ai/edge/events';
+import { normalizeOtlpLogs } from '@agentwatch-ai/edge/otlp';
+import { aggregateTurnUsage } from '@agentwatch-ai/edge/aggregate-turn';
 ```
 
 ---

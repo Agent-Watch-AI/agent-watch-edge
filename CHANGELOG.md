@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Budget enforcement: before a turn starts, the Bridge asks the backend
+- Budget enforcement: before a turn starts, the Edge asks the backend
   (`GET <backend>/v1/enforcement/decision?developer_id=…`) whether this developer may make an LLM
   call, and refuses the prompt in the agent's own protocol when the backend answers `block` —
   Claude Code (`{"decision":"block","reason":…}`), Codex (`{"continue":false,"stopReason":…}`),

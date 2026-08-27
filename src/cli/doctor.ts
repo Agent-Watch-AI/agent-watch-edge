@@ -203,7 +203,7 @@ async function agentChecks(env: Env, context: CliContext): Promise<Check[]> {
  * Known limitations of one agent, reported as warnings.
  *
  * These are not misconfigurations the developer can fix; they exist so an
- * absent number is explained rather than mistaken for a bug in the bridge.
+ * absent number is explained rather than mistaken for a bug in the edge.
  *
  * @param provider - The agent's provider.
  * @param env - Ambient environment.

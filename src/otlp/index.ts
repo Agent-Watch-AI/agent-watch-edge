@@ -1,6 +1,6 @@
 /**
  * Decoding agents' own OpenTelemetry export into the atomic usage ledger.
- * Published as `@agentwatch-ai/bridge/otlp` for backends that ingest it
+ * Published as `@agentwatch-ai/edge/otlp` for backends that ingest it
  * themselves.
  */
 export type {

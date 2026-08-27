@@ -1,8 +1,8 @@
-# Bridge Delivery Correctness Implementation Plan
+# Edge Delivery Correctness Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the bridge's delivery path honest and fair: surface backend-rejected events instead of losing them silently, evict/drain the offline queue by real age instead of mtime, make transmitted content evidence hashes match the transmitted text, and keep backups of credential-bearing files as private as their sources.
+**Goal:** Make the edge's delivery path honest and fair: surface backend-rejected events instead of losing them silently, evict/drain the offline queue by real age instead of mtime, make transmitted content evidence hashes match the transmitted text, and keep backups of credential-bearing files as private as their sources.
 
 **Architecture:** All changes live in `src/transport`, `src/turns`, and `src/storage`. No wire-format changes; one new optional field on `DeliveryResult` and one new persisted stats file (`delivery-stats.json` in the data dir, same pattern as `backend-cooldown.json`).
 
@@ -14,7 +14,7 @@
 
 ### Task 1: Surface backend-rejected events
 
-The gateway returns `202 {accepted, duplicate, rejected, failed}`; the bridge checks only `response.ok`, so per-event rejections are invisible and the data is gone. Fix: parse the counters, log them, persist a running tally, and show it in `agentwatch status`.
+The gateway returns `202 {accepted, duplicate, rejected, failed}`; the edge checks only `response.ok`, so per-event rejections are invisible and the data is gone. Fix: parse the counters, log them, persist a running tally, and show it in `agentwatch status`.
 
 **Files:**
 - Modify: `src/transport/transport.ts` (DeliveryResult)

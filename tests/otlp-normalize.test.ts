@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { normalizeOtlpLogs } from '../src/otlp/normalize.js';
 
 /**
- * The exported `@agentwatch-ai/bridge/otlp` helper, held to the same behavior
+ * The exported `@agentwatch-ai/edge/otlp` helper, held to the same behavior
  * as the platform's own copy in `@agent-watch/otlp`. Provider detection, the
  * completed-request filter and the usage attribute names are the three places
  * the two copies drifted, so those are what these tests pin.

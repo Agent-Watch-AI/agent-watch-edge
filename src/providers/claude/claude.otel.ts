@@ -127,7 +127,7 @@ export class ClaudeOtelConfigurator implements NativeTelemetryConfigurator {
    * Refuses rather than overwrites when a telemetry variable is already set to
    * something we did not write: the user may be exporting to their own
    * collector, and silently redirecting that would be the worst possible
-   * outcome of installing a telemetry bridge.
+   * outcome of installing a telemetry edge.
    *
    * @param context - Environment, paths, config and install state.
    * @returns Whether the file changed, what to tell the user, and the next

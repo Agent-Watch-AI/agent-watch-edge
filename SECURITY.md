@@ -8,7 +8,7 @@ expect an acknowledgement within a few business days.
 
 ## Scope & design guarantees
 
-AgentWatch Bridge handles developer activity metadata, so the following are treated as security
+AgentWatch Edge handles developer activity metadata, so the following are treated as security
 bugs of the highest priority:
 
 - prompt/response/tool content leaving the machine while capture flags are off

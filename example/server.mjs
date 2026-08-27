@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Example AgentWatch backend: a zero-dependency Node.js server that accepts
- * everything the Bridge and the agents' native OpenTelemetry send, and logs
+ * everything the Edge and the agents' native OpenTelemetry send, and logs
  * it to the console. For local testing only.
  *
  *   npm run example              # listens on http://127.0.0.1:8787
@@ -25,7 +25,7 @@ import { normalizeOtlpLogs } from '../dist/otlp/normalize.js';
 const PORT = Number(process.env.PORT ?? 8787);
 const PRINT_JSON = process.env.JSON === '1';
 // Which developer the pre-turn check refuses: "1" for everyone, an identity for
-// one person, unset for nobody. The Bridge blocks a turn only on an explicit
+// one person, unset for nobody. The Edge blocks a turn only on an explicit
 // block, so leaving this unset is how the check stays invisible.
 const BLOCK = process.env.BLOCK ?? '';
 const BLOCK_MESSAGE = process.env.BLOCK_MESSAGE ?? 'You passed your $500 monthly hard limit; ask your admin to raise the cap or dismiss the alert.';
@@ -235,6 +235,6 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(dim('  summary: POST /v1/events'));
   console.log(dim(`  otlp:    POST /v1/otlp/v1/{logs,traces,metrics}`));
   console.log(dim(`  budget:  GET  /v1/enforcement/decision${BLOCK === '' ? ' (allowing everyone; set BLOCK=1 to refuse)' : ` (blocking ${BLOCK === '1' ? 'everyone' : BLOCK})`}`));
-  console.log(dim(`  connect the bridge:  agentwatch setup --endpoint http://127.0.0.1:${PORT} --yes`));
+  console.log(dim(`  connect the edge:  agentwatch setup --endpoint http://127.0.0.1:${PORT} --yes`));
   console.log();
 });

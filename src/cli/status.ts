@@ -24,7 +24,7 @@ import { bold, dim, println, symbols } from './ui.js';
 export async function runStatus(env: Env): Promise<number> {
   const context = await buildCliContext(env);
 
-  println(bold('AgentWatch Bridge'));
+  println(bold('AgentWatch Edge'));
   println();
 
   reportBackend(context);

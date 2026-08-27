@@ -46,7 +46,7 @@ export const USER_AGENT_HEADER = 'user-agent';
 export const AUTHORIZATION_HEADER = 'authorization';
 export const INSTALLATION_HEADER = 'x-agentwatch-installation';
 export const JSON_CONTENT_TYPE = 'application/json';
-export const USER_AGENT = 'agentwatch-bridge';
+export const USER_AGENT = 'agentwatch-edge';
 
 /** Filenames under the data directory. */
 export const COOLDOWN_FILE_NAME = 'backend-cooldown.json';

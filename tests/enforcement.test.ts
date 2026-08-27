@@ -46,7 +46,7 @@ describe('enforcement decision', () => {
   afterEach(() => world.cleanup());
 
   function config(overrides: Record<string, unknown> = {}): AgentWatchConfig {
-    return configSchema.parse({ ...defaultConfig(), endpoint: ENDPOINT, token: 'aw_brg_test', ...overrides });
+    return configSchema.parse({ ...defaultConfig(), endpoint: ENDPOINT, token: 'aw_edge_test', ...overrides });
   }
 
   function ask(overrides: Record<string, unknown> = {}, fetchFn?: typeof fetch, identity: { developerId?: string } = { developerId: DEVELOPER }) {
@@ -175,7 +175,7 @@ describe('enforcement decision', () => {
     });
 
     it('treats an unreadable cache as a miss and never as a refusal', async () => {
-      const key = decisionKey(`${ENDPOINT}/v1/enforcement/decision`, 'aw_brg_test', DEVELOPER);
+      const key = decisionKey(`${ENDPOINT}/v1/enforcement/decision`, 'aw_edge_test', DEVELOPER);
       const entries: unknown[] = [
         'not json at all',
         JSON.stringify({ [key]: { decision: { decision: 'block' }, expiresAt: Number.MAX_SAFE_INTEGER } }),
@@ -204,7 +204,7 @@ describe('enforcement decision', () => {
 
       const raw = await fs.readFile(cacheFile(), 'utf8');
 
-      expect(raw).not.toContain('aw_brg_test');
+      expect(raw).not.toContain('aw_edge_test');
       expect(raw).not.toContain(DEVELOPER);
       expect(raw).toContain(MESSAGE);
     });
@@ -261,7 +261,7 @@ describe('enforcement through the hook', () => {
     await saveConfig(resolvePaths(world.env), {
       ...defaultConfig(),
       endpoint,
-      token: 'aw_brg_test',
+      token: 'aw_edge_test',
       installationId: 'inst-enforce',
       developerEmail: DEVELOPER
     });
@@ -321,7 +321,7 @@ describe('enforcement through the hook', () => {
   it('stays silent when the platform is broken, whatever it answers', async () => {
     for (const broken of [
       { status: 500, body: { decision: 'block', message: MESSAGE } },
-      { status: 403, body: { message: 'This endpoint accepts Bridge tokens only' } },
+      { status: 403, body: { message: 'This endpoint accepts Edge tokens only' } },
       { status: 200, body: { decision: 'block' } },
       { status: 200, body: 'not a decision' }
     ]) {
@@ -329,7 +329,7 @@ describe('enforcement through the hook', () => {
 
       answer = broken;
 
-      await saveConfig(resolvePaths(fresh.env), { ...defaultConfig(), endpoint, token: 'aw_brg_test', developerEmail: DEVELOPER });
+      await saveConfig(resolvePaths(fresh.env), { ...defaultConfig(), endpoint, token: 'aw_edge_test', developerEmail: DEVELOPER });
 
       let stdout = '';
       const code = await runHook('claude', {

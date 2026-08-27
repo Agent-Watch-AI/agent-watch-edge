@@ -47,7 +47,7 @@ export async function resolveEnforcement(options: EnforcementOptions): Promise<E
  *
  * @param options - As given to {@link resolveEnforcement}.
  * @param url - The decision endpoint.
- * @param token - Bridge token.
+ * @param token - Edge token.
  * @param developerId - Identity to ask about.
  * @returns The decision to act on.
  */

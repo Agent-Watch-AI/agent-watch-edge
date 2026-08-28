@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { nextSnapshotState, selectChangedBranches } from '../src/snapshot/branch-selection.js';
 import { SNAPSHOT_REFRESH_MS } from '../src/snapshot/constants/snapshot.constants.js';
+import { budgetedRunner, withinBudget } from '../src/snapshot/budget.js';
 import { buildRepoSnapshot } from '../src/snapshot/snapshot-event.js';
 import { runSnapshotPipeline } from '../src/snapshot/snapshot-pipeline.js';
 import { collectBranchCommits, collectBranchRefs, resolveDefaultBranch } from '../src/git/repo-snapshot.js';
@@ -155,6 +156,90 @@ describe('branch selection', () => {
 
     expect(state.branches['feature/a']?.lastSentAt).toBe(NOW);
     expect(state.branches['feature/b']?.lastSentAt).toBe(NOW - 1000);
+  });
+
+  it('keeps the old head of a moved branch the budget left out, so it is retried', () => {
+    // Recording the new head for a branch nobody was told about is how work
+    // vanishes: next turn compares the new head against the new head, finds
+    // them equal, and waits six hours for the heartbeat.
+    const moved = [
+      { name: 'feature/a', headSha: 'aa2' },
+      { name: 'feature/b', headSha: 'bb2' }
+    ];
+    const state = nextSnapshotState({ refs: moved, stored, defaultBranch: 'main', now: NOW }, [moved[0]!]);
+
+    expect(state.branches['feature/b']?.headSha).toBe('bb');
+    expect(selectChangedBranches({ refs: moved, stored: state, defaultBranch: 'main', now: NOW })).toHaveLength(1);
+  });
+
+  it('does not record a branch it has never described at all', () => {
+    const withNew = [...refs, { name: 'feature/new', headSha: 'nn' }];
+    const state = nextSnapshotState({ refs: withNew, stored, defaultBranch: 'main', now: NOW }, []);
+
+    expect(state.branches['feature/new']).toBeUndefined();
+  });
+
+  it('holds the recorded base back until every branch was described against it', () => {
+    // Advancing it early ends the rebase selection for branches whose deltas
+    // were never recomputed, leaving them on the wrong base indefinitely.
+    const partial = nextSnapshotState({ refs, stored, defaultBranch: 'develop', now: NOW }, [refs[0]!]);
+
+    expect(partial.defaultBranch).toBe('main');
+    expect(selectChangedBranches({ refs, stored: partial, defaultBranch: 'develop', now: NOW })).toHaveLength(2);
+
+    const complete = nextSnapshotState({ refs, stored, defaultBranch: 'develop', now: NOW }, refs);
+
+    expect(complete.defaultBranch).toBe('develop');
+  });
+});
+
+describe('the budget', () => {
+  it('shortens each git timeout to what is left, and skips a call with nothing left', async () => {
+    const timeouts: number[] = [];
+    const run: GitRunner = async (_args, _cwd, timeoutMs) => {
+      timeouts.push(timeoutMs);
+
+      return 'out';
+    };
+    let clock = 1_000;
+    const bounded = budgetedRunner(run, 1_400, () => clock);
+
+    await bounded(['for-each-ref'], '/repo', 1000);
+    clock = 1_450;
+    const afterExpiry = await bounded(['log'], '/repo', 1000);
+
+    // 400 ms left, so the call may not wait its usual second; then nothing.
+    expect(timeouts).toEqual([400]);
+    expect(afterExpiry).toBeUndefined();
+  });
+
+  it('abandons a write that outlives the budget rather than blocking the hook', async () => {
+    const never = new Promise<void>(() => undefined);
+
+    expect(await withinBudget(never, Date.now() + 20)).toBe(false);
+    expect(await withinBudget(Promise.resolve(), Date.now() + 1000)).toBe(true);
+  });
+
+  it('records nothing as sent when the queue write did not finish', async () => {
+    const cache = {
+      written: [] as SnapshotState[],
+      read: async () => ({ defaultBranch: 'main', branches: {} }),
+      write: async (_repository: string, state: SnapshotState) => void cache.written.push(state)
+    };
+    const run = fakeGit({
+      'for-each-ref': refLine('feature/a', 'aa'),
+      'symbolic-ref --short -q refs/remotes/origin/HEAD': 'origin/main',
+      log: commitLine('c1', 'add exporter')
+    });
+
+    const result = await runSnapshotPipeline({
+      input: identity({ run, deadline: Date.now() + 40 }),
+      store: cache,
+      queue: { enqueue: () => new Promise(() => undefined) }
+    });
+
+    expect(result.completed).toBe(false);
+    expect(cache.written).toHaveLength(0);
   });
 });
 

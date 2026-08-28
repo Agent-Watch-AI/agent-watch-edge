@@ -43,9 +43,15 @@ export function selectChangedBranches(input: SelectionInput): BranchRef[] {
 /**
  * The state to store once a snapshot has been queued.
  *
- * Every ref that was listed is recorded, not only the ones that were sent:
- * a branch left out of this send is still known, and forgetting it would make
- * the next turn treat it as new.
+ * A branch is recorded as reported only if it was actually described. The
+ * cache is a record of what the platform has been told, not of what git said:
+ * a branch whose head moved and which then fell outside the budget must keep
+ * its *old* head here, or the next turn compares the new head against the new
+ * head, finds them equal, and the work disappears until the heartbeat six hours
+ * later.
+ *
+ * A branch that was listed but never sent is therefore left exactly as it was —
+ * and one that has never been sent at all is left out, so it stays new.
  *
  * @param input - Refs, previous state and the send's own clock.
  * @param sent - The branches this snapshot actually described.
@@ -59,16 +65,24 @@ export function nextSnapshotState(
   const branches: SnapshotState['branches'] = {};
 
   for (const ref of input.refs) {
+    if (sentNames.has(ref.name)) {
+      branches[ref.name] = { headSha: ref.headSha, lastSentAt: input.now };
+      continue;
+    }
+
     const previous = input.stored.branches[ref.name];
 
-    branches[ref.name] = {
-      headSha: ref.headSha,
-      // A branch that was not in this send keeps the time it was last actually
-      // reported, so its heartbeat stays due rather than being reset by a send
-      // it took no part in.
-      lastSentAt: sentNames.has(ref.name) ? input.now : (previous?.lastSentAt ?? 0)
-    };
+    if (previous) branches[ref.name] = previous;
   }
 
-  return { defaultBranch: input.defaultBranch, branches };
+  // The recorded base only moves once every branch has been described against
+  // it. Recording it early would end the `rebased` selection for branches whose
+  // deltas were never recomputed, and they would sit on the wrong base until
+  // their heads happened to move.
+  const described = input.refs.every((ref) => sentNames.has(ref.name));
+
+  return {
+    defaultBranch: described ? input.defaultBranch : input.stored.defaultBranch,
+    branches
+  };
 }

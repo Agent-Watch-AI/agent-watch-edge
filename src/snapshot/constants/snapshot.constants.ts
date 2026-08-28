@@ -38,5 +38,17 @@ export const SNAPSHOT_BUDGET_MS = 1000;
  */
 export const SNAPSHOT_REFRESH_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * Caps the backend states in its own schema, applied here so nothing is lost.
+ *
+ * The backend drops an entry it cannot store rather than refusing the snapshot,
+ * so an over-long subject sent verbatim would silently cost that commit its
+ * row. Truncated, it still names the work — which is all the drafting agent
+ * reads it for. The generic scrubber's limit is 8192 characters and says
+ * nothing about this contract.
+ */
+export const SNAPSHOT_MAX_SUBJECT_LENGTH = 200;
+export const SNAPSHOT_MAX_BRANCH_NAME_LENGTH = 255;
+
 /** Hex characters kept from the repository digest that names a state file. */
 export const SNAPSHOT_STATE_HASH_LENGTH = 32;

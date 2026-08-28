@@ -3,6 +3,7 @@ import { deriveEventId, sha256Hex } from '../events/event-id.js';
 import { EVENT_SCHEMA_VERSION } from '../events/constants/events.constants.js';
 import type { RepoSnapshotEvent } from '../events/types/repo-snapshot.types.js';
 import type { SnapshotBranch } from '../git/types/snapshot.types.js';
+import { SNAPSHOT_MAX_BRANCH_NAME_LENGTH, SNAPSHOT_MAX_SUBJECT_LENGTH } from './constants/snapshot.constants.js';
 import type { SnapshotFlowInput } from './types/snapshot.types.js';
 
 export interface BuildSnapshotInput {
@@ -49,16 +50,24 @@ export function buildRepoSnapshot(input: BuildSnapshotInput): RepoSnapshotEvent 
     developer_id: identity.developerId,
     default_branch: defaultBranch,
     captured_at: identity.capturedAt,
-    branches: branches.map((branch) =>
-      compact({
-        name: branch.name,
-        head_sha: branch.headSha,
-        last_commit_at: branch.lastCommitAt,
-        commits: branch.commits.map((commit) =>
-          compact({ sha: commit.sha, subject: commit.subject, authored_at: commit.authoredAt })
-        )
-      })
-    )
+    branches: branches
+      // A name the backend cannot store costs that branch its row, and a
+      // branch name that long is not a name anyone typed.
+      .filter((branch) => branch.name.length <= SNAPSHOT_MAX_BRANCH_NAME_LENGTH)
+      .map((branch) =>
+        compact({
+          name: branch.name,
+          head_sha: branch.headSha,
+          last_commit_at: branch.lastCommitAt,
+          commits: branch.commits.map((commit) =>
+            compact({
+              sha: commit.sha,
+              subject: commit.subject.slice(0, SNAPSHOT_MAX_SUBJECT_LENGTH),
+              authored_at: commit.authoredAt
+            })
+          )
+        })
+      )
   }) as RepoSnapshotEvent;
 }
 

@@ -4,6 +4,7 @@ import type { FlowResult, Step, StepOutcome } from '../core/types/core.types.js'
 import { collectBranchCommits, collectBranchRefs, resolveDefaultBranch } from '../git/repo-snapshot.js';
 import { sanitizeValue } from '../privacy/sanitizer.js';
 import { nextSnapshotState, selectChangedBranches } from './branch-selection.js';
+import { budgetedRunner, remainingMs, withinBudget } from './budget.js';
 import { buildRepoSnapshot } from './snapshot-event.js';
 import { SNAPSHOT_BRANCH_COUNT, SNAPSHOT_COMMITS_PER_BRANCH } from './constants/snapshot.constants.js';
 import {
@@ -81,7 +82,11 @@ export function runSnapshotPipeline(pipeline: SnapshotPipelineInput): Promise<Fl
  * @returns The state with its refs, or a stop outside a repository.
  */
 async function collectRefs(state: SnapshotFlowState): Promise<StepOutcome<SnapshotFlowState>> {
-  const { cwd, run } = state.input;
+  const { cwd, deadline } = state.input;
+  // Every git call in this flow goes through the budget, not only the logs:
+  // the listing and the three fallbacks that resolve a trunk are four
+  // sequential seconds of the hook's answer if nothing bounds them.
+  const run = budgetedRunner(state.input.run, deadline);
   const refs = await collectBranchRefs({ cwd, branchCount: SNAPSHOT_BRANCH_COUNT }, run);
 
   if (refs.length === 0) return stop(state, STOP_NOT_A_REPOSITORY);
@@ -121,11 +126,12 @@ async function selectChanged(state: SnapshotFlowState): Promise<StepOutcome<Snap
  *   before any branch was described.
  */
 async function collectCommits(state: SnapshotFlowState): Promise<StepOutcome<SnapshotFlowState>> {
-  const { cwd, run, deadline } = state.input;
+  const { cwd, deadline } = state.input;
+  const run = budgetedRunner(state.input.run, deadline);
   const branches = [];
 
   for (const ref of state.selected) {
-    if (Date.now() >= deadline) break;
+    if (remainingMs(deadline) === 0) break;
 
     const commits = await collectBranchCommits(
       ref.name,
@@ -174,18 +180,27 @@ async function sanitize(state: SnapshotFlowState): Promise<StepOutcome<SnapshotF
 async function enqueue(state: SnapshotFlowState): Promise<StepOutcome<SnapshotFlowState>> {
   if (!state.event) return stop(state, STOP_NOTHING_CHANGED);
 
-  await state.queue.enqueue([state.event]);
-  await state.store.write(
-    state.input.repository,
-    nextSnapshotState(
-      {
-        refs: state.refs,
-        stored: state.stored ?? { branches: {} },
-        defaultBranch: state.defaultBranch,
-        now: Date.parse(state.input.capturedAt)
-      },
-      state.branches
-    )
+  const { deadline } = state.input;
+  const queued = await withinBudget(state.queue.enqueue([state.event]), deadline);
+
+  // Recording a send that may not have happened is the one thing this flow must
+  // never do: the branches would be marked reported and never offered again.
+  if (!queued) return stop(state, STOP_BUDGET_SPENT);
+
+  await withinBudget(
+    state.store.write(
+      state.input.repository,
+      nextSnapshotState(
+        {
+          refs: state.refs,
+          stored: state.stored ?? { branches: {} },
+          defaultBranch: state.defaultBranch,
+          now: Date.parse(state.input.capturedAt)
+        },
+        state.branches
+      )
+    ),
+    deadline
   );
 
   return next(state);

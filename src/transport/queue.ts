@@ -144,7 +144,8 @@ export class EventQueue {
   }
 
   /**
-   * Re-pin entries queued for one destination to another.
+   * Re-pin entries queued for one destination to another, and hand them to the
+   * identity that will send them.
    *
    * Setup calls this — with the user's explicit consent — after the backend URL
    * changes, so the backlog follows instead of expiring pinned to a URL nothing
@@ -152,26 +153,43 @@ export class EventQueue {
    * re-routes one reconfigured destination, it is not a license to replay one
    * backend's data to another.
    *
+   * `targetDir` exists because re-enrolling usually changes the token too, and
+   * a queue is partitioned by identity: leaving the entries where they are would
+   * re-pin a backlog no partition drains. Moving them is a second consent-gated
+   * step of the same decision the user just made, and the new copy is written
+   * before the old one is removed, so a crash mid-move duplicates rather than
+   * loses — and the deterministic filename makes the duplicate a no-op.
+   *
    * Runs under the drain lock so a concurrent drain cannot resurrect the old
    * destination from a stale in-memory copy.
    *
    * @param destination - The new events URL.
    * @param previousDestination - The URL being replaced.
+   * @param targetDir - Partition to move the re-pinned entries into; defaults to
+   *   this queue's own, which is what an unchanged identity wants.
    * @returns False when the lock never freed and nothing was re-pinned.
    */
-  async retarget(destination: string, previousDestination: string): Promise<boolean> {
+  async retarget(destination: string, previousDestination: string, targetDir?: string): Promise<boolean> {
     const release = await this.waitForDrainLock();
 
     if (!release) return false;
 
+    const home = targetDir ?? this.options.queueDir;
+
     try {
+      await fs.mkdir(home, { recursive: true });
+
       for (const name of await this.listFiles()) {
         const file = path.join(this.options.queueDir, name);
         const entry = await this.readEntry(file);
 
         if (!entry || entry.destination !== previousDestination) continue;
 
-        await writeFileAtomic(file, JSON.stringify({ ...entry, destination }), SECRET_FILE_MODE);
+        const moved = path.join(home, name);
+
+        await writeFileAtomic(moved, JSON.stringify({ ...entry, destination }), SECRET_FILE_MODE);
+
+        if (moved !== file) await fs.rm(file, { force: true });
       }
 
       return true;

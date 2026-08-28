@@ -9,7 +9,7 @@ import { resolvePaths } from '../src/storage/paths.js';
 import { defaultConfig } from '../src/config/config.js';
 import { isAgentWatchHookCommand, type SetupContext } from '../src/providers/provider.js';
 import { runHook } from '../src/cli/hook.js';
-import { makeTempEnv, readJson, writeJson, type TempWorld } from './helpers.js';
+import { makeTempEnv, readJson, readQueueEntries, writeJson, type TempWorld } from './helpers.js';
 import {
   ANTIGRAVITY_COMMON,
   EDIT_FILE_ARGS,
@@ -340,10 +340,7 @@ describe('Antigravity provider', () => {
         await runHook('antigravity', { env: world.env, input: JSON.stringify(payload), writeStdout: () => {} });
       }
 
-      const names = await fs.readdir(paths.queueDir);
-      const queued = await Promise.all(
-        names.filter((name) => name.endsWith('.json')).map((name) => readJson<{ event: Record<string, unknown> }>(path.join(paths.queueDir, name)))
-      );
+      const queued = await readQueueEntries<{ event: Record<string, unknown> }>(paths.queueDir);
       const summaries = queued.map((entry) => entry.event).filter((event) => (event['event'] as { type?: string }).type === 'turn.summary');
 
       expect(summaries).toHaveLength(1);
@@ -375,10 +372,7 @@ describe('Antigravity provider', () => {
         await runHook('antigravity', { env: world.env, input: JSON.stringify(payload), writeStdout: () => {} });
       }
 
-      const names = await fs.readdir(paths.queueDir);
-      const queued = await Promise.all(
-        names.filter((name) => name.endsWith('.json')).map((name) => readJson<{ event: Record<string, unknown> }>(path.join(paths.queueDir, name)))
-      );
+      const queued = await readQueueEntries<{ event: Record<string, unknown> }>(paths.queueDir);
       const summary = queued.map((entry) => entry.event).find((event) => (event['event'] as { type?: string }).type === 'turn.summary');
 
       expect(summary?.['prompt']).toBe(ANTIGRAVITY_COMMON.lastUserInput);

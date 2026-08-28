@@ -12,7 +12,7 @@ import { resolvePaths } from '../src/storage/paths.js';
 import { defaultConfig } from '../src/config/config.js';
 import { realEnv } from '../src/core/env.js';
 import { runHook } from '../src/cli/hook.js';
-import { makeTempEnv, readJson, writeJson, type TempWorld } from './helpers.js';
+import { makeTempEnv, queueEntryFiles, readJson, writeJson, type TempWorld } from './helpers.js';
 import * as cursor from './fixtures/cursor.js';
 
 const HOOK_CMD = 'agentwatch hook --agent cursor';
@@ -453,14 +453,12 @@ describe('Cursor provider files', () => {
   describe('turn tracking through the hook pipeline', () => {
     async function hookRun(payload: Record<string, unknown>): Promise<{ events: any[] }> {
       const paths = resolvePaths(world.env);
-      const before = new Set(await fs.readdir(paths.queueDir).catch(() => []));
+      const before = new Set(await queueEntryFiles(paths.queueDir));
       const code = await runHook('cursor', { env: world.env, input: JSON.stringify(payload) });
 
       expect(code).toBe(0);
-      const added = (await fs.readdir(paths.queueDir).catch(() => [])).filter((name) => !before.has(name));
-      const events = await Promise.all(
-        added.map(async (name) => JSON.parse(await fs.readFile(path.join(paths.queueDir, name), 'utf8')).event)
-      );
+      const added = (await queueEntryFiles(paths.queueDir)).filter((file) => !before.has(file));
+      const events = await Promise.all(added.map(async (file) => JSON.parse(await fs.readFile(file, 'utf8')).event));
 
       return { events };
     }

@@ -34,6 +34,17 @@ export const ENFORCEMENT_PATH = '/v1/enforcement/decision';
 export const REPO_CONFIG_NAME = '.agentwatch.json';
 
 /**
+ * Per-project identity block in the global config: absolute project root ->
+ * the credentials and endpoints to use for work under it. This is how one
+ * machine reports to two tenants; the repo file still cannot set any of it,
+ * which is why the key is global-only like the fields it carries.
+ */
+export const ROOTS_KEY = 'roots';
+
+/** Fields a root entry may set. Everything else in a root object is dropped. */
+export const ROOT_OVERRIDE_KEYS = ['token', 'installationId', 'developerEmail', 'endpoint', 'eventsUrl', 'otlpUrl'] as const;
+
+/**
  * Keys a repo file may not set: it is committed and shared, so secrets and
  * per-machine identity stay in the global ~/.agentwatch/config.json only.
  * Delivery destinations are global-only too — a repo file that redirected them
@@ -46,7 +57,8 @@ export const GLOBAL_ONLY_KEYS: ReadonlySet<string> = new Set([
   'endpoint',
   'eventsUrl',
   'otlpUrl',
-  'enforcementUrl'
+  'enforcementUrl',
+  ROOTS_KEY
 ]);
 
 /**

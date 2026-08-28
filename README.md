@@ -90,6 +90,7 @@ agentwatch uninstall --purge                              # Also delete ~/.agent
 | `--endpoint <url>` | Backend base URL for event ingestion | — |
 | `--token <token>` | Bearer token for backend authentication | — |
 | `--developer-email <email>` | Identity attached to turn summaries | `git config user.email` |
+| `--root <path>` | File this identity under a project root instead of the machine default, so one machine can report to two tenants | — |
 | `--otel <signals>` | OTLP signals exported by agents: `logs`, `traces`, `metrics`, `all`, or `none` | `logs` |
 | `--agent <id>` | Limit command to a single agent (`claude`, `codex`, `cursor`, `gemini`, `antigravity`) | All detected |
 | `--yes`, `--non-interactive` | Non-interactive mode (fail instead of prompting on missing args) | `false` |
@@ -119,9 +120,29 @@ agentwatch uninstall --purge                              # Also delete ~/.agent
 }
 ```
 
-*Note: Infrastructure settings (`endpoint`, `token`, `developerEmail`, `enforcementUrl`) and the
-`delivery`, `otel` and `enforcement` blocks are global-only — a committed repo file cannot redirect
-delivery or switch off a budget cap for everyone who clones the repository.*
+*Note: Infrastructure settings (`endpoint`, `token`, `developerEmail`, `enforcementUrl`), the
+`roots` block, and the `delivery`, `otel` and `enforcement` blocks are global-only — a committed
+repo file cannot redirect delivery, hand every clone a foreign identity, or switch off a budget
+cap for everyone who clones the repository.*
+
+* **Per-project identity (two tenants, one machine)**: `roots` in the global config maps an absolute project root to the identity used beneath it. Work outside every root keeps the machine's own. Write one with `agentwatch setup --root ~/dev/tripPlanner --token <token>`, or by hand:
+
+```json
+{
+  "endpoint": "https://backend.example.com",
+  "token": "<the machine default>",
+  "roots": {
+    "/Users/me/dev/tripPlanner": { "token": "<tenant A>" },
+    "/Users/me/dev/acme": { "token": "<tenant B>", "developerEmail": "me@acme.com" }
+  }
+}
+```
+
+Longest match wins, so a checkout nested inside a workspace overrides the workspace. Point a root at the directory your agent actually opens: a session started one level above a root does not match it. Only identity varies per root — what is captured stays machine-wide, and `roots` is global-only like the fields it carries.
+
+*Caveat: agents export native OTLP to one machine-wide endpoint, so roots on different backends split the hook path but not that export. Roots on the same backend — the usual case — differ only in bearer, which `otel-headers` resolves per directory.*
+
+The offline queue is partitioned to match: `<data>/queue/<digest-of-token>/`, one directory per identity, so a drain only ever sends the backlog belonging to the token it is signing with. An idle tenant's backlog waits for that tenant's next hook rather than leaving under someone else's bearer. Upgrading from a version without partitions adopts the existing backlog automatically when the machine has a single identity; when it already has several, those entries name no tenant, so they are moved to `<data>/queue/unattributed/` and delivered to nobody — `agentwatch status` and `agentwatch doctor` say how many and where. Move them into a tenant's partition to deliver them, or delete the directory to discard them.
 
 ### Budget enforcement (pre-turn check)
 

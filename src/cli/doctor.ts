@@ -12,6 +12,7 @@ import { meetsMinVersion, parseVersion } from '../core/version.js';
 import { findExecutable } from '../core/which.js';
 import { providers } from '../providers/registry.js';
 import type { AgentProvider, SetupContext } from '../providers/types/provider.types.js';
+import { unattributedCount, unattributedQueue } from '../transport/queue-partition.js';
 import { buildCliContext, buildHookCommand, buildQueue } from './context.js';
 import {
   BACKEND_PROBE_TIMEOUT_MS,
@@ -299,12 +300,23 @@ async function queueChecks(context: CliContext): Promise<Check[]> {
   const pending = await queue.pendingCount();
   const oldest = await queue.oldestPendingAgeMs();
   const stale = pending > 0 && oldest !== undefined && oldest > STALE_QUEUE_AGE_MS;
+  // Counted separately because it is a different problem: not "delivery is
+  // slow" but "these records name no tenant, so nothing will ever send them".
+  const unattributed = await unattributedCount(context.paths.queueDir);
 
   return [
     {
       name: 'delivery queue',
       level: stale ? 'warn' : 'ok',
       detail: `${pending} pending${oldest !== undefined ? `, oldest ${Math.round(oldest / 60000)} min` : ''}`
+    },
+    {
+      name: 'unattributed queue',
+      level: unattributed > 0 ? 'warn' : 'ok',
+      detail:
+        unattributed > 0
+          ? `${unattributed} event(s) predating per-tenant queues in ${unattributedQueue(context.paths.queueDir)} — move them into a tenant's partition to deliver`
+          : 'none'
     }
   ];
 }

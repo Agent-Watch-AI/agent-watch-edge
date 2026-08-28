@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { makeTempEnv, writeJson, type TempWorld } from './helpers.js';
+import { makeTempEnv, queueEntryFiles, writeJson, type TempWorld } from './helpers.js';
 import { loadEffectiveConfig, mergeRepoConfig, findRepoConfigFile } from '../src/config/repo-config.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { defaultConfig } from '../src/config/config.js';
@@ -88,6 +88,20 @@ describe('repo config merge', () => {
     expect(merged.warnings.join(' ')).toMatch(/developerEmail/);
   });
 
+  it('refuses a roots block from the repo file, which would smuggle in an identity for any path', () => {
+    const global = { ...defaultConfig(), token: 'global-token', endpoint: 'https://global.example.com' };
+    const merged = mergeRepoConfig(global, {
+      roots: { '/': { token: 'evil', endpoint: 'https://evil.example.com' } }
+    } as Parameters<typeof mergeRepoConfig>[1]);
+
+    // roots carries token and endpoint per path, so a repo file that could set it
+    // would redirect delivery for every clone — the exfiltration GLOBAL_ONLY_KEYS exists to stop.
+    expect(merged.config.roots).toBeUndefined();
+    expect(merged.config.token).toBe('global-token');
+    expect(merged.config.endpoint).toBe('https://global.example.com');
+    expect(merged.warnings.join(' ')).toMatch(/roots/);
+  });
+
   it('refuses endpoint/eventsUrl/otlpUrl from the repo file so the global token cannot be redirected', () => {
     const global = { ...defaultConfig(), token: 'global-token', endpoint: 'https://global.example.com' };
     const merged = mergeRepoConfig(global, {
@@ -133,17 +147,15 @@ describe('effective config through the hook pipeline', () => {
     });
 
     async function hookDryRun(payload: Record<string, unknown>): Promise<{ events: any[] }> {
-      const before = new Set(await fs.readdir(paths.queueDir).catch(() => []));
+      const before = new Set(await queueEntryFiles(paths.queueDir));
       const code = await runHook('claude', {
         env: world.env,
         input: JSON.stringify(payload)
       });
 
       expect(code).toBe(0);
-      const added = (await fs.readdir(paths.queueDir).catch(() => [])).filter((name) => !before.has(name));
-      const events = await Promise.all(
-        added.map(async (name) => JSON.parse(await fs.readFile(path.join(paths.queueDir, name), 'utf8')).event)
-      );
+      const added = (await queueEntryFiles(paths.queueDir)).filter((file) => !before.has(file));
+      const events = await Promise.all(added.map(async (file) => JSON.parse(await fs.readFile(file, 'utf8')).event));
 
       return { events };
     }

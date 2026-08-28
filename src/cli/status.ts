@@ -1,4 +1,5 @@
 import { eventsUrl } from '../config/config.js';
+import { hasProjectRoots } from '../config/root-config.js';
 import type { Env } from '../core/types/core.types.js';
 import { collectGitContext } from '../git/git-context.js';
 import type { GitContext } from '../git/types/git.types.js';
@@ -7,6 +8,7 @@ import type { AgentProvider, SetupContext } from '../providers/types/provider.ty
 import type { DeliveryStats } from '../transport/delivery-stats.js';
 import type { DeliveryStatsSnapshot } from '../transport/types/transport.types.js';
 import type { EventQueue } from '../transport/queue.js';
+import { settleLegacyQueue, unattributedCount, unattributedQueue } from '../transport/queue-partition.js';
 import { buildCliContext, buildDeliveryStats, buildHookCommand, buildQueue, buildTransport } from './context.js';
 import { STATUS_SEND_TIMEOUT_MS } from './constants/cli.constants.js';
 import type { CliContext } from './types/cli.types.js';
@@ -160,6 +162,10 @@ async function reportAgent(provider: AgentProvider, context: CliContext): Promis
 async function reportDelivery(context: CliContext): Promise<void> {
   println(bold('Delivery'));
 
+  // Before counting anything: a backlog written by a pre-partition bridge is
+  // still on disk and belongs in somebody's partition, or in nobody's.
+  await settleLegacyQueue(context.paths.queueDir, context.config.token, hasProjectRoots(context.config));
+
   const queue = buildQueue(context);
   const deliveryStats = buildDeliveryStats(context);
   const pending = await retryBacklog(context, queue, deliveryStats);
@@ -167,7 +173,28 @@ async function reportDelivery(context: CliContext): Promise<void> {
   println(pending === 0 ? `${symbols.ok} healthy` : `${symbols.warn} backlog`);
   println(`${pending} pending event(s)`);
 
+  await reportUnattributed(context);
   reportLosses(context, await deliveryStats.read());
+}
+
+/**
+ * The backlog nobody can claim, and how to claim it.
+ *
+ * Reported rather than delivered: these entries predate per-identity queues and
+ * name no tenant, so on a machine serving several the bridge refuses to pick one
+ * for them. Saying where they are is the whole remedy — the operator knows which
+ * tenant was running, and a move is all it takes.
+ *
+ * @param context - Resolved CLI context.
+ */
+async function reportUnattributed(context: CliContext): Promise<void> {
+  const unattributed = await unattributedCount(context.paths.queueDir);
+
+  if (unattributed === 0) return;
+
+  println(`${symbols.warn} ${unattributed} event(s) queued before this machine served more than one tenant`);
+  println(dim(`  they name no tenant, so nothing delivers them: ${unattributedQueue(context.paths.queueDir)}`));
+  println(dim('  move them into the right tenant\'s partition to deliver, or delete the directory to discard'));
 }
 
 /**

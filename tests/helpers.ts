@@ -47,3 +47,36 @@ export async function writeJson(filePath: string, value: unknown): Promise<void>
 export async function readJson<T = any>(filePath: string): Promise<T> {
   return JSON.parse(await fs.readFile(filePath, 'utf8')) as T;
 }
+
+/**
+ * Every queue entry file, wherever its identity partition put it.
+ *
+ * The queue is one directory per identity, so a test that seeds or inspects it
+ * through `paths.queueDir` has to look one level down.
+ */
+export async function queueEntryFiles(queueDir: string): Promise<string[]> {
+  const found: string[] = [];
+  const pending: string[] = [queueDir];
+
+  while (pending.length > 0) {
+    const dir = pending.pop()!;
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+
+      if (entry.isDirectory()) pending.push(full);
+
+      if (entry.isFile() && entry.name.endsWith('.json')) found.push(full);
+    }
+  }
+
+  return found.sort();
+}
+
+/** The queue entries themselves, parsed, in filename order. */
+export async function readQueueEntries<T = any>(queueDir: string): Promise<T[]> {
+  const files = await queueEntryFiles(queueDir);
+
+  return Promise.all(files.map((file) => readJson<T>(file)));
+}

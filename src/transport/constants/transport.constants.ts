@@ -58,3 +58,26 @@ export const MS_PER_DAY = 24 * 60 * 60 * 1000;
 export const RE_UNSAFE_QUEUE_NAME = /[^A-Za-z0-9_-]/g;
 
 export const QUEUE_FILE_SUFFIX = '.json';
+
+/**
+ * Queue partition used before setup writes a token. Entries land here pinned to
+ * ANY_DESTINATION, and the first identity setup configures adopts them — which
+ * is the same promise ANY_DESTINATION already makes.
+ */
+export const UNCONFIGURED_PARTITION = 'unconfigured';
+
+/**
+ * Queue partition for a backlog written before the queue was partitioned, on a
+ * machine that already serves more than one identity. Nothing drains it: those
+ * entries record no identity, and guessing one is precisely how one tenant's
+ * usage lands in another tenant's ledger.
+ */
+export const UNATTRIBUTED_PARTITION = 'unattributed';
+
+/**
+ * Hex characters of the token digest that names a partition. 48 bits is far
+ * more than the handful of identities one machine holds, and a digest rather
+ * than the token itself keeps the bearer out of every `ls`, backup and crash
+ * dump that ever touches the data directory.
+ */
+export const IDENTITY_FINGERPRINT_CHARS = 12;

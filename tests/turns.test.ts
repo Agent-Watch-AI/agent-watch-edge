@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { makeTempEnv, writeJson, type TempWorld } from './helpers.js';
+import { makeTempEnv, queueEntryFiles, writeJson, type TempWorld } from './helpers.js';
 import { readTurnUsage } from '../src/turns/claude-transcript.js';
 import { TurnStateStore } from '../src/turns/turn-state.js';
 import { buildTurnSummary } from '../src/turns/turn-summary.js';
@@ -334,17 +334,15 @@ describe('turn tracking through the hook pipeline', () => {
     // product records. --dry-run has separate read-only semantics and is
     // tested explicitly below.
     const paths = resolvePaths(world.env);
-    const before = new Set(await fs.readdir(paths.queueDir).catch(() => []));
+    const before = new Set(await queueEntryFiles(paths.queueDir));
     const code = await runHook('claude', {
       env: world.env,
       input: JSON.stringify(payload)
     });
 
     expect(code).toBe(0);
-    const added = (await fs.readdir(paths.queueDir).catch(() => [])).filter((name) => !before.has(name));
-    const events = await Promise.all(
-      added.map(async (name) => JSON.parse(await fs.readFile(path.join(paths.queueDir, name), 'utf8')).event)
-    );
+    const added = (await queueEntryFiles(paths.queueDir)).filter((file) => !before.has(file));
+    const events = await Promise.all(added.map(async (file) => JSON.parse(await fs.readFile(file, 'utf8')).event));
 
     return { events };
   }

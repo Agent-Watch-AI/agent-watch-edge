@@ -4,6 +4,7 @@ import { debugLog } from '../core/logger.js';
 import { next, runFlow, step, stop } from '../core/pipe.js';
 import type { FlowResult, Step, StepOutcome } from '../core/types/core.types.js';
 import { loadEffectiveConfig } from '../config/repo-config.js';
+import { hasProjectRoots } from '../config/root-config.js';
 import { DECISION_BLOCK } from '../enforcement/constants/enforcement.constants.js';
 import { resolveEnforcement } from '../enforcement/enforcement.js';
 import { enrichEvents } from '../events/enrich.js';
@@ -13,6 +14,7 @@ import { DeliveryStats } from '../transport/delivery-stats.js';
 import { deliverEvents } from '../transport/delivery.js';
 import { HttpTransport } from '../transport/http-transport.js';
 import { EventQueue } from '../transport/queue.js';
+import { queuePartition, settleLegacyQueue } from '../transport/queue-partition.js';
 import { COOLDOWN_FILE_NAME, DELIVERY_STATS_FILE_NAME } from '../transport/constants/transport.constants.js';
 import type { EventTransport } from '../transport/types/transport.types.js';
 import { eventsUrl } from '../config/config.js';
@@ -225,7 +227,7 @@ async function deliver(state: HookPipelineState): Promise<StepOutcome<HookPipeli
   if (state.dryRun) return stop(state, STOP_DRY_RUN);
 
   const queue = new EventQueue({
-    queueDir: state.paths.queueDir,
+    queueDir: await resolveQueueDir(state),
     locksDir: state.paths.locksDir,
     maxEvents: state.config.delivery.maxQueueEvents,
     maxAttempts: state.config.delivery.maxAttempts,
@@ -244,6 +246,29 @@ async function deliver(state: HookPipelineState): Promise<StepOutcome<HookPipeli
   debugLog(`delivery: sent=${delivery.delivered} queued=${delivery.queued} drained=${delivery.drained} rejected=${delivery.rejected}`);
 
   return next({ ...state, delivery });
+}
+
+/**
+ * The queue directory this invocation owns.
+ *
+ * The token is resolved per directory but the queue is one machine-global tree,
+ * so before partitioning a hook in one tenant's checkout drained the other
+ * tenant's backlog under its own bearer. Partitioning by identity removes the
+ * possibility; settling runs first so a backlog written by an older bridge is
+ * neither stranded in a directory nothing reads nor handed to a tenant that may
+ * not own it.
+ *
+ * `globalConfig` and not `config`: roots are stripped from the effective config
+ * once applied, and the question here is what the *machine* serves, not what
+ * this directory does.
+ *
+ * @param state - Current flow state.
+ * @returns Absolute directory for this identity's entries.
+ */
+async function resolveQueueDir(state: HookPipelineState): Promise<string> {
+  await settleLegacyQueue(state.paths.queueDir, state.config.token, hasProjectRoots(state.globalConfig));
+
+  return queuePartition(state.paths.queueDir, state.config.token);
 }
 
 /**

@@ -9,6 +9,7 @@ import { resolvePaths } from '../storage/paths.js';
 import { DeliveryStats } from '../transport/delivery-stats.js';
 import { HttpTransport } from '../transport/http-transport.js';
 import { EventQueue } from '../transport/queue.js';
+import { queuePartition } from '../transport/queue-partition.js';
 import { DELIVERY_STATS_FILE_NAME } from '../transport/constants/transport.constants.js';
 import type { EventTransport } from '../transport/types/transport.types.js';
 import { RE_NEEDS_QUOTING, RE_QUOTE_ESCAPE } from './constants/cli.constants.js';
@@ -42,12 +43,15 @@ export async function buildCliContext(env: Env): Promise<CliContext> {
 /**
  * The offline queue for this context.
  *
+ * Partitioned by the same token `buildTransport` signs with, so a command can
+ * only ever drain the backlog belonging to the identity it is sending as.
+ *
  * @param context - Resolved CLI context.
  * @returns The queue.
  */
 export function buildQueue(context: CliContext): EventQueue {
   return new EventQueue({
-    queueDir: context.paths.queueDir,
+    queueDir: queuePartition(context.paths.queueDir, context.config.token),
     locksDir: context.paths.locksDir,
     maxEvents: context.config.delivery.maxQueueEvents,
     maxAttempts: context.config.delivery.maxAttempts,

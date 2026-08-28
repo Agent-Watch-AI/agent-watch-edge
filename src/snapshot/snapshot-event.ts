@@ -1,0 +1,77 @@
+import { compact } from '../core/object.js';
+import { deriveEventId, sha256Hex } from '../events/event-id.js';
+import { EVENT_SCHEMA_VERSION } from '../events/constants/events.constants.js';
+import type { RepoSnapshotEvent } from '../events/types/repo-snapshot.types.js';
+import type { SnapshotBranch } from '../git/types/snapshot.types.js';
+import type { SnapshotFlowInput } from './types/snapshot.types.js';
+
+export interface BuildSnapshotInput {
+  readonly identity: SnapshotFlowInput;
+  readonly defaultBranch?: string;
+  readonly branches: readonly SnapshotBranch[];
+}
+
+/**
+ * Build the record one repository's changed branches become.
+ *
+ * The id is derived from the repository, the branch heads, the default branch
+ * *and* `captured_at`. The capture time has to be in it: the queue's filename
+ * is the event id and the backend deduplicates on the same value, so an id
+ * built from heads alone would make every heartbeat of a quiet branch a
+ * duplicate of the send before it — and the heartbeat exists precisely to be
+ * received again. A retry of one queued event carries its stored capture time
+ * and so keeps its id; the next heartbeat captures anew and gets a new one.
+ *
+ * @param input - Identity, base branch and the branches being described.
+ * @returns The snapshot event.
+ */
+export function buildRepoSnapshot(input: BuildSnapshotInput): RepoSnapshotEvent {
+  const { identity, defaultBranch, branches } = input;
+
+  return compact({
+    schemaVersion: EVENT_SCHEMA_VERSION,
+    id: deriveEventId({
+      provider: identity.provider,
+      providerEventType: 'repo.snapshot',
+      sessionId: identity.sessionId,
+      timestamp: identity.capturedAt,
+      payloadFingerprint: fingerprint(input)
+    }),
+    timestamp: identity.capturedAt,
+    event: { type: 'repo.snapshot', providerEventType: 'repo.snapshot' },
+    agent: { provider: identity.provider, name: identity.agentName },
+    session: { id: identity.sessionId, providerId: identity.sessionId },
+    developer: identity.installationId ? { installationId: identity.installationId } : undefined,
+
+    provider: identity.provider,
+    surface: identity.surface,
+    repository: identity.repository,
+    developer_id: identity.developerId,
+    default_branch: defaultBranch,
+    captured_at: identity.capturedAt,
+    branches: branches.map((branch) =>
+      compact({
+        name: branch.name,
+        head_sha: branch.headSha,
+        last_commit_at: branch.lastCommitAt,
+        commits: branch.commits.map((commit) =>
+          compact({ sha: commit.sha, subject: commit.subject, authored_at: commit.authoredAt })
+        )
+      })
+    )
+  }) as RepoSnapshotEvent;
+}
+
+/**
+ * What makes this send different from the one before it.
+ *
+ * @param input - Identity, base branch and branches.
+ * @returns A digest over repository, default branch, heads and capture time.
+ */
+function fingerprint(input: BuildSnapshotInput): string {
+  const heads = input.branches.map((branch) => `${branch.name}@${branch.headSha}`).sort();
+
+  return sha256Hex(
+    JSON.stringify([input.identity.repository, input.defaultBranch ?? '', heads, input.identity.capturedAt])
+  );
+}

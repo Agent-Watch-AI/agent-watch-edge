@@ -7,10 +7,12 @@ export const STAGE_ENFORCE = 'enforce';
 export const STAGE_ENRICH = 'enrich';
 export const STAGE_TRACK_TURN = 'track-turn';
 export const STAGE_DELIVER = 'deliver';
+export const STAGE_SNAPSHOT = 'repo-snapshot';
 
 /** Reasons a stage ends the flow early. */
 export const STOP_NO_EVENTS = 'provider produced no canonical events';
 export const STOP_DRY_RUN = 'dry run: nothing delivered';
+export const STOP_NO_SNAPSHOT = 'no closed turn, or git capture is off';
 
 /**
  * Canonical event type whose presence makes a payload the turn's gate.

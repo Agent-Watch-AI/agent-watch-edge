@@ -22,6 +22,57 @@ export const GIT_REMOTE_ARGS = ['config', '--get', 'remote.origin.url'] as const
 export const GIT_STATUS_ARGS = ['status', '--porcelain'] as const;
 export const GIT_USER_EMAIL_ARGS = ['config', '--get', 'user.email'] as const;
 
+/** Field separator inside one `for-each-ref` / `log` record. */
+export const GIT_FIELD_SEPARATOR = '';
+
+/**
+ * The recent branches, newest commit first, with the heads the cache is
+ * compared against.
+ *
+ * One process for the whole listing, and it carries the heads — which is what
+ * lets the cache diff run before any `git log`. On an ordinary closing turn,
+ * where nothing moved, that is the difference between two git processes and
+ * twelve.
+ */
+export function gitRecentBranchesArgs(count: number): readonly string[] {
+  return [
+    'for-each-ref',
+    'refs/heads',
+    '--sort=-committerdate',
+    `--count=${String(count)}`,
+    `--format=%(refname:short)${GIT_FIELD_SEPARATOR}%(objectname)${GIT_FIELD_SEPARATOR}%(committerdate:iso-strict)`
+  ];
+}
+
+/**
+ * The commits on a branch that its default branch does not have.
+ *
+ * The delta, never the history: `git log <branch>` would carry the trunk's
+ * commits into every branch's evidence, so unrelated work would be described
+ * by the same subjects and named as one feature.
+ */
+export function gitBranchDeltaArgs(defaultBranch: string, branch: string, count: number): readonly string[] {
+  return [
+    'log',
+    '-n',
+    String(count),
+    `--format=%H${GIT_FIELD_SEPARATOR}%s${GIT_FIELD_SEPARATOR}%aI`,
+    `${defaultBranch}..${branch}`,
+    '--'
+  ];
+}
+
+/** Where `origin/HEAD` points: the remote's default branch, when it is known locally. */
+export const GIT_ORIGIN_HEAD_ARGS = ['symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD'] as const;
+
+/** Whether a ref exists at all, for the local fallback when no `origin/HEAD` does. */
+export function gitVerifyRefArgs(ref: string): readonly string[] {
+  return ['rev-parse', '--verify', '-q', `${ref}^{commit}`];
+}
+
+/** What a repository's trunk is called when neither git nor the platform said. */
+export const ASSUMED_DEFAULT_BRANCHES = ['main', 'master'] as const;
+
 /** Node's error code for a child process that overran maxBuffer on stdout. */
 export const STDOUT_MAXBUFFER_CODE = 'ERR_CHILD_PROCESS_STDOUT_MAXBUFFER';
 

@@ -23,6 +23,8 @@ import type { GitContext, GitContextOptions, GitRunner, GitUserEmailOptions } fr
 
 export type { GitContext, GitContextOptions, GitRunner } from './types/git.types.js';
 
+export { defaultRunner as runGit };
+
 /**
  * Collect repository context for event enrichment.
  *

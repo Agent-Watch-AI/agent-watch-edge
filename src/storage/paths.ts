@@ -12,6 +12,7 @@ import {
   LOCKS_DIR_NAME,
   POSIX_DATA_FALLBACK,
   QUEUE_DIR_NAME,
+  SNAPSHOTS_DIR_NAME,
   TURNS_DIR_NAME,
   XDG_DATA_HOME_VAR
 } from './constants/storage.constants.js';
@@ -41,7 +42,8 @@ export function resolvePaths(env: Env): AgentWatchPaths {
     queueDir: path.join(dataDir, QUEUE_DIR_NAME),
     locksDir: path.join(dataDir, LOCKS_DIR_NAME),
     backupsDir: path.join(dataDir, BACKUPS_DIR_NAME),
-    turnsDir: path.join(dataDir, TURNS_DIR_NAME)
+    turnsDir: path.join(dataDir, TURNS_DIR_NAME),
+    snapshotsDir: path.join(dataDir, SNAPSHOTS_DIR_NAME)
   };
 }
 

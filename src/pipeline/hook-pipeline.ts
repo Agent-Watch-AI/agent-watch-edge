@@ -231,14 +231,7 @@ async function trackTurnSafely(state: HookPipelineState): Promise<HookPipelineSt
 async function deliver(state: HookPipelineState): Promise<StepOutcome<HookPipelineState>> {
   if (state.dryRun) return stop(state, STOP_DRY_RUN);
 
-  const queue = new EventQueue({
-    queueDir: state.paths.queueDir,
-    locksDir: state.paths.locksDir,
-    maxEvents: state.config.delivery.maxQueueEvents,
-    maxAttempts: state.config.delivery.maxAttempts,
-    maxEventAgeDays: state.config.delivery.maxEventAgeDays,
-    now: state.env.now
-  });
+  const queue = buildQueue(state);
   const delivery = await deliverEvents(
     state.outbound,
     buildTransport(state),
@@ -285,21 +278,33 @@ async function snapshot(state: HookPipelineState): Promise<StepOutcome<HookPipel
       installationId: state.config.installationId,
       sessionId: state.summary?.session_id,
       capturedAt: state.env.now().toISOString(),
+      // Real time, deliberately, where the line above uses the injected clock:
+      // this bounds subprocess timeouts, which are measured against the wall.
       deadline: Date.now() + SNAPSHOT_BUDGET_MS,
       run: runGit
     },
     store: new SnapshotStateStore(state.paths.snapshotsDir),
-    queue: new EventQueue({
-      queueDir: state.paths.queueDir,
-      locksDir: state.paths.locksDir,
-      maxEvents: state.config.delivery.maxQueueEvents,
-      maxAttempts: state.config.delivery.maxAttempts,
-      maxEventAgeDays: state.config.delivery.maxEventAgeDays,
-      now: state.env.now
-    })
+    queue: buildQueue(state)
   });
 
   return next(state);
+}
+
+/**
+ * The offline queue for this run.
+ *
+ * @param state - Current flow state.
+ * @returns A queue bound to this run's paths and delivery limits.
+ */
+function buildQueue(state: HookPipelineState): EventQueue {
+  return new EventQueue({
+    queueDir: state.paths.queueDir,
+    locksDir: state.paths.locksDir,
+    maxEvents: state.config.delivery.maxQueueEvents,
+    maxAttempts: state.config.delivery.maxAttempts,
+    maxEventAgeDays: state.config.delivery.maxEventAgeDays,
+    now: state.env.now
+  });
 }
 
 /**

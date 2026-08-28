@@ -6,6 +6,7 @@ import { sanitizeValue } from '../privacy/sanitizer.js';
 import { nextSnapshotState, selectChangedBranches } from './branch-selection.js';
 import { budgetedRunner, remainingMs, withinBudget } from './budget.js';
 import { buildRepoSnapshot } from './snapshot-event.js';
+import { emptyState } from './snapshot-state.js';
 import { SNAPSHOT_BRANCH_COUNT, SNAPSHOT_COMMITS_PER_BRANCH } from './constants/snapshot.constants.js';
 import {
   STAGE_COLLECT_COMMITS,
@@ -15,16 +16,21 @@ import {
   STAGE_SELECT_CHANGED,
   STOP_BUDGET_SPENT,
   STOP_NOTHING_CHANGED,
+  STOP_NO_EVENT,
   STOP_NOT_A_REPOSITORY
 } from './constants/snapshot-stages.constants.js';
+import type { SnapshotBranch } from '../git/types/snapshot.types.js';
 import type {
-  SnapshotFlowInput,
+  SelectionInput,
   SnapshotFlowState,
-  SnapshotQueue,
-  SnapshotStateReader
+  SnapshotPipelineInput
 } from './types/snapshot.types.js';
 
-export type { SnapshotFlowInput, SnapshotFlowState } from './types/snapshot.types.js';
+export type {
+  SnapshotFlowInput,
+  SnapshotFlowState,
+  SnapshotPipelineInput
+} from './types/snapshot.types.js';
 
 /**
  * The snapshot flow, as the list of stages it is.
@@ -42,12 +48,6 @@ const SNAPSHOT_STAGES: readonly Step<SnapshotFlowState>[] = [
   step(STAGE_ENQUEUE, enqueue)
 ];
 
-export interface SnapshotPipelineInput {
-  readonly input: SnapshotFlowInput;
-  readonly store: SnapshotStateReader;
-  readonly queue: SnapshotQueue;
-}
-
 /**
  * Describe this repository's recent branches, if anything about them changed.
  *
@@ -63,6 +63,10 @@ export function runSnapshotPipeline(pipeline: SnapshotPipelineInput): Promise<Fl
     input: pipeline.input,
     store: pipeline.store,
     queue: pipeline.queue,
+    // Every git call in this flow goes through the budget, not only the logs:
+    // the listing and the three fallbacks that resolve a trunk are four
+    // sequential seconds of the hook's answer if nothing bounds them.
+    run: budgetedRunner(pipeline.input.run, pipeline.input.deadline),
     refs: [],
     selected: [],
     branches: []
@@ -82,16 +86,14 @@ export function runSnapshotPipeline(pipeline: SnapshotPipelineInput): Promise<Fl
  * @returns The state with its refs, or a stop outside a repository.
  */
 async function collectRefs(state: SnapshotFlowState): Promise<StepOutcome<SnapshotFlowState>> {
-  const { cwd, deadline } = state.input;
-  // Every git call in this flow goes through the budget, not only the logs:
-  // the listing and the three fallbacks that resolve a trunk are four
-  // sequential seconds of the hook's answer if nothing bounds them.
-  const run = budgetedRunner(state.input.run, deadline);
-  const refs = await collectBranchRefs({ cwd, branchCount: SNAPSHOT_BRANCH_COUNT }, run);
+  const { cwd } = state.input;
+  const refs = await collectBranchRefs({ cwd, branchCount: SNAPSHOT_BRANCH_COUNT }, state.run);
 
   if (refs.length === 0) return stop(state, STOP_NOT_A_REPOSITORY);
 
-  return next({ ...state, refs, defaultBranch: await resolveDefaultBranch(cwd, run) });
+  const defaultBranch = await resolveDefaultBranch(cwd, state.run);
+
+  return next({ ...state, refs, defaultBranch });
 }
 
 /**
@@ -102,12 +104,7 @@ async function collectRefs(state: SnapshotFlowState): Promise<StepOutcome<Snapsh
  */
 async function selectChanged(state: SnapshotFlowState): Promise<StepOutcome<SnapshotFlowState>> {
   const stored = await state.store.read(state.input.repository);
-  const selected = selectChangedBranches({
-    refs: state.refs,
-    stored,
-    defaultBranch: state.defaultBranch,
-    now: Date.parse(state.input.capturedAt)
-  });
+  const selected = selectChangedBranches(selectionInput({ ...state, stored }));
 
   if (selected.length === 0) return stop({ ...state, stored }, STOP_NOTHING_CHANGED);
 
@@ -127,8 +124,7 @@ async function selectChanged(state: SnapshotFlowState): Promise<StepOutcome<Snap
  */
 async function collectCommits(state: SnapshotFlowState): Promise<StepOutcome<SnapshotFlowState>> {
   const { cwd, deadline } = state.input;
-  const run = budgetedRunner(state.input.run, deadline);
-  const branches = [];
+  const branches: SnapshotBranch[] = [];
 
   for (const ref of state.selected) {
     if (remainingMs(deadline) === 0) break;
@@ -136,7 +132,7 @@ async function collectCommits(state: SnapshotFlowState): Promise<StepOutcome<Sna
     const commits = await collectBranchCommits(
       ref.name,
       { cwd, defaultBranch: state.defaultBranch, commitCount: SNAPSHOT_COMMITS_PER_BRANCH },
-      run
+      state.run
     );
 
     branches.push({ ...ref, commits });
@@ -178,7 +174,7 @@ async function sanitize(state: SnapshotFlowState): Promise<StepOutcome<SnapshotF
  * @returns The state, unchanged.
  */
 async function enqueue(state: SnapshotFlowState): Promise<StepOutcome<SnapshotFlowState>> {
-  if (!state.event) return stop(state, STOP_NOTHING_CHANGED);
+  if (!state.event) return stop(state, STOP_NO_EVENT);
 
   const { deadline } = state.input;
   const queued = await withinBudget(state.queue.enqueue([state.event]), deadline);
@@ -188,20 +184,28 @@ async function enqueue(state: SnapshotFlowState): Promise<StepOutcome<SnapshotFl
   if (!queued) return stop(state, STOP_BUDGET_SPENT);
 
   await withinBudget(
-    state.store.write(
-      state.input.repository,
-      nextSnapshotState(
-        {
-          refs: state.refs,
-          stored: state.stored ?? { branches: {} },
-          defaultBranch: state.defaultBranch,
-          now: Date.parse(state.input.capturedAt)
-        },
-        state.branches
-      )
-    ),
+    state.store.write(state.input.repository, nextSnapshotState(selectionInput(state), state.branches)),
     deadline
   );
 
   return next(state);
+}
+
+/**
+ * The selection's view of this flow.
+ *
+ * Built once so the write-back cannot disagree with the comparison that chose
+ * the branches — they read the same refs, the same stored state and the same
+ * clock, or a branch could be selected against one and recorded against another.
+ *
+ * @param state - Current flow state, with its stored state already read.
+ * @returns What both the selection and the write-back are decided on.
+ */
+function selectionInput(state: SnapshotFlowState): SelectionInput {
+  return {
+    refs: state.refs,
+    stored: state.stored ?? emptyState(),
+    defaultBranch: state.defaultBranch,
+    now: Date.parse(state.input.capturedAt)
+  };
 }

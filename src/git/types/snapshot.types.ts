@@ -20,12 +20,10 @@ export interface SnapshotBranch extends BranchRef {
 export interface CollectRefsOptions {
   readonly cwd: string;
   readonly branchCount: number;
-  readonly timeoutMs?: number;
 }
 
 export interface CollectCommitsOptions {
   readonly cwd: string;
   readonly defaultBranch?: string;
   readonly commitCount: number;
-  readonly timeoutMs?: number;
 }

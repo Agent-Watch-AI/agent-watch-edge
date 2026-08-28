@@ -1,20 +1,14 @@
 import { SNAPSHOT_REFRESH_MS } from './constants/snapshot.constants.js';
 import type { BranchRef } from '../git/types/snapshot.types.js';
-import type { SnapshotState } from './types/snapshot.types.js';
-
-export interface SelectionInput {
-  readonly refs: readonly BranchRef[];
-  readonly stored: SnapshotState;
-  readonly defaultBranch?: string;
-  readonly now: number;
-}
+import type { SelectionInput, SnapshotState } from './types/snapshot.types.js';
 
 /**
  * Which branches are worth describing again.
  *
  * Four reasons, and each one is a bug if it is missing:
  *
- * - the head moved, or the branch is new — the obvious one;
+ * - the branch is new — nothing has ever been reported about it;
+ * - its head moved — the obvious one;
  * - the default branch changed since the last send, because every delta was
  *   computed against the wrong base and no head has to move for that to be
  *   true;
@@ -24,7 +18,7 @@ export interface SelectionInput {
  * @param input - The refs git reported and what was last sent.
  * @returns The branches to describe. Empty means send nothing at all.
  */
-export function selectChangedBranches(input: SelectionInput): BranchRef[] {
+export function selectChangedBranches(input: SelectionInput): readonly BranchRef[] {
   const rebased = input.stored.defaultBranch !== input.defaultBranch;
 
   return input.refs.filter((ref) => {

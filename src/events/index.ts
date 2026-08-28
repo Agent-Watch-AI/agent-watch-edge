@@ -20,6 +20,7 @@ export type {
   UsageSource
 } from './types/events.types.js';
 export type { BuildLlmCallInput, LlmCallCorrelation, LlmCallEvent, LlmCallStatus, LlmCallUsage } from './types/llm-call.types.js';
+export type { RepoSnapshotBranch, RepoSnapshotCommit, RepoSnapshotEvent } from './types/repo-snapshot.types.js';
 export type { EnrichOptions, PathRewriter, PathRule } from './types/enrich.types.js';
 export type { ProductEvent } from './product-event.js';
 

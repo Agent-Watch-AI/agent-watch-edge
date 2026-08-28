@@ -48,6 +48,14 @@ export const SNAPSHOT_REFRESH_MS = 6 * 60 * 60 * 1000;
  * nothing about this contract.
  */
 export const SNAPSHOT_MAX_SUBJECT_LENGTH = 200;
+
+/**
+ * The longest branch name the backend stores.
+ *
+ * A name it cannot store costs that branch its row, and a branch name this long
+ * is not a name anyone typed — so it is dropped rather than truncated, which
+ * would report work under a name that does not exist.
+ */
 export const SNAPSHOT_MAX_BRANCH_NAME_LENGTH = 255;
 
 /** Hex characters kept from the repository digest that names a state file. */

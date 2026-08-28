@@ -1,4 +1,4 @@
-import type { EventSession } from './events.types.js';
+import type { AgentWatchEvent } from './events.types.js';
 
 /** One commit of a branch's delta, as the backend receives it. */
 export interface RepoSnapshotCommit {
@@ -23,15 +23,7 @@ export interface RepoSnapshotBranch {
  * exists at all. Sent only when something changed, so a quiet repository costs
  * nothing.
  */
-export interface RepoSnapshotEvent {
-  readonly schemaVersion: '1';
-  readonly id: string;
-  readonly timestamp: string;
-  readonly event: { readonly type: 'repo.snapshot'; readonly providerEventType: string };
-  readonly agent: { readonly provider: string; readonly name: string; readonly version?: string };
-  readonly session: EventSession;
-  readonly developer?: { readonly installationId?: string };
-
+export interface RepoSnapshotEvent extends AgentWatchEvent<'repo.snapshot'> {
   readonly provider: string;
   readonly surface: string;
   readonly repository: string;

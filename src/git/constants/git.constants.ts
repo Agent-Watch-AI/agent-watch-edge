@@ -22,6 +22,9 @@ export const GIT_REMOTE_ARGS = ['config', '--get', 'remote.origin.url'] as const
 export const GIT_STATUS_ARGS = ['status', '--porcelain'] as const;
 export const GIT_USER_EMAIL_ARGS = ['config', '--get', 'user.email'] as const;
 
+/** Where `origin/HEAD` points: the remote's default branch, when it is known locally. */
+export const GIT_ORIGIN_HEAD_ARGS = ['symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD'] as const;
+
 /** Field separator inside one `for-each-ref` / `log` record. */
 export const GIT_FIELD_SEPARATOR = '';
 
@@ -33,6 +36,9 @@ export const GIT_FIELD_SEPARATOR = '';
  * lets the cache diff run before any `git log`. On an ordinary closing turn,
  * where nothing moved, that is the difference between two git processes and
  * twelve.
+ *
+ * @param count - How many branches to list, newest commit first.
+ * @returns The argument vector.
  */
 export function gitRecentBranchesArgs(count: number): readonly string[] {
   return [
@@ -50,6 +56,11 @@ export function gitRecentBranchesArgs(count: number): readonly string[] {
  * The delta, never the history: `git log <branch>` would carry the trunk's
  * commits into every branch's evidence, so unrelated work would be described
  * by the same subjects and named as one feature.
+ *
+ * @param defaultBranch - The trunk to subtract.
+ * @param branch - The branch to describe.
+ * @param count - Ceiling on the commits returned.
+ * @returns The argument vector.
  */
 export function gitBranchDeltaArgs(defaultBranch: string, branch: string, count: number): readonly string[] {
   return [
@@ -62,10 +73,12 @@ export function gitBranchDeltaArgs(defaultBranch: string, branch: string, count:
   ];
 }
 
-/** Where `origin/HEAD` points: the remote's default branch, when it is known locally. */
-export const GIT_ORIGIN_HEAD_ARGS = ['symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD'] as const;
-
-/** Whether a ref exists at all, for the local fallback when no `origin/HEAD` does. */
+/**
+ * Whether a ref exists at all, for the local fallback when no `origin/HEAD` does.
+ *
+ * @param ref - The ref to test.
+ * @returns The argument vector, which exits non-zero when the ref is absent.
+ */
 export function gitVerifyRefArgs(ref: string): readonly string[] {
   return ['rev-parse', '--verify', '-q', `${ref}^{commit}`];
 }

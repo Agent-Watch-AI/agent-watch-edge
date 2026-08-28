@@ -22,9 +22,14 @@ export interface SnapshotState {
   readonly branches: Record<string, SnapshotStateEntry>;
 }
 
-/** Everything the snapshot flow needs to decide and build one event. */
-export interface SnapshotFlowInput {
-  readonly cwd: string;
+/**
+ * Who and where a snapshot is about: everything the event itself carries.
+ *
+ * Split from the flow's input so the builder cannot reach the git runner or the
+ * deadline — a field named `identity` that also holds a subprocess launcher is
+ * one a reader has to check rather than read.
+ */
+export interface SnapshotIdentity {
   readonly repository: string;
   readonly provider: string;
   readonly surface: string;
@@ -33,8 +38,35 @@ export interface SnapshotFlowInput {
   readonly installationId?: string;
   readonly sessionId?: string;
   readonly capturedAt: string;
+}
+
+/** Everything the snapshot flow needs to decide and build one event. */
+export interface SnapshotFlowInput extends SnapshotIdentity {
+  readonly cwd: string;
   readonly deadline: number;
   readonly run: GitRunner;
+}
+
+/** What the selection compares, and what the write-back records. */
+export interface SelectionInput {
+  readonly refs: readonly BranchRef[];
+  readonly stored: SnapshotState;
+  readonly defaultBranch?: string;
+  readonly now: number;
+}
+
+/** Identity, base branch and the branches one event describes. */
+export interface BuildSnapshotInput {
+  readonly identity: SnapshotIdentity;
+  readonly defaultBranch?: string;
+  readonly branches: readonly SnapshotBranch[];
+}
+
+/** Everything one run of the flow needs beyond its own state. */
+export interface SnapshotPipelineInput {
+  readonly input: SnapshotFlowInput;
+  readonly store: SnapshotStateReader;
+  readonly queue: SnapshotQueue;
 }
 
 /** State threaded through the snapshot flow's stages. */
@@ -42,6 +74,8 @@ export interface SnapshotFlowState {
   readonly input: SnapshotFlowInput;
   readonly store: SnapshotStateReader;
   readonly queue: SnapshotQueue;
+  /** The budgeted runner every stage uses; built once, where the budget is set. */
+  readonly run: GitRunner;
   readonly stored?: SnapshotState;
   readonly defaultBranch?: string;
   readonly refs: readonly BranchRef[];

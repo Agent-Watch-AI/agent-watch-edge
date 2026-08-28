@@ -107,6 +107,6 @@ function readEntries(value: unknown): Record<string, SnapshotStateEntry> {
  *
  * @returns An empty state, which selects every branch.
  */
-function emptyState(): SnapshotState {
+export function emptyState(): SnapshotState {
   return { branches: {} };
 }

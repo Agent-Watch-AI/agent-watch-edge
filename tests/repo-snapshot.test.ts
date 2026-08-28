@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { nextSnapshotState, selectChangedBranches } from '../src/snapshot/branch-selection.js';
 import { SNAPSHOT_REFRESH_MS } from '../src/snapshot/constants/snapshot.constants.js';
 import { budgetedRunner, withinBudget } from '../src/snapshot/budget.js';
+import {
+  STAGE_COLLECT_REFS,
+  STAGE_SELECT_CHANGED
+} from '../src/snapshot/constants/snapshot-stages.constants.js';
 import { buildRepoSnapshot } from '../src/snapshot/snapshot-event.js';
 import { runSnapshotPipeline } from '../src/snapshot/snapshot-pipeline.js';
 import { collectBranchCommits, collectBranchRefs, resolveDefaultBranch } from '../src/git/repo-snapshot.js';
@@ -30,6 +34,17 @@ function refLine(name: string, sha: string, date = '2026-08-28T11:00:00+00:00'):
 
 function commitLine(sha: string, subject: string): string {
   return `${sha}${SEP}${subject}${SEP}2026-08-28T10:00:00+00:00`;
+}
+
+/** A cache that records what the flow wrote back. */
+function store(state: SnapshotState) {
+  const written: SnapshotState[] = [];
+
+  return {
+    written,
+    read: async () => state,
+    write: async (_repository: string, next: SnapshotState) => void written.push(next)
+  };
 }
 
 function identity(overrides: Partial<SnapshotFlowInput> = {}): SnapshotFlowInput {
@@ -221,11 +236,7 @@ describe('the budget', () => {
   });
 
   it('records nothing as sent when the queue write did not finish', async () => {
-    const cache = {
-      written: [] as SnapshotState[],
-      read: async () => ({ defaultBranch: 'main', branches: {} }),
-      write: async (_repository: string, state: SnapshotState) => void cache.written.push(state)
-    };
+    const cache = store({ defaultBranch: 'main', branches: {} });
     const run = fakeGit({
       'for-each-ref': refLine('feature/a', 'aa'),
       'symbolic-ref --short -q refs/remotes/origin/HEAD': 'origin/main',
@@ -274,18 +285,6 @@ describe('the snapshot event', () => {
 });
 
 describe('the snapshot flow', () => {
-  function store(state: SnapshotState) {
-    const written: SnapshotState[] = [];
-
-    return {
-      written,
-      read: async () => state,
-      write: async (_repository: string, next: SnapshotState) => {
-        written.push(next);
-      }
-    };
-  }
-
   it('runs no git log at all when nothing changed', async () => {
     const calls: string[][] = [];
     const run = fakeGit(
@@ -304,7 +303,7 @@ describe('the snapshot flow', () => {
       queue: { enqueue: async (events) => void queued.push(...events) }
     });
 
-    expect(result.stoppedAt).toBe('select-changed');
+    expect(result.stoppedAt).toBe(STAGE_SELECT_CHANGED);
     expect(calls.some((args) => args[0] === 'log')).toBe(false);
     expect(queued).toHaveLength(0);
   });
@@ -371,6 +370,6 @@ describe('the snapshot flow', () => {
       queue: { enqueue: async () => undefined }
     });
 
-    expect(result.stoppedAt).toBe('collect-refs');
+    expect(result.stoppedAt).toBe(STAGE_COLLECT_REFS);
   });
 });

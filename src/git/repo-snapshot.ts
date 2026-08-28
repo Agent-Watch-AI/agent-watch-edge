@@ -27,8 +27,7 @@ const REMOTE_PREFIX = 'origin/';
  * @returns The branches, newest commit first. Empty outside a repository.
  */
 export async function collectBranchRefs(options: CollectRefsOptions, run: GitRunner): Promise<BranchRef[]> {
-  const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
-  const output = await run(gitRecentBranchesArgs(options.branchCount), options.cwd, timeoutMs);
+  const output = await run(gitRecentBranchesArgs(options.branchCount), options.cwd, GIT_TIMEOUT_MS);
 
   if (!output) return [];
 
@@ -48,17 +47,16 @@ export async function collectBranchRefs(options: CollectRefsOptions, run: GitRun
  * repository's whole history.
  *
  * @param cwd - Repository directory.
- * @param run - Git runner.
- * @param timeoutMs - Budget per git process.
+ * @param run - Git runner; the caller's budgeted one caps what this may spend.
  * @returns The default branch name, or undefined.
  */
-export async function resolveDefaultBranch(cwd: string, run: GitRunner, timeoutMs = GIT_TIMEOUT_MS): Promise<string | undefined> {
-  const origin = await run(GIT_ORIGIN_HEAD_ARGS, cwd, timeoutMs);
+export async function resolveDefaultBranch(cwd: string, run: GitRunner): Promise<string | undefined> {
+  const origin = await run(GIT_ORIGIN_HEAD_ARGS, cwd, GIT_TIMEOUT_MS);
 
   if (origin) return origin.startsWith(REMOTE_PREFIX) ? origin.slice(REMOTE_PREFIX.length) : origin;
 
   for (const candidate of ASSUMED_DEFAULT_BRANCHES) {
-    if (await run(gitVerifyRefArgs(candidate), cwd, timeoutMs)) return candidate;
+    if (await run(gitVerifyRefArgs(candidate), cwd, GIT_TIMEOUT_MS)) return candidate;
   }
 
   return undefined;
@@ -68,7 +66,7 @@ export async function resolveDefaultBranch(cwd: string, run: GitRunner, timeoutM
  * The commits one branch has that its default branch does not.
  *
  * @param branch - Branch to describe.
- * @param options - Base branch, cap and budget.
+ * @param options - Where to look, the base branch and the commit cap.
  * @param run - Git runner.
  * @returns The delta commits, newest first. Empty when there is no base to
  *   subtract, which is the honest answer: the alternative is reporting the
@@ -84,7 +82,7 @@ export async function collectBranchCommits(
   const output = await run(
     gitBranchDeltaArgs(options.defaultBranch, branch, options.commitCount),
     options.cwd,
-    options.timeoutMs ?? GIT_TIMEOUT_MS
+    GIT_TIMEOUT_MS
   );
 
   if (!output) return [];

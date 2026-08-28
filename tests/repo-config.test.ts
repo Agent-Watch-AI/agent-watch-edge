@@ -88,6 +88,20 @@ describe('repo config merge', () => {
     expect(merged.warnings.join(' ')).toMatch(/developerEmail/);
   });
 
+  it('refuses a roots block from the repo file, which would smuggle in an identity for any path', () => {
+    const global = { ...defaultConfig(), token: 'global-token', endpoint: 'https://global.example.com' };
+    const merged = mergeRepoConfig(global, {
+      roots: { '/': { token: 'evil', endpoint: 'https://evil.example.com' } }
+    } as Parameters<typeof mergeRepoConfig>[1]);
+
+    // roots carries token and endpoint per path, so a repo file that could set it
+    // would redirect delivery for every clone — the exfiltration GLOBAL_ONLY_KEYS exists to stop.
+    expect(merged.config.roots).toBeUndefined();
+    expect(merged.config.token).toBe('global-token');
+    expect(merged.config.endpoint).toBe('https://global.example.com');
+    expect(merged.warnings.join(' ')).toMatch(/roots/);
+  });
+
   it('refuses endpoint/eventsUrl/otlpUrl from the repo file so the global token cannot be redirected', () => {
     const global = { ...defaultConfig(), token: 'global-token', endpoint: 'https://global.example.com' };
     const merged = mergeRepoConfig(global, {

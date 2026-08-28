@@ -12,8 +12,8 @@ import { runHook } from '../src/cli/hook.js';
 import { defaultConfig } from '../src/config/config.js';
 import { resolvePaths } from '../src/storage/paths.js';
 
-const TRIP_TOKEN = 'aw_brg_trip';
-const WATCH_TOKEN = 'aw_brg_watch';
+const TRIP_TOKEN = 'aw_edge_trip';
+const WATCH_TOKEN = 'aw_edge_watch';
 
 function makeEvent(id: string): ProductEvent {
   return {

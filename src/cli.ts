@@ -22,7 +22,9 @@ Usage:
 Flags:
   --endpoint <url>          backend base URL events are sent to
   --token <token>           bearer token for the backend
-  --developer-email <email> identity attached to turn summaries (default: git config user.email)
+  --developer-email <email> identity attached to turn summaries and keyed on by per-developer
+                            enforcement (default: git config user.email; setup fails when neither
+                            names a developer)
   --otel <signals>          native OTLP signals agents export to the backend: comma list of
                             logs,traces,metrics, or "all"/"none" (default: logs — the
                             per-request usage/cost ledger the backend turns into llm.call)

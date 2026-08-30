@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `agentwatch setup` now refuses an install it cannot attribute: with no `--developer-email` and no
+  `git config user.email`, it exits non-zero with the two remedies on stderr and writes no config
+  file. An unknown identity is allowed silently by the enforcement gate, so an unattributable
+  install used to report success while enforcing nothing.
+- `--yes` / `--non-interactive` now suppresses every setup prompt, including the developer-email
+  one, and the prompt itself only appears when nothing else names the developer. `--developer-email`
+  still overrides the machine's git identity.
+- `agentwatch doctor` reports the same condition as a `developer identity` failure, in the human
+  report and in `--json`, so a scripted rollout can fail a machine instead of shipping it broken.
+
 - Budget enforcement: before a turn starts, the Edge asks the backend
   (`GET <backend>/v1/enforcement/decision?developer_id=…`) whether this developer may make an LLM
   call, and refuses the prompt in the agent's own protocol when the backend answers `block` —

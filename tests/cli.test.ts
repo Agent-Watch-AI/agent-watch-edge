@@ -33,6 +33,7 @@ describe('CLI commands', () => {
       env: world.env,
       endpoint: 'https://backend.example.com',
       token: 'tok-1',
+      developerEmail: 'dev@company.com',
       yes: true,
       hookCommandFor: (id) => `agentwatch hook --agent ${id}`
     });
@@ -94,6 +95,7 @@ describe('CLI commands', () => {
         env: world.env,
         endpoint: 'https://backend.example.com',
         token: 'tok-1',
+        developerEmail: 'dev@company.com',
         otel: 'all',
         yes: true,
         hookCommandFor: (id) => `agentwatch hook --agent ${id}`
@@ -118,6 +120,7 @@ describe('CLI commands', () => {
         env: world.env,
         endpoint: 'https://backend.example.com',
         token: 'tok-1',
+        developerEmail: 'dev@company.com',
         otel: 'none',
         yes: true,
         hookCommandFor: (id) => `agentwatch hook --agent ${id}`
@@ -140,6 +143,7 @@ describe('CLI commands', () => {
         env: world.env,
         endpoint: 'https://backend.example.com',
         token: 'tok-1',
+        developerEmail: 'dev@company.com',
         otel: 'logz',
         yes: true,
         hookCommandFor: (id) => `agentwatch hook --agent ${id}`
@@ -168,7 +172,9 @@ describe('CLI commands', () => {
         ask: async (question) => {
           questions.push(question);
 
-          return question.includes('URL') ? 'https://asked.example.com' : '';
+          if (question.includes('URL')) return 'https://asked.example.com';
+
+          return question.includes('Developer email') ? 'dev@company.com' : '';
         },
         hookCommandFor: (id) => `agentwatch hook --agent ${id}`
       });
@@ -232,6 +238,7 @@ describe('CLI commands', () => {
         env: world.env,
         endpoint: 'https://new.example.com',
         token: 'tok-2',
+        developerEmail: 'dev@company.com',
         yes: true,
         hookCommandFor: (id) => `agentwatch hook --agent ${id}`
       });

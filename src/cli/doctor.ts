@@ -10,6 +10,7 @@ import type { CaptureConfig } from '../config/types/config.types.js';
 import type { Env } from '../core/types/core.types.js';
 import { meetsMinVersion, parseVersion } from '../core/version.js';
 import { findExecutable } from '../core/which.js';
+import { developerIdentity } from '../git/git-context.js';
 import { providers } from '../providers/registry.js';
 import type { AgentProvider, SetupContext } from '../providers/types/provider.types.js';
 import { buildCliContext, buildHookCommand, buildQueue } from './context.js';
@@ -17,11 +18,14 @@ import {
   BACKEND_PROBE_TIMEOUT_MS,
   CLAUDE_MIN_VERSION_FOR_PROMPT_ID,
   CLAUDE_VERSION_TIMEOUT_MS,
+  DEVELOPER_IDENTITY_CHECK,
+  DEVELOPER_IDENTITY_REMEDIES,
   GIT_VERSION_TIMEOUT_MS,
   MIN_NODE_MAJOR,
+  NO_DEVELOPER_IDENTITY,
   STALE_QUEUE_AGE_MS
 } from './constants/cli.constants.js';
-import type { Check, CliContext } from './types/cli.types.js';
+import type { Check, CliContext, DoctorOptions } from './types/cli.types.js';
 import { bold, dim, levelSymbol, println } from './ui.js';
 
 /**
@@ -33,16 +37,16 @@ import { bold, dim, levelSymbol, println } from './ui.js';
  * to fix.
  *
  * @param env - Ambient environment.
- * @param options - Output options.
- * @param options.json - Emit machine-readable JSON instead of the human report.
+ * @param options - Output options and the git runner override.
  * @returns 1 when any check failed, else 0.
  */
-export async function runDoctor(env: Env, options: { json?: boolean } = {}): Promise<number> {
+export async function runDoctor(env: Env, options: DoctorOptions = {}): Promise<number> {
   const context = await buildCliContext(env);
   const checks: Check[] = [
     nodeVersionCheck(),
     configurationCheck(context),
     ...endpointChecks(context),
+    await developerIdentityCheck(env, context, options),
     ...(await connectivityChecks(context)),
     await gitCheck(),
     await buildFreshnessCheck(),
@@ -111,6 +115,27 @@ function endpointChecks(context: CliContext): Check[] {
     { name: 'backend endpoint', level: context.config.endpoint ? 'ok' : 'warn', detail: context.config.endpoint ?? 'not configured' },
     { name: 'auth token', level: 'ok', detail: context.config.token ? 'present (hidden)' : 'none configured' }
   ];
+}
+
+/**
+ * Whether anything on this machine can name the developer.
+ *
+ * `fail`, not `warn`: per-developer enforcement is keyed on this identity, and
+ * an unknown one is allowed silently — so a machine that cannot name its
+ * developer is a machine that reports healthy while enforcing nothing. A
+ * scripted rollout has to be able to fail it instead of shipping it.
+ *
+ * @param env - Ambient environment.
+ * @param context - Resolved CLI context.
+ * @param options - Carries the git runner override.
+ * @returns The check.
+ */
+async function developerIdentityCheck(env: Env, context: CliContext, options: DoctorOptions): Promise<Check> {
+  const identity = await developerIdentity(context.config.developerEmail, env.cwd, { home: env.home, run: options.gitRun });
+
+  if (!identity) return { name: DEVELOPER_IDENTITY_CHECK, level: 'fail', detail: `${NO_DEVELOPER_IDENTITY}; ${DEVELOPER_IDENTITY_REMEDIES}` };
+
+  return { name: DEVELOPER_IDENTITY_CHECK, level: 'ok', detail: identity };
 }
 
 /**

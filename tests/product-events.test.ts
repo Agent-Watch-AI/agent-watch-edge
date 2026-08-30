@@ -10,9 +10,9 @@ const kv = (key: string, value: string | number) => ({
   value: typeof value === 'number' ? { intValue: String(value) } : { stringValue: value }
 });
 
-describe('two-record product contract', () => {
-  it('exposes exactly llm.call and turn.summary', () => {
-    expect(PRODUCT_EVENT_TYPES).toEqual(['llm.call', 'turn.summary']);
+describe('product contract', () => {
+  it('exposes exactly the records the backend accepts', () => {
+    expect(PRODUCT_EVENT_TYPES).toEqual(['llm.call', 'turn.summary', 'repo.snapshot']);
   });
 
   it('normalizes each Claude API request into one feature-correlated llm.call', () => {

@@ -33,8 +33,15 @@ export const INTERNAL_HOOK_EVENT_TYPES = [
   'agent.other'
 ] as const;
 
-/** The only two record types accepted by the AgentWatch product backend. */
-export const PRODUCT_EVENT_TYPES = ['llm.call', 'turn.summary'] as const;
+/**
+ * The record types accepted by the AgentWatch product backend.
+ *
+ * `repo.snapshot` joined the two spend records because the backend's feature
+ * layer is an overlay on work items, and a team with no tracker connected has
+ * none — the branches on a developer's machine are then the only evidence that
+ * a piece of work exists. It carries no usage and is not accounted.
+ */
+export const PRODUCT_EVENT_TYPES = ['llm.call', 'turn.summary', 'repo.snapshot'] as const;
 
 export const CANONICAL_EVENT_TYPES = [...INTERNAL_HOOK_EVENT_TYPES, ...PRODUCT_EVENT_TYPES] as const;
 

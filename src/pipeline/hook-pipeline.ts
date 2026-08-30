@@ -7,7 +7,10 @@ import { loadEffectiveConfig } from '../config/repo-config.js';
 import { DECISION_BLOCK } from '../enforcement/constants/enforcement.constants.js';
 import { resolveEnforcement } from '../enforcement/enforcement.js';
 import { enrichEvents } from '../events/enrich.js';
-import { developerIdentity } from '../git/git-context.js';
+import { developerIdentity, runGit } from '../git/git-context.js';
+import { runSnapshotPipeline } from '../snapshot/snapshot-pipeline.js';
+import { SnapshotStateStore } from '../snapshot/snapshot-state.js';
+import { SNAPSHOT_BUDGET_MS } from '../snapshot/constants/snapshot.constants.js';
 import { BackendCooldown } from '../transport/cooldown.js';
 import { DeliveryStats } from '../transport/delivery-stats.js';
 import { deliverEvents } from '../transport/delivery.js';
@@ -25,9 +28,11 @@ import {
   STAGE_ENRICH,
   STAGE_PARSE_EVENTS,
   STAGE_RESOLVE_CONTEXT,
+  STAGE_SNAPSHOT,
   STAGE_TRACK_TURN,
   STOP_DRY_RUN,
-  STOP_NO_EVENTS
+  STOP_NO_EVENTS,
+  STOP_NO_SNAPSHOT
 } from './constants/pipeline.constants.js';
 import type { HookPipelineInput, HookPipelineState } from './types/pipeline.types.js';
 
@@ -39,7 +44,8 @@ export type { HookPipelineInput, HookPipelineState } from './types/pipeline.type
  * Read top to bottom, this is the whole contract of the hook path: work out
  * where we are and what the effective config says, turn the payload into
  * canonical events, ask whether this turn may start at all, attach development
- * context, assemble the turn, deliver.
+ * context, assemble the turn, deliver, and — when a turn has just closed — tell
+ * the platform what this repository's recent branches look like.
  * Every stage takes the whole state and returns the next one, so adding or
  * reordering a step is a change to this array rather than to a call graph.
  */
@@ -49,7 +55,8 @@ const HOOK_STAGES: readonly Step<HookPipelineState>[] = [
   step(STAGE_ENFORCE, enforce),
   step(STAGE_ENRICH, enrich),
   step(STAGE_TRACK_TURN, trackTurnStage),
-  step(STAGE_DELIVER, deliver)
+  step(STAGE_DELIVER, deliver),
+  step(STAGE_SNAPSHOT, snapshot)
 ];
 
 /**
@@ -224,14 +231,7 @@ async function trackTurnSafely(state: HookPipelineState): Promise<HookPipelineSt
 async function deliver(state: HookPipelineState): Promise<StepOutcome<HookPipelineState>> {
   if (state.dryRun) return stop(state, STOP_DRY_RUN);
 
-  const queue = new EventQueue({
-    queueDir: state.paths.queueDir,
-    locksDir: state.paths.locksDir,
-    maxEvents: state.config.delivery.maxQueueEvents,
-    maxAttempts: state.config.delivery.maxAttempts,
-    maxEventAgeDays: state.config.delivery.maxEventAgeDays,
-    now: state.env.now
-  });
+  const queue = buildQueue(state);
   const delivery = await deliverEvents(
     state.outbound,
     buildTransport(state),
@@ -244,6 +244,67 @@ async function deliver(state: HookPipelineState): Promise<StepOutcome<HookPipeli
   debugLog(`delivery: sent=${delivery.delivered} queued=${delivery.queued} drained=${delivery.drained} rejected=${delivery.rejected}`);
 
   return next({ ...state, delivery });
+}
+
+/**
+ * Describe the repository's recent branches, after the turn has been delivered.
+ *
+ * Last, and awaited. Last because it must never delay the spend records, which
+ * are the reason the hook exists; awaited because the process exits the moment
+ * this returns, and a dangling promise would be killed somewhere between
+ * building the event and writing it to the queue.
+ *
+ * It runs only on a closed turn — the one hook per turn that already pays for
+ * full git context — and only when git capture is on: branch names and commit
+ * subjects are git metadata, and a developer who turned that off has said no to
+ * exactly this.
+ *
+ * @param state - Current flow state.
+ * @returns The state, unchanged. A snapshot never affects the hook's answer.
+ */
+async function snapshot(state: HookPipelineState): Promise<StepOutcome<HookPipelineState>> {
+  const repository = state.summary?.repository;
+
+  if (!repository || !state.config.capture.git) return stop(state, STOP_NO_SNAPSHOT);
+
+  await runSnapshotPipeline({
+    input: {
+      cwd: state.cwd,
+      repository,
+      provider: state.summary?.provider ?? state.provider.id,
+      surface: state.summary?.surface ?? state.provider.id,
+      agentName: state.summary?.agent.name ?? state.provider.id,
+      developerId: state.summary?.developer_id,
+      installationId: state.config.installationId,
+      sessionId: state.summary?.session_id,
+      capturedAt: state.env.now().toISOString(),
+      // Real time, deliberately, where the line above uses the injected clock:
+      // this bounds subprocess timeouts, which are measured against the wall.
+      deadline: Date.now() + SNAPSHOT_BUDGET_MS,
+      run: runGit
+    },
+    store: new SnapshotStateStore(state.paths.snapshotsDir),
+    queue: buildQueue(state)
+  });
+
+  return next(state);
+}
+
+/**
+ * The offline queue for this run.
+ *
+ * @param state - Current flow state.
+ * @returns A queue bound to this run's paths and delivery limits.
+ */
+function buildQueue(state: HookPipelineState): EventQueue {
+  return new EventQueue({
+    queueDir: state.paths.queueDir,
+    locksDir: state.paths.locksDir,
+    maxEvents: state.config.delivery.maxQueueEvents,
+    maxAttempts: state.config.delivery.maxAttempts,
+    maxEventAgeDays: state.config.delivery.maxEventAgeDays,
+    now: state.env.now
+  });
 }
 
 /**

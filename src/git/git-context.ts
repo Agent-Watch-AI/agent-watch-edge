@@ -34,7 +34,7 @@ export type { GitContext, GitContextOptions, GitRunner } from './types/git.types
  * @param run - Git runner; injectable for tests.
  * @returns The context that could be resolved.
  */
-export async function collectGitContext(options: GitContextOptions, run: GitRunner = defaultRunner): Promise<GitContext> {
+export async function collectGitContext(options: GitContextOptions, run: GitRunner = runGit): Promise<GitContext> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const root = await run(GIT_REPO_ROOT_ARGS, options.cwd, timeoutMs);
 
@@ -71,7 +71,7 @@ export async function collectGitContext(options: GitContextOptions, run: GitRunn
  * @returns The configured email, or undefined outside git / when unset.
  */
 export async function gitUserEmail(cwd: string, options: GitUserEmailOptions = {}): Promise<string | undefined> {
-  const run = options.run ?? defaultRunner;
+  const run = options.run ?? runGit;
   const email = await run(GIT_USER_EMAIL_ARGS, cwd, options.timeoutMs ?? GIT_TIMEOUT_MS, options.home);
 
   return email || undefined;
@@ -242,7 +242,7 @@ function readOctalEscape(inner: string, start: number): string {
  *   sandboxes never pick up the developer's real one.
  * @returns Trailing-trimmed stdout, or undefined.
  */
-const defaultRunner: GitRunner = (args, cwd, timeoutMs, home) =>
+export const runGit: GitRunner = (args, cwd, timeoutMs, home) =>
   new Promise((resolve) => {
     const env = home ? { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config') } : undefined;
 

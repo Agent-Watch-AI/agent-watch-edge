@@ -15,6 +15,8 @@ export interface AgentWatchPaths {
   readonly backupsDir: string;
   /** Per-session accumulator state for turn summaries. */
   readonly turnsDir: string;
+  /** Per-repository record of the last snapshot sent, so the next one is a diff. */
+  readonly snapshotsDir: string;
 }
 
 /**

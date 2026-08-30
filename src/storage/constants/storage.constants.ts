@@ -17,6 +17,9 @@ export const LOCKS_DIR_NAME = 'locks';
 export const BACKUPS_DIR_NAME = 'backups';
 export const TURNS_DIR_NAME = 'turns';
 
+/** What the last repository snapshot reported, so the next one can send only changes. */
+export const SNAPSHOTS_DIR_NAME = 'snapshots';
+
 /** XDG / Windows locations consulted for the data root, in order. */
 export const LOCAL_APP_DATA_VAR = 'LOCALAPPDATA';
 export const XDG_DATA_HOME_VAR = 'XDG_DATA_HOME';

@@ -168,6 +168,72 @@ describe('enforcement decision', () => {
       expect(server.calls()).toBe(2);
     });
 
+    it('holds an answer only as long as the platform asked, when that is shorter', async () => {
+      let clock = new Date('2026-08-26T10:00:00.000Z');
+      // Five seconds is what the platform sends for a refusal, so a raised cap
+      // reaches the developer in seconds rather than at the end of the local TTL.
+      const server = answering({ decision: 'block', message: MESSAGE, cache_ttl_ms: 5_000 });
+      const options = { config: config(), paths: resolvePaths(world.env), developerId: DEVELOPER, now: () => clock, fetchFn: server.fetchFn };
+
+      await resolveEnforcement(options);
+      clock = new Date('2026-08-26T10:00:04.000Z');
+      await resolveEnforcement(options);
+
+      expect(server.calls()).toBe(1);
+
+      clock = new Date('2026-08-26T10:00:06.000Z');
+      await resolveEnforcement(options);
+
+      expect(server.calls()).toBe(2);
+    });
+
+    it('never holds an answer longer than this machine allows', async () => {
+      let clock = new Date('2026-08-26T10:00:00.000Z');
+      // An hour, asked for by a platform this side is not obliged to believe.
+      const server = answering({ decision: 'allow', cache_ttl_ms: 3_600_000 });
+      const options = { config: config(), paths: resolvePaths(world.env), developerId: DEVELOPER, now: () => clock, fetchFn: server.fetchFn };
+
+      await resolveEnforcement(options);
+      clock = new Date('2026-08-26T10:01:01.000Z');
+      await resolveEnforcement(options);
+
+      expect(server.calls()).toBe(2);
+    });
+
+    it('falls back to its own TTL when the platform asks for nothing', async () => {
+      let clock = new Date('2026-08-26T10:00:00.000Z');
+      const server = answering({ decision: 'allow' });
+      const options = { config: config(), paths: resolvePaths(world.env), developerId: DEVELOPER, now: () => clock, fetchFn: server.fetchFn };
+
+      await resolveEnforcement(options);
+      clock = new Date('2026-08-26T10:00:30.000Z');
+      await resolveEnforcement(options);
+
+      expect(server.calls()).toBe(1);
+    });
+
+    it('keeps a valid refusal when the freshness advice is nonsense', async () => {
+      let clock = new Date('2026-08-26T10:00:00.000Z');
+      const server = answering({ decision: 'block', message: MESSAGE, cache_ttl_ms: 'bad' });
+      const options = { config: config(), paths: resolvePaths(world.env), developerId: DEVELOPER, now: () => clock, fetchFn: server.fetchFn };
+
+      // The refusal is the thing that costs a developer their turn; advice about
+      // how long to keep it does not get a vote on whether it is readable.
+      expect(await resolveEnforcement(options)).toEqual({ decision: 'block', message: MESSAGE });
+
+      clock = new Date('2026-08-26T10:00:30.000Z');
+      await resolveEnforcement(options);
+
+      // And with no usable advice, the configured TTL is what applies.
+      expect(server.calls()).toBe(1);
+    });
+
+    it('shows the developer the decision and not the freshness advice with it', async () => {
+      const server = answering({ decision: 'block', message: MESSAGE, cache_ttl_ms: 5_000 });
+
+      expect(await ask({}, server.fetchFn)).toEqual({ decision: 'block', message: MESSAGE });
+    });
+
     it('never caches a failure', async () => {
       await ask({}, failing);
 

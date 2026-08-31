@@ -74,7 +74,31 @@ async function decideThroughCache(
 
   if (!answered) return ALLOW;
 
-  await cache.write(key, answered, options.config.enforcement.cacheTtlMs);
+  const { cacheTtlMs, ...decision } = answered;
 
-  return answered;
+  await cache.write(key, decision, effectiveTtlMs(cacheTtlMs, options.config.enforcement.cacheTtlMs));
+
+  return decision;
+}
+
+/**
+ * How long this answer may be reused.
+ *
+ * The platform asks for a TTL because it is the side that knows how close the
+ * scope came to its cap; this side clamps it to what the machine's owner allowed
+ * and never above. So the platform can make an answer fresher — which is what a
+ * developer approaching a cap needs — and cannot make one last longer than the
+ * configured ceiling, which is what keeps the setting meaningful.
+ *
+ * No advice means the configured value, which is what a platform that predates
+ * the field produces.
+ *
+ * @param asked - What the platform asked for, if anything.
+ * @param configured - This machine's own TTL, and its ceiling.
+ * @returns The TTL to store the entry with.
+ */
+function effectiveTtlMs(asked: number | undefined, configured: number): number {
+  if (asked === undefined) return configured;
+
+  return Math.min(asked, configured);
 }

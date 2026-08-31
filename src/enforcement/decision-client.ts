@@ -1,8 +1,8 @@
 import { debugLog } from '../core/logger.js';
 import { edgeHeaders } from '../transport/headers.js';
 import { DEVELOPER_ID_PARAM } from './constants/enforcement.constants.js';
-import { decisionSchema } from './schemas/enforcement.schema.js';
-import type { DecisionRequest, EnforcementDecision } from './types/enforcement.types.js';
+import { cacheTtlSchema, decisionSchema } from './schemas/enforcement.schema.js';
+import type { AnsweredDecision, DecisionRequest } from './types/enforcement.types.js';
 
 /**
  * Ask the platform whether one developer may make an LLM call.
@@ -16,7 +16,7 @@ import type { DecisionRequest, EnforcementDecision } from './types/enforcement.t
  * @param request - Destination, credentials, identity and timeout.
  * @returns The platform's decision, or undefined when it did not give one.
  */
-export async function requestDecision(request: DecisionRequest): Promise<EnforcementDecision | undefined> {
+export async function requestDecision(request: DecisionRequest): Promise<AnsweredDecision | undefined> {
   const fetchFn = request.fetchFn ?? fetch;
 
   try {
@@ -64,11 +64,35 @@ function decisionUrl(request: DecisionRequest): string {
  * @param body - Whatever the endpoint returned.
  * @returns The decision, or undefined when the body is not one.
  */
-function readDecision(body: unknown): EnforcementDecision | undefined {
+function readDecision(body: unknown): AnsweredDecision | undefined {
   const parsed = decisionSchema.safeParse(body);
 
   if (!parsed.success) {
     debugLog('enforcement: unreadable decision; allowing');
+
+    return undefined;
+  }
+
+  return { ...parsed.data, cacheTtlMs: readCacheTtlMs(body) };
+}
+
+/**
+ * How long the platform asked this answer to be kept, when it asked usably.
+ *
+ * Read after the decision and separately from it, so a TTL this side cannot make
+ * sense of costs nothing but the advice: an unreadable number means the local
+ * configuration decides, exactly as it does when the platform sends none.
+ *
+ * @param body - Whatever the endpoint returned.
+ * @returns The advised TTL, or undefined when there is no usable advice.
+ */
+function readCacheTtlMs(body: unknown): number | undefined {
+  if (typeof body !== 'object' || body === null) return undefined;
+
+  const parsed = cacheTtlSchema.safeParse((body as Record<string, unknown>).cache_ttl_ms);
+
+  if (!parsed.success) {
+    debugLog('enforcement: unusable cache_ttl_ms; keeping the configured TTL');
 
     return undefined;
   }

@@ -1,5 +1,6 @@
 import type { AgentWatchConfig, ConfigLoadResult } from '../../config/types/config.types.js';
 import type { Env } from '../../core/types/core.types.js';
+import type { GitRunner } from '../../git/types/git.types.js';
 import type { AgentWatchPaths, InstallState } from '../../storage/types/storage.types.js';
 
 /** Parsed argv. */
@@ -40,6 +41,16 @@ export interface SetupOptions {
   readonly yes?: boolean;
   readonly ask?: (question: string) => Promise<string>;
   readonly hookCommandFor?: (providerId: string) => string;
+  /** Git runner override; tests resolve the identity without a real git. */
+  readonly gitRun?: GitRunner;
+}
+
+/** What `agentwatch doctor` was asked to report. */
+export interface DoctorOptions {
+  /** Emit machine-readable JSON instead of the human report. */
+  readonly json?: boolean;
+  /** Git runner override; tests resolve the identity without a real git. */
+  readonly gitRun?: GitRunner;
 }
 
 export interface UninstallOptions {

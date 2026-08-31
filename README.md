@@ -89,7 +89,7 @@ agentwatch uninstall --purge                              # Also delete ~/.agent
 |---|---|---|
 | `--endpoint <url>` | Backend base URL for event ingestion | — |
 | `--token <token>` | Bearer token for backend authentication | — |
-| `--developer-email <email>` | Identity attached to turn summaries | `git config user.email` |
+| `--developer-email <email>` | Identity attached to turn summaries and keyed on by per-developer enforcement. Setup refuses to write a config when neither this flag nor git names a developer | `git config user.email` |
 | `--otel <signals>` | OTLP signals exported by agents: `logs`, `traces`, `metrics`, `all`, or `none` | `logs` |
 | `--agent <id>` | Limit command to a single agent (`claude`, `codex`, `cursor`, `gemini`, `antigravity`) | All detected |
 | `--yes`, `--non-interactive` | Non-interactive mode (fail instead of prompting on missing args) | `false` |

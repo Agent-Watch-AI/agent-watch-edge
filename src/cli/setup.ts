@@ -3,7 +3,7 @@ import readline from 'node:readline/promises';
 import { defaultConfig, enabledSignalNames, eventsUrl, parseOtelSignals } from '../config/config.js';
 import { ensureInstallationId, saveConfig } from '../config/config-store.js';
 import type { AgentWatchConfig, OtelConfig } from '../config/types/config.types.js';
-import { collectGitContext, gitUserEmail } from '../git/git-context.js';
+import { collectGitContext, developerIdentity } from '../git/git-context.js';
 import { ManualEnrollmentProvider } from '../enrollment/manual-enrollment.js';
 import type { EnrollmentResult } from '../enrollment/types/enrollment.types.js';
 import { providers } from '../providers/registry.js';
@@ -11,8 +11,9 @@ import type { AgentProvider, DetectionResult, SetupContext, SetupOutcome } from 
 import { saveInstallState } from '../storage/install-state.js';
 import type { InstallState } from '../storage/types/storage.types.js';
 import { buildCliContext, buildHookCommand, buildQueue } from './context.js';
+import { DEVELOPER_EMAIL_PROMPT, DEVELOPER_IDENTITY_REMEDIES, NO_CONFIG_WRITTEN, NO_DEVELOPER_IDENTITY } from './constants/cli.constants.js';
 import type { CliContext, SetupOptions } from './types/cli.types.js';
-import { bold, dim, println, symbols } from './ui.js';
+import { bold, dim, printErrln, println, symbols } from './ui.js';
 
 export type { SetupOptions } from './types/cli.types.js';
 
@@ -68,7 +69,7 @@ export async function runSetup(options: SetupOptions): Promise<number> {
     return 1;
   }
 
-  const ask = options.ask ?? defaultAsk(options.yes ?? false);
+  const ask = interactivePrompt(options);
   const enrolled = await enroll(options, baseConfig, ask);
 
   if ('error' in enrolled) {
@@ -77,11 +78,19 @@ export async function runSetup(options: SetupOptions): Promise<number> {
     return 1;
   }
 
+  const developerEmail = await resolveDeveloperEmail(options, baseConfig, ask);
+
+  if (!developerEmail) {
+    reportMissingIdentity();
+
+    return 1;
+  }
+
   const config = ensureInstallationId({
     ...baseConfig,
     endpoint: enrolled.endpoint,
     token: enrolled.token,
-    developerEmail: await resolveDeveloperEmail(options, baseConfig, ask),
+    developerEmail,
     otel,
     emit: { ...baseConfig.emit, llmCalls: true }
   });
@@ -90,9 +99,7 @@ export async function runSetup(options: SetupOptions): Promise<number> {
   await offerBacklogRetarget(context, baseConfig, config, ask);
 
   println(`${symbols.ok} backend: ${config.endpoint}`);
-
-  if (config.developerEmail) println(`${symbols.ok} developer: ${config.developerEmail}`);
-
+  println(`${symbols.ok} developer: ${developerEmail}`);
   println(`${symbols.ok} otel signals: ${enabledSignalNames(otel).join(', ') || 'none'}`);
   println(dim(`  config: ${context.paths.configFile}`));
   println();
@@ -182,32 +189,51 @@ async function enroll(
 }
 
 /**
- * The developer identity for turn summaries.
+ * The developer identity this install will be attributed to.
  *
- * Flag beats existing config beats git; the interactive prompt only confirms or
- * overrides the detected default.
+ * Resolution runs through `developerIdentity()` — the same function the hook
+ * path and the pre-turn budget check use — so what setup writes is exactly what
+ * the gate will later ask the platform about. The flag is the only override,
+ * for a machine whose git identity is someone else's.
  *
- * @param options - Flags and the interactive prompt.
+ * Nothing is asked when the identity is already known: the prompt exists for
+ * the machine that has no answer, not to re-confirm one we already trust.
+ *
+ * @param options - Flags, environment and the git runner override.
  * @param baseConfig - Config the run starts from.
  * @param ask - The prompt, when the run is interactive.
- * @returns The identity, or undefined when there is none.
+ * @returns The identity, or undefined when nothing names the developer.
  */
-async function resolveDeveloperEmail(
+export async function resolveDeveloperEmail(
   options: SetupOptions,
   baseConfig: AgentWatchConfig,
   ask: ((question: string) => Promise<string>) | undefined
 ): Promise<string | undefined> {
-  if (options.developerEmail) return options.developerEmail;
+  const flag = options.developerEmail?.trim();
 
-  if (baseConfig.developerEmail) return baseConfig.developerEmail;
+  if (flag) return flag;
 
-  const detected = await gitUserEmail(options.env.cwd, { home: options.env.home });
+  const detected = await developerIdentity(baseConfig.developerEmail, options.env.cwd, { home: options.env.home, run: options.gitRun });
 
-  if (!ask) return detected;
+  if (detected) return detected;
 
-  const answer = (await ask(`Developer email${detected ? ` [${detected}]` : ''}: `)).trim();
+  if (!ask) return undefined;
 
-  return answer || detected;
+  return (await ask(DEVELOPER_EMAIL_PROMPT)).trim() || undefined;
+}
+
+/**
+ * Refuse the install, naming both ways to fix it.
+ *
+ * An install nobody can be attributed to reports success while enforcing
+ * nothing: every per-developer decision is keyed on this identity, and an
+ * unknown one is allowed silently. Better a loud non-zero exit here than a
+ * customer who believes they are covered.
+ */
+function reportMissingIdentity(): void {
+  printErrln(`${symbols.fail} ${NO_DEVELOPER_IDENTITY}`);
+  printErrln(`  ${DEVELOPER_IDENTITY_REMEDIES}`);
+  printErrln(`  ${NO_CONFIG_WRITTEN}`);
 }
 
 /**
@@ -319,13 +345,28 @@ function printOutcome(outcome: SetupOutcome, current: InstallState): InstallStat
 }
 
 /**
- * The interactive prompt, when this run may prompt at all.
+ * The prompt this run may use, if any.
  *
- * @param nonInteractive - Whether `--yes` was passed.
+ * `--yes` wins over an injected prompt as well as over the terminal: the
+ * command a developer copies out of the product carries it, and that command
+ * has to run to completion on a machine where nobody is typing.
+ *
+ * @param options - Flags and the injected prompt.
  * @returns The prompt, or undefined when the run must not block on input.
  */
-function defaultAsk(nonInteractive: boolean): ((question: string) => Promise<string>) | undefined {
-  if (nonInteractive || !process.stdin.isTTY) return undefined;
+function interactivePrompt(options: SetupOptions): ((question: string) => Promise<string>) | undefined {
+  if (options.yes) return undefined;
+
+  return options.ask ?? defaultAsk();
+}
+
+/**
+ * The terminal prompt, when there is a terminal.
+ *
+ * @returns The prompt, or undefined when stdin is not a TTY.
+ */
+function defaultAsk(): ((question: string) => Promise<string>) | undefined {
+  if (!process.stdin.isTTY) return undefined;
 
   return async (question: string) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });

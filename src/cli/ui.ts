@@ -74,6 +74,19 @@ export function println(line = ''): void {
 }
 
 /**
+ * Write one line to stderr.
+ *
+ * Refusals go here, not to stdout: a scripted rollout reads the exit code and
+ * the error stream, and a failure printed among the progress lines is a failure
+ * nobody sees.
+ *
+ * @param line - The line, without its newline.
+ */
+export function printErrln(line = ''): void {
+  process.stderr.write(line + '\n');
+}
+
+/**
  * Wrap text in an ANSI colour, when the terminal wants colour at all.
  *
  * @param text - The text.

@@ -66,6 +66,10 @@ export async function collectGitContext(options: GitContextOptions, run: GitRunn
 /**
  * `git config user.email` for the developer identity on turn summaries.
  *
+ * Trimmed to nothing rather than reported as a value: `user.email = " "` is a
+ * misconfiguration, and an identity made of whitespace would be keyed on by the
+ * budget check as if it named someone.
+ *
  * @param cwd - Directory to resolve the config from.
  * @param options - Timeout, injected HOME and runner override.
  * @returns The configured email, or undefined outside git / when unset.
@@ -74,7 +78,7 @@ export async function gitUserEmail(cwd: string, options: GitUserEmailOptions = {
   const run = options.run ?? runGit;
   const email = await run(GIT_USER_EMAIL_ARGS, cwd, options.timeoutMs ?? GIT_TIMEOUT_MS, options.home);
 
-  return email || undefined;
+  return email?.trim() || undefined;
 }
 
 /**
@@ -96,7 +100,9 @@ export async function developerIdentity(
   cwd: string,
   options: GitUserEmailOptions = {}
 ): Promise<string | undefined> {
-  if (configuredEmail) return configuredEmail;
+  const configured = configuredEmail?.trim();
+
+  if (configured) return configured;
 
   return gitUserEmail(cwd, options);
 }

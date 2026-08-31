@@ -12,6 +12,26 @@ export const FLAG_PREFIX = '--';
 /** Commands the CLI dispatches. */
 export const COMMANDS = ['hook', 'setup', 'status', 'doctor', 'uninstall', 'agents', 'config', 'otel-headers'] as const;
 
+/** What setup asks for when nothing on the machine names the developer. */
+export const DEVELOPER_EMAIL_PROMPT = 'Developer email: ';
+
+/** Doctor's name for the identity every per-developer decision is keyed on. */
+export const DEVELOPER_IDENTITY_CHECK = 'developer identity';
+
+/**
+ * The unattributable install, and the two ways out of it.
+ *
+ * Named together everywhere the condition surfaces: the machine hitting this is
+ * the one whose owner is not watching the terminal, so the message has to carry
+ * the whole fix rather than a hint to go looking for it.
+ */
+export const NO_DEVELOPER_IDENTITY = 'no developer identity: `git config user.email` is unset here and --developer-email was not given';
+export const DEVELOPER_IDENTITY_REMEDIES =
+  'set one with `git config --global user.email you@company.com`, or re-run setup with `--developer-email you@company.com`';
+
+/** Said on the failure path, because a half-written config is worse than none. */
+export const NO_CONFIG_WRITTEN = 'no configuration was written; re-run setup once the identity resolves';
+
 /** Ceiling on a hook payload; beyond this the hook refuses rather than buffers. */
 export const MAX_STDIN_BYTES = 10 * 1024 * 1024;
 

@@ -1,7 +1,7 @@
 /**
  * OTLP/JSON -> llm.call.
  *
- * Exported as `@agentwatch-ai/edge/otlp` for a backend that wants to decode
+ * Exported as `@agent-watch-ai/edge/otlp` for a backend that wants to decode
  * agent telemetry itself. The AgentWatch platform has its own copy of this
  * logic in `@agent-watch/otlp`, and the two have to be changed together:
  * provider detection, the completed-request filter and the usage attribute

@@ -1,6 +1,6 @@
 # AgentWatch Code & Style Guide
 
-This document defines the architectural standards, code style, performance guidelines, and conventions for the `@agentwatch-ai/edge` package.
+This document defines the architectural standards, code style, performance guidelines, and conventions for the `@agent-watch-ai/edge` package.
 
 Everything here that can be machine-checked is enforced by `eslint.config.js`. `npm run lint` is expected to report **zero errors and zero warnings**; a warning nobody fixes is a rule nobody follows.
 

@@ -1,6 +1,6 @@
 # AgentWatch Edge
 
-[![npm](https://img.shields.io/npm/v/@agentwatch-ai/edge)](https://www.npmjs.com/package/@agentwatch-ai/edge)
+[![npm](https://img.shields.io/npm/v/@agent-watch-ai/edge)](https://www.npmjs.com/package/@agent-watch-ai/edge)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A lightweight, zero-daemon telemetry edge for AI coding agents (**Claude Code**, **OpenAI Codex**, **Cursor**, **Gemini CLI**, and **Google Antigravity**).
@@ -15,7 +15,7 @@ It connects agent lifecycle hooks and native OpenTelemetry (OTLP) to your observ
 
 ```bash
 # 1. Install globally
-npm install -g @agentwatch-ai/edge
+npm install -g @agent-watch-ai/edge
 
 # 2. Configure with your backend
 agentwatch setup --endpoint https://backend.example.com --token YOUR_TOKEN
@@ -156,9 +156,9 @@ To try it locally: `BLOCK=1 npm run example` answers every check with a refusal.
 ### Backend SDK Helpers
 
 ```ts
-import type { ProductEvent } from '@agentwatch-ai/edge/events';
-import { normalizeOtlpLogs } from '@agentwatch-ai/edge/otlp';
-import { aggregateTurnUsage } from '@agentwatch-ai/edge/aggregate-turn';
+import type { ProductEvent } from '@agent-watch-ai/edge/events';
+import { normalizeOtlpLogs } from '@agent-watch-ai/edge/otlp';
+import { aggregateTurnUsage } from '@agent-watch-ai/edge/aggregate-turn';
 ```
 
 ---

@@ -1,5 +1,5 @@
 {
-  "name": "@agentwatch-ai/edge",
+  "name": "@agent-watch-ai/edge",
   "version": "0.2.5",
   "description": "Connect Claude Code, Codex and Cursor telemetry to your backend with turn, Git and ticket-key attribution.",
   "license": "MIT",
@@ -52,11 +52,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/alexrepetskyi/agentwatch.git"
+    "url": "git+https://github.com/agent-watch-ai/agent-watch-edge.git"
   },
-  "homepage": "https://github.com/alexrepetskyi/agentwatch#readme",
+  "homepage": "https://github.com/agent-watch-ai/agent-watch-edge#readme",
   "bugs": {
-    "url": "https://github.com/alexrepetskyi/agentwatch/issues"
+    "url": "https://github.com/agent-watch-ai/agent-watch-edge/issues"
   },
   "keywords": [
     "telemetry",

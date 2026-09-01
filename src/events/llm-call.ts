@@ -10,7 +10,7 @@ export type { BuildLlmCallInput, LlmCallCorrelation, LlmCallEvent, LlmCallStatus
  * Build the atomic usage record for one provider request.
  *
  * Called by whoever decodes agent telemetry — the edge's own OTLP
- * normalizer, or a backend using `@agentwatch-ai/edge/llm-call` directly.
+ * normalizer, or a backend using `@agent-watch-ai/edge/llm-call` directly.
  * Both the flat `*_tokens` fields and the nested canonical `session` block are
  * populated from the same input, so a consumer can read whichever it models.
  *

@@ -90,7 +90,7 @@
   could double-count the same call's tokens and cost across successive finalizations. Without
   the set, calls now match only through an exact turn id.
 - Fixed `repository`, added `homepage` and `bugs` in `package.json` — now pointing to
-  <https://github.com/alexrepetskyi/agentwatch>.
+  <https://github.com/agent-watch-ai/agent-watch-edge>.
 - Simplified README; product record examples now use mock data.
 - Correctness: one malformed OTLP log record (e.g. an unparseable timestamp attribute combined
   with `duration_ms`) no longer throws and aborts normalization of the entire batch — the

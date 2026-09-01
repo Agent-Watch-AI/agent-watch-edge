@@ -22,6 +22,18 @@ export const decisionSchema: z.ZodType<EnforcementDecision> = z.discriminatedUni
   z.object({ decision: z.literal(DECISION_BLOCK), message: z.string().trim().min(1) })
 ]);
 
+/**
+ * The freshness the platform asked for, if it asked for anything usable.
+ *
+ * Its own schema, parsed on its own, and never combined with `decisionSchema`
+ * into one shape: an intersection would make a nonsense TTL invalidate the
+ * refusal beside it, so `{"decision":"block","message":"…","cache_ttl_ms":"bad"}`
+ * would read as no answer at all and allow the turn. The decision is the thing
+ * that costs a developer their turn; advice about how long to keep it is not
+ * allowed a vote on whether it is readable.
+ */
+export const cacheTtlSchema = z.number().finite().nonnegative();
+
 /** One cache entry: a decision plus the moment it stops being usable. */
 export const cachedDecisionSchema: z.ZodType<CachedDecision> = z.object({
   decision: decisionSchema,

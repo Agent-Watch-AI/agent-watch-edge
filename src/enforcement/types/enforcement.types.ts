@@ -19,6 +19,16 @@ import type { AgentWatchPaths } from '../../storage/types/storage.types.js';
  */
 export type EnforcementDecision = { readonly decision: 'allow' } | { readonly decision: 'block'; readonly message: string };
 
+/**
+ * A decision as it arrives, before the caching question is settled.
+ *
+ * `cache_ttl_ms` is the platform saying how long this particular answer may be
+ * reused, which it knows and this side does not: how close the scope came to its
+ * cap. Optional because a platform that predates the field simply omits it, and
+ * this side then falls back to its own configured TTL.
+ */
+export type AnsweredDecision = EnforcementDecision & { readonly cacheTtlMs?: number };
+
 /** One decision as the local cache holds it, with the deadline it expires at. */
 export interface CachedDecision {
   readonly decision: EnforcementDecision;

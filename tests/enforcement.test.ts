@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { makeTempEnv, type TempWorld } from './helpers.js';
+import { makeTempEnv, readJson, type TempWorld } from './helpers.js';
 import { claudePreToolUseBash, claudeUserPromptSubmit } from './fixtures/claude.js';
 import { codexUserPromptSubmit } from './fixtures/codex.js';
 import { cursorBeforeSubmitPrompt } from './fixtures/cursor.js';
@@ -49,11 +49,18 @@ describe('enforcement decision', () => {
     return configSchema.parse({ ...defaultConfig(), endpoint: ENDPOINT, token: 'aw_edge_test', ...overrides });
   }
 
-  function ask(overrides: Record<string, unknown> = {}, fetchFn?: typeof fetch, identity: { developerId?: string } = { developerId: DEVELOPER }) {
+  function ask(
+    overrides: Record<string, unknown> = {},
+    fetchFn?: typeof fetch,
+    identity: { developerId?: string; checkout?: { repository: string; branch: string } } = {
+      developerId: DEVELOPER
+    }
+  ) {
     return resolveEnforcement({
       config: config(overrides),
       paths: resolvePaths(world.env),
       developerId: identity.developerId,
+      checkout: identity.checkout,
       now: world.env.now,
       fetchFn
     });
@@ -440,5 +447,66 @@ describe('enforcement through the hook', () => {
     await hook('claude', { ...claudeUserPromptSubmit, prompt_id: 'prompt-second' });
 
     expect(decisionRequests).toBe(1);
+  });
+});
+
+describe('the checkout the question is asked about', () => {
+  let world: TempWorld;
+
+  beforeEach(async () => {
+    world = await makeTempEnv();
+  });
+  afterEach(() => world.cleanup());
+
+  const CHECKOUT = { repository: 'github.com/acme/platform', branch: 'AWT-183' };
+
+  function askWith(checkout: { repository: string; branch: string } | undefined, server: { fetchFn: typeof fetch; urls: string[] }) {
+    return resolveEnforcement({
+      config: configSchema.parse({ ...defaultConfig(), endpoint: ENDPOINT, token: 'aw_edge_test' }),
+      paths: resolvePaths(world.env),
+      developerId: DEVELOPER,
+      checkout,
+      now: world.env.now,
+      fetchFn: server.fetchFn
+    });
+  }
+
+  it('travels on the request when there is one', async () => {
+    const stated = answering({ decision: 'allow' });
+
+    await askWith(CHECKOUT, stated);
+
+    const asked = new URL(stated.urls[0]!);
+
+    expect(asked.searchParams.get('repository')).toBe(CHECKOUT.repository);
+    expect(asked.searchParams.get('branch')).toBe(CHECKOUT.branch);
+  });
+
+  it('is absent when the working copy could not say', async () => {
+    // Its own test, and its own world: an answer cached by a previous ask is
+    // keyed on the developer alone, so it would serve this one too — which is
+    // the leak `cache_ttl_ms: 0` exists to close, not something to work around
+    // inside a test about the wire.
+    const silent = answering({ decision: 'allow' });
+
+    await askWith(undefined, silent);
+
+    const plain = new URL(silent.urls[0]!);
+
+    expect(plain.searchParams.has('repository')).toBe(false);
+    expect(plain.searchParams.has('branch')).toBe(false);
+  });
+
+  it('never reuses an answer the platform said not to keep', async () => {
+    // A tenant with a feature cap gets `cache_ttl_ms: 0` on every answer, because
+    // which feature a branch belongs to is a fact about one checkout and this
+    // cache is keyed on the developer alone.
+    const server = answering({ decision: 'allow', cache_ttl_ms: 0 });
+
+    await askWith(CHECKOUT, server);
+    await askWith(CHECKOUT, server);
+
+    expect(server.calls()).toBe(2);
+    expect(await readJson(path.join(resolvePaths(world.env).dataDir, 'enforcement-cache.json')).catch(() => undefined)).toBeUndefined();
   });
 });

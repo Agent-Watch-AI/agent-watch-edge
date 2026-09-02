@@ -26,3 +26,7 @@ export const MAX_CACHE_ENTRIES = 16;
 
 /** Query parameter the endpoint reads the identity from. */
 export const DEVELOPER_ID_PARAM = 'developer_id';
+
+/** And the checkout, which is what lets a cap on a feature be judged. */
+export const REPOSITORY_PARAM = 'repository';
+export const BRANCH_PARAM = 'branch';

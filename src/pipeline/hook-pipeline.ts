@@ -5,8 +5,9 @@ import { next, runFlow, step, stop } from '../core/pipe.js';
 import type { FlowResult, Step, StepOutcome } from '../core/types/core.types.js';
 import { loadEffectiveConfig } from '../config/repo-config.js';
 import { DECISION_BLOCK } from '../enforcement/constants/enforcement.constants.js';
-import { resolveEnforcement } from '../enforcement/enforcement.js';
+import { enforcementWouldAsk, resolveEnforcement } from '../enforcement/enforcement.js';
 import { enrichEvents } from '../events/enrich.js';
+import { readGateCheckout } from '../git/gate-checkout.js';
 import { developerIdentity, runGit } from '../git/git-context.js';
 import { runSnapshotPipeline } from '../snapshot/snapshot-pipeline.js';
 import { SnapshotStateStore } from '../snapshot/snapshot-state.js';
@@ -132,10 +133,17 @@ async function parseEvents(state: HookPipelineState): Promise<StepOutcome<HookPi
 async function enforce(state: HookPipelineState): Promise<StepOutcome<HookPipelineState>> {
   if (state.dryRun || !state.provider.getBlockResponse || !isTurnGate(state)) return next(state);
 
+  // Nothing below is paid for on a machine that would not ask. Working out which
+  // checkout this is costs a walk of the working copy and, once per checkout, a
+  // git process — small, and still the wrong thing to spend on a developer whose
+  // organization set no cap.
+  if (!enforcementWouldAsk(state.config)) return next(state);
+
   const decision = await resolveEnforcement({
     config: state.config,
     paths: state.paths,
     developerId: await developerIdentity(state.config.developerEmail, state.cwd, { home: state.env.home }),
+    checkout: await readGateCheckout({ cwd: state.cwd, dataDir: state.paths.dataDir }),
     now: state.env.now
   });
 

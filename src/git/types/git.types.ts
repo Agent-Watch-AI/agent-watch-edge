@@ -38,3 +38,22 @@ export interface RemoteParts {
   readonly host: string;
   readonly path: string;
 }
+
+/** Where a gated prompt is happening, when the working copy can say. */
+export interface GateCheckout {
+  /** Canonical `host/owner/repo`, as `normalizeRemote` produces it. */
+  readonly repository: string;
+  readonly branch: string;
+}
+
+export interface GateCheckoutOptions {
+  /** Directory the payload happened in. */
+  readonly cwd: string;
+  /** The collector's data directory; the remote memo lives under it. */
+  readonly dataDir: string;
+  readonly timeoutMs?: number;
+  /** Clock, injectable for tests. */
+  now?(): Date;
+  /** Git runner override, injectable for tests. */
+  readonly run?: GitRunner;
+}

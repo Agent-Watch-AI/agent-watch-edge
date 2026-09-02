@@ -145,9 +145,6 @@ export const GATE_GITDIR_PREFIX = 'gitdir:';
 /** `HEAD` on a branch; anything else is a detached HEAD, which names none. */
 export const GATE_BRANCH_REF_PREFIX = 'ref: refs/heads/';
 
-/** Where a checkout's remote is remembered, under the data directory. */
-export const GATE_REMOTE_MEMO_DIR = 'checkouts';
-
 /**
  * How long a remembered remote is trusted.
  *

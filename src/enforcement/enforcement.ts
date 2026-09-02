@@ -78,7 +78,7 @@ async function decideThroughCache(
   developerId: string
 ): Promise<EnforcementDecision> {
   const cache = new DecisionCache(path.join(options.paths.dataDir, ENFORCEMENT_CACHE_FILE_NAME), options.now);
-  const key = decisionKey(url, token, developerId);
+  const key = decisionKey(url, token, developerId, options.checkout);
   const cached = await cache.read(key);
 
   if (cached) return cached;

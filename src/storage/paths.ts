@@ -4,6 +4,7 @@ import {
   AGENTWATCH_DIR_NAME,
   AGENTWATCH_HOME_DIR_NAME,
   BACKUPS_DIR_NAME,
+  CHECKOUTS_DIR_NAME,
   CONFIG_DIR_VAR,
   CONFIG_FILE_NAME,
   DATA_DIR_VAR,
@@ -43,7 +44,8 @@ export function resolvePaths(env: Env): AgentWatchPaths {
     locksDir: path.join(dataDir, LOCKS_DIR_NAME),
     backupsDir: path.join(dataDir, BACKUPS_DIR_NAME),
     turnsDir: path.join(dataDir, TURNS_DIR_NAME),
-    snapshotsDir: path.join(dataDir, SNAPSHOTS_DIR_NAME)
+    snapshotsDir: path.join(dataDir, SNAPSHOTS_DIR_NAME),
+    checkoutsDir: path.join(dataDir, CHECKOUTS_DIR_NAME)
   };
 }
 

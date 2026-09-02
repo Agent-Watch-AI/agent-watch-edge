@@ -8,7 +8,6 @@ import {
   GATE_BRANCH_REF_PREFIX,
   GATE_GITDIR_PREFIX,
   GATE_MAX_WALK_DEPTH,
-  GATE_REMOTE_MEMO_DIR,
   GATE_REMOTE_MEMO_TTL_MS,
   GIT_REMOTE_ARGS,
   GIT_TIMEOUT_MS
@@ -37,7 +36,7 @@ export type { GateCheckout } from './types/git.types.js';
  * a repository with no usable remote, or on any read that fails. The turn is
  * then judged on the developer alone, exactly as it is today.
  *
- * @param options - Working directory, the data directory the memo lives in, and
+ * @param options - Working directory, where remembered remotes live, and
  *   overrides for the timeout and the git runner.
  * @returns The checkout, or undefined.
  */
@@ -163,18 +162,20 @@ async function resolveRepository(
   options: GateCheckoutOptions
 ): Promise<string | undefined> {
   const now = options.now?.().getTime() ?? Date.now();
-  const file = memoFile(options.dataDir, root);
+  const file = memoFile(options.checkoutsDir, root);
   const remembered = await readMemo(file, now);
 
-  if (remembered) return remembered;
+  if (remembered) return remembered.repository ?? undefined;
 
   const run: GitRunner = options.run ?? runGit;
   const raw = await run(GIT_REMOTE_ARGS, root, options.timeoutMs ?? GIT_TIMEOUT_MS);
   const repository = raw ? normalizeRemote(raw) : undefined;
 
-  if (!repository) return undefined;
-
-  await writeMemo(file, repository, now);
+  // The absence is remembered too, and it is the case that needed it most: a
+  // checkout with no origin, an unparseable remote, or a git call that timed out
+  // answers nothing, and without a memo would pay a subprocess for that nothing
+  // on every gated prompt.
+  await writeMemo(file, repository ?? null, now);
 
   return repository;
 }
@@ -185,12 +186,12 @@ async function resolveRepository(
  * Hashed: a root is an absolute path and would otherwise put the developer's
  * directory layout in a filename.
  *
- * @param dataDir - The collector's data directory.
+ * @param checkoutsDir - Where remembered remotes live.
  * @param root - Repository root.
  * @returns Absolute file path.
  */
-function memoFile(dataDir: string, root: string): string {
-  return path.join(dataDir, GATE_REMOTE_MEMO_DIR, `${sha256Hex(root)}.json`);
+function memoFile(checkoutsDir: string, root: string): string {
+  return path.join(checkoutsDir, `${sha256Hex(root)}.json`);
 }
 
 /**
@@ -200,28 +201,34 @@ function memoFile(dataDir: string, root: string): string {
  * @param now - Epoch milliseconds.
  * @returns The remote, or undefined on a miss.
  */
-async function readMemo(file: string, now: number): Promise<string | undefined> {
+async function readMemo(file: string, now: number): Promise<RememberedRemote | undefined> {
   const read = await readJsonFile(file);
 
   if (read.state !== 'ok' || typeof read.value !== 'object' || read.value === null) return undefined;
 
   const entry = read.value as { repository?: unknown; at?: unknown };
+  const known = typeof entry.repository === 'string' || entry.repository === null;
 
-  if (typeof entry.repository !== 'string' || typeof entry.at !== 'number') return undefined;
+  if (!known || typeof entry.at !== 'number') return undefined;
 
   if (now - entry.at > GATE_REMOTE_MEMO_TTL_MS) return undefined;
 
-  return entry.repository;
+  return { repository: entry.repository as string | null };
+}
+
+/** A remembered answer, including the remembered absence of one. */
+interface RememberedRemote {
+  readonly repository: string | null;
 }
 
 /**
  * Remember one checkout's remote.
  *
  * @param file - Memo file.
- * @param repository - The normalized remote.
+ * @param repository - The normalized remote, or null when there is none.
  * @param now - Epoch milliseconds.
  */
-async function writeMemo(file: string, repository: string, now: number): Promise<void> {
+async function writeMemo(file: string, repository: string | null, now: number): Promise<void> {
   try {
     await writeFileAtomic(file, JSON.stringify({ repository, at: now }));
   } catch (error) {

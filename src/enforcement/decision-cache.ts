@@ -87,10 +87,29 @@ export class DecisionCache {
  * @param url - The decision endpoint.
  * @param token - Edge token the question is asked with.
  * @param developerId - Identity the question is about.
+ * @param checkout - Where the turn is happening, when the caller could say.
+ * @param checkout.repository - Canonical remote of that checkout.
+ * @param checkout.branch - Its checked-out branch.
  * @returns The key.
  */
-export function decisionKey(url: string, token: string, developerId: string): string {
-  return crypto.createHash('sha256').update(`${url}|${token}|${developerId}`).digest('hex');
+export function decisionKey(
+  url: string,
+  token: string,
+  developerId: string,
+  checkout?: { repository: string; branch: string }
+): string {
+  // The checkout is part of the question, so it is part of the key. Left out, an
+  // answer earned on one branch is served on another for as long as the entry
+  // lives — and it lives whenever the platform does not say otherwise, which is
+  // every tenant without a feature cap and every platform predating the field.
+  // A cache whose correctness depends on the server remembering to disable it is
+  // not correct.
+  const scope = checkout ? `${checkout.repository}|${checkout.branch}` : '';
+
+  return crypto
+    .createHash('sha256')
+    .update(`${url}|${token}|${developerId}|${scope}`)
+    .digest('hex');
 }
 
 /**

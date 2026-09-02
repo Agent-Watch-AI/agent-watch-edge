@@ -17,6 +17,8 @@ export interface AgentWatchPaths {
   readonly turnsDir: string;
   /** Per-repository record of the last snapshot sent, so the next one is a diff. */
   readonly snapshotsDir: string;
+  /** Per-checkout record of what its remote is called, so the gate asks git once. */
+  readonly checkoutsDir: string;
 }
 
 /**

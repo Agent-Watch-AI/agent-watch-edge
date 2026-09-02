@@ -20,6 +20,9 @@ export const TURNS_DIR_NAME = 'turns';
 /** What the last repository snapshot reported, so the next one can send only changes. */
 export const SNAPSHOTS_DIR_NAME = 'snapshots';
 
+/** One remembered remote per checkout, so the gate spawns git once and not per prompt. */
+export const CHECKOUTS_DIR_NAME = 'checkouts';
+
 /** XDG / Windows locations consulted for the data root, in order. */
 export const LOCAL_APP_DATA_VAR = 'LOCALAPPDATA';
 export const XDG_DATA_HOME_VAR = 'XDG_DATA_HOME';

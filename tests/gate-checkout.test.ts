@@ -39,7 +39,7 @@ describe('the checkout a gated prompt is happening in', () => {
 
     execFileSync('git', ['checkout', '-q', '-b', 'AWT-183-feature-enforcement'], { cwd: root });
 
-    const checkout = await readGateCheckout({ cwd: root, dataDir: resolvePaths(world.env).dataDir });
+    const checkout = await readGateCheckout({ cwd: root, checkoutsDir: resolvePaths(world.env).checkoutsDir });
 
     // As `normalizeRemote` produces it, which is the same value a turn summary
     // already reports: case preserved, host included. The platform reduces it to
@@ -56,7 +56,7 @@ describe('the checkout a gated prompt is happening in', () => {
 
     await fs.mkdir(deep, { recursive: true });
 
-    const checkout = await readGateCheckout({ cwd: deep, dataDir: resolvePaths(world.env).dataDir });
+    const checkout = await readGateCheckout({ cwd: deep, checkoutsDir: resolvePaths(world.env).checkoutsDir });
 
     expect(checkout?.branch).toBe('main');
   });
@@ -66,7 +66,7 @@ describe('the checkout a gated prompt is happening in', () => {
 
     await fs.mkdir(plain, { recursive: true });
 
-    expect(await readGateCheckout({ cwd: plain, dataDir: resolvePaths(world.env).dataDir })).toBeUndefined();
+    expect(await readGateCheckout({ cwd: plain, checkoutsDir: resolvePaths(world.env).checkoutsDir })).toBeUndefined();
   });
 
   it('says nothing on a detached HEAD, which names no branch to charge', async () => {
@@ -81,13 +81,24 @@ describe('the checkout a gated prompt is happening in', () => {
 
     execFileSync('git', ['checkout', '-q', sha], { cwd: root });
 
-    expect(await readGateCheckout({ cwd: root, dataDir: resolvePaths(world.env).dataDir })).toBeUndefined();
+    expect(await readGateCheckout({ cwd: root, checkoutsDir: resolvePaths(world.env).checkoutsDir })).toBeUndefined();
   });
 
-  it('says nothing when the repository has no usable remote', async () => {
+  it('says nothing when the repository has no usable remote, and asks git once about it', async () => {
+    // The worst case for latency is the one that answers nothing: without a
+    // remembered miss it re-spawns git on every gated prompt, forever.
     const root = await repository('remoteless');
+    const checkoutsDir = resolvePaths(world.env).checkoutsDir;
+    let asked = 0;
+    const run = async (..._args: unknown[]) => {
+      asked += 1;
 
-    expect(await readGateCheckout({ cwd: root, dataDir: resolvePaths(world.env).dataDir })).toBeUndefined();
+      return undefined;
+    };
+
+    expect(await readGateCheckout({ cwd: root, checkoutsDir, run: run as never })).toBeUndefined();
+    expect(await readGateCheckout({ cwd: root, checkoutsDir, run: run as never })).toBeUndefined();
+    expect(asked).toBe(1);
   });
 
   it('follows a worktree through its gitdir, because agents work in them', async () => {
@@ -103,7 +114,7 @@ describe('the checkout a gated prompt is happening in', () => {
 
     execFileSync('git', ['worktree', 'add', '-q', '-b', 'side-branch', linked], { cwd: root });
 
-    const checkout = await readGateCheckout({ cwd: linked, dataDir: resolvePaths(world.env).dataDir });
+    const checkout = await readGateCheckout({ cwd: linked, checkoutsDir: resolvePaths(world.env).checkoutsDir });
 
     expect(checkout).toEqual({ repository: 'github.com/Acme/Worktrees', branch: 'side-branch' });
   });

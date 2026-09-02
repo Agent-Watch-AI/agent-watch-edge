@@ -510,3 +510,39 @@ describe('the checkout the question is asked about', () => {
     expect(await readJson(path.join(resolvePaths(world.env).dataDir, 'enforcement-cache.json')).catch(() => undefined)).toBeUndefined();
   });
 });
+
+describe('an answer belongs to the checkout it was asked about', () => {
+  let world: TempWorld;
+
+  beforeEach(async () => {
+    world = await makeTempEnv();
+  });
+  afterEach(() => world.cleanup());
+
+  it('is never reused on another branch, even when the platform allows reuse', async () => {
+    // The platform sends `cache_ttl_ms: 0` only for a tenant that has a feature
+    // cap; everyone else, and every older platform, gets the configured default.
+    // The cache must not depend on the server remembering to disable it.
+    const server = answering({ decision: 'allow' });
+
+    const ask = (repository: string, branch: string) =>
+      resolveEnforcement({
+        config: configSchema.parse({ ...defaultConfig(), endpoint: ENDPOINT, token: 'aw_edge_test' }),
+        paths: resolvePaths(world.env),
+        developerId: DEVELOPER,
+        checkout: { repository, branch },
+        now: world.env.now,
+        fetchFn: server.fetchFn
+      });
+
+    await ask('github.com/acme/a', 'feature-a');
+    await ask('github.com/acme/b', 'feature-b');
+
+    expect(server.calls()).toBe(2);
+
+    // The same checkout twice is still one question.
+    await ask('github.com/acme/a', 'feature-a');
+
+    expect(server.calls()).toBe(2);
+  });
+});

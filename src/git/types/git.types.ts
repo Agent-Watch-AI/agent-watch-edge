@@ -49,8 +49,8 @@ export interface GateCheckout {
 export interface GateCheckoutOptions {
   /** Directory the payload happened in. */
   readonly cwd: string;
-  /** The collector's data directory; the remote memo lives under it. */
-  readonly dataDir: string;
+  /** Where remembered remotes live; `AgentWatchPaths.checkoutsDir`. */
+  readonly checkoutsDir: string;
   readonly timeoutMs?: number;
   /** Clock, injectable for tests. */
   now?(): Date;

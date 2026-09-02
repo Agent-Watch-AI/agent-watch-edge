@@ -118,4 +118,49 @@ describe('the checkout a gated prompt is happening in', () => {
 
     expect(checkout).toEqual({ repository: 'github.com/Acme/Worktrees', branch: 'side-branch' });
   });
+
+  it('degrades to saying nothing when git will not answer, rather than waiting on it', async () => {
+    // FR-018: the gate may lose the fields, never the developer's time. A git
+    // call that times out resolves undefined, which must read as "no remote"
+    // and not as an error travelling up the hook.
+    const root = await repository('slow', 'git@github.com:Acme/Slow.git');
+    const timedOut = async () => undefined;
+
+    expect(
+      await readGateCheckout({
+        cwd: root,
+        checkoutsDir: resolvePaths(world.env).checkoutsDir,
+        run: timedOut as never
+      })
+    ).toBeUndefined();
+  });
+
+  it('degrades to saying nothing when the working copy cannot be read', async () => {
+    const missing = path.join(world.home, 'gone', 'deeper');
+
+    expect(
+      await readGateCheckout({ cwd: missing, checkoutsDir: resolvePaths(world.env).checkoutsDir })
+    ).toBeUndefined();
+  });
+
+  it('spawns nothing at all once a checkout is known', async () => {
+    // The budget this feature is held to, expressed as work rather than as a
+    // wall-clock number: a measured duration would be a flake on a loaded
+    // machine, and what actually matters is that the common path runs no
+    // process. One on a cold checkout, none afterwards.
+    const root = await repository('warm', 'git@github.com:Acme/Warm.git');
+    const checkoutsDir = resolvePaths(world.env).checkoutsDir;
+    let spawned = 0;
+    const run = async (..._args: unknown[]) => {
+      spawned += 1;
+
+      return 'git@github.com:Acme/Warm.git';
+    };
+
+    await readGateCheckout({ cwd: root, checkoutsDir, run: run as never });
+    await readGateCheckout({ cwd: root, checkoutsDir, run: run as never });
+    await readGateCheckout({ cwd: root, checkoutsDir, run: run as never });
+
+    expect(spawned).toBe(1);
+  });
 });

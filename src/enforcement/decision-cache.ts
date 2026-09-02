@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
 import { asRecord } from '../core/object.js';
 import { writeFileAtomic } from '../storage/atomic-file.js';
 import { SECRET_FILE_MODE } from '../storage/constants/storage.constants.js';
@@ -58,6 +59,34 @@ export class DecisionCache {
     } catch {
       // A decision that cannot be stored is still a decision: the caller has
       // its answer and the next hook simply asks again.
+    }
+  }
+
+  /**
+   * Drop what has expired, without storing anything new.
+   *
+   * `write` was the only thing that pruned this file, and an answer the platform
+   * says not to keep is never written — which is every answer once a tenant sets
+   * a feature cap. Without this the file stops being rewritten at the moment it
+   * stops being added to, and the entries already in it stay on disk long past
+   * their expiry. Reads reject them, so nothing is decided wrongly; but each one
+   * holds a sentence naming a person and what they spent, which is why the file
+   * is 0600, and there is no reason to keep them.
+   */
+  async prune(): Promise<void> {
+    const at = this.now().getTime();
+    const live = liveEntries(await this.entries(), at);
+
+    try {
+      if (Object.keys(live).length === 0) {
+        await fs.rm(this.file, { force: true });
+
+        return;
+      }
+
+      await writeFileAtomic(this.file, JSON.stringify(bounded(live)), SECRET_FILE_MODE);
+    } catch {
+      // Housekeeping. A file that cannot be tidied is still a correct cache.
     }
   }
 

@@ -139,22 +139,25 @@ async function enforce(state: HookPipelineState): Promise<StepOutcome<HookPipeli
   // organization set no cap.
   if (!enforcementWouldAsk(state.config)) return next(state);
 
-  // Identity first, and the checkout only if there is someone to ask about. A
-  // machine with no identity is allowed without a question being asked, so
-  // walking its working copy — and, on a cold checkout, spawning git — would buy
-  // an answer nothing reads. Two waits that can each cost a timeout are also two
-  // timeouts if they are taken in order for no reason.
-  const developerId = await developerIdentity(state.config.developerEmail, state.cwd, {
-    home: state.env.home
-  });
-
-  if (!developerId) return next(state);
+  // Together, not in turn. Each can cost its own git timeout, and taken in order
+  // a slow machine pays both before the agent's first token. Resolving the
+  // identity first would save a checkout lookup only on a machine that has no
+  // identity at all — a rare and stable condition — at the price of doubling the
+  // worst case for everyone else.
+  const [developerId, checkout] = await Promise.all([
+    developerIdentity(state.config.developerEmail, state.cwd, { home: state.env.home }),
+    readGateCheckout({
+      cwd: state.cwd,
+      checkoutsDir: state.paths.checkoutsDir,
+      now: state.env.now
+    })
+  ]);
 
   const decision = await resolveEnforcement({
     config: state.config,
     paths: state.paths,
     developerId,
-    checkout: await readGateCheckout({ cwd: state.cwd, checkoutsDir: state.paths.checkoutsDir }),
+    checkout,
     now: state.env.now
   });
 

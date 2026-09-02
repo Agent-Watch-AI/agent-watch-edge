@@ -155,3 +155,16 @@ export const GATE_BRANCH_REF_PREFIX = 'ref: refs/heads/';
  * repository being reported under the name it had this morning.
  */
 export const GATE_REMOTE_MEMO_TTL_MS = 3_600_000;
+
+/**
+ * And how long "this checkout has no usable remote" is remembered.
+ *
+ * Much shorter, because the answer cannot be trusted the way a remote can.
+ * `runGit` resolves undefined for a missing key *and* for a timeout, a git that
+ * is not on PATH, a spawn that failed — indistinguishable from here. Remembered
+ * for an hour, one overrun of the one-second budget on a cold checkout would
+ * silence every feature cap in that repository for the rest of the hour, with a
+ * debug line as the only trace. A minute bounds that, and a genuinely
+ * remoteless checkout pays one subprocess a minute rather than one per prompt.
+ */
+export const GATE_REMOTE_ABSENT_TTL_MS = 60_000;

@@ -8,6 +8,7 @@ import {
   GATE_BRANCH_REF_PREFIX,
   GATE_GITDIR_PREFIX,
   GATE_MAX_WALK_DEPTH,
+  GATE_REMOTE_ABSENT_TTL_MS,
   GATE_REMOTE_MEMO_TTL_MS,
   GIT_REMOTE_ARGS,
   GIT_TIMEOUT_MS
@@ -171,10 +172,12 @@ async function resolveRepository(
   const raw = await run(GIT_REMOTE_ARGS, root, options.timeoutMs ?? GIT_TIMEOUT_MS);
   const repository = raw ? normalizeRemote(raw) : undefined;
 
-  // The absence is remembered too, and it is the case that needed it most: a
-  // checkout with no origin, an unparseable remote, or a git call that timed out
-  // answers nothing, and without a memo would pay a subprocess for that nothing
-  // on every gated prompt.
+  // The absence is remembered too — it is the case that needed it most, since a
+  // checkout that answers nothing would otherwise pay a subprocess for that
+  // nothing on every prompt. For much less time, though: from here a missing
+  // remote and a git that timed out look the same, so remembering the second for
+  // an hour would silence a repository's feature caps for an hour on one slow
+  // call.
   await writeMemo(file, repository ?? null, now);
 
   return repository;
@@ -211,7 +214,10 @@ async function readMemo(file: string, now: number): Promise<RememberedRemote | u
 
   if (!known || typeof entry.at !== 'number') return undefined;
 
-  if (now - entry.at > GATE_REMOTE_MEMO_TTL_MS) return undefined;
+  const ttlMs =
+    entry.repository === null ? GATE_REMOTE_ABSENT_TTL_MS : GATE_REMOTE_MEMO_TTL_MS;
+
+  if (now - entry.at > ttlMs) return undefined;
 
   return { repository: entry.repository as string | null };
 }

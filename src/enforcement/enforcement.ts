@@ -103,7 +103,15 @@ async function decideThroughCache(
   // checkout, and this cache is keyed on the developer. Written anyway the entry
   // would already be expired — but it would still be a file write per gated
   // prompt for something nothing can ever read.
-  if (ttlMs > 0) await cache.write(key, decision, ttlMs);
+  if (ttlMs > 0) {
+    await cache.write(key, decision, ttlMs);
+
+    return decision;
+  }
+
+  // Writing is also what prunes, so an answer that must not be kept still has to
+  // sweep what an earlier one left behind.
+  await cache.prune();
 
   return decision;
 }

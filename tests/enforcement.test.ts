@@ -546,3 +546,39 @@ describe('an answer belongs to the checkout it was asked about', () => {
     expect(server.calls()).toBe(2);
   });
 });
+
+describe('an answer that must not be kept still tidies up after the ones that were', () => {
+  let world: TempWorld;
+
+  beforeEach(async () => {
+    world = await makeTempEnv();
+  });
+  afterEach(() => world.cleanup());
+
+  it('drops entries that have expired, though it writes none of its own', async () => {
+    // Writing is what prunes this file, and once a tenant sets a feature cap the
+    // platform says to keep nothing — so the file would stop being rewritten at
+    // the moment it stopped being added to, and what was already in it would sit
+    // there past expiry. Each entry holds a sentence naming a person and what
+    // they spent, which is why the file is 0600.
+    const paths = resolvePaths(world.env);
+    const file = path.join(paths.dataDir, 'enforcement-cache.json');
+
+    await fs.mkdir(paths.dataDir, { recursive: true });
+    await fs.writeFile(
+      file,
+      JSON.stringify({ stale: { decision: { decision: 'allow' }, expiresAt: Date.now() - 1000 } })
+    );
+
+    await resolveEnforcement({
+      config: configSchema.parse({ ...defaultConfig(), endpoint: ENDPOINT, token: 'aw_edge_test' }),
+      paths,
+      developerId: DEVELOPER,
+      checkout: { repository: 'github.com/acme/a', branch: 'main' },
+      now: world.env.now,
+      fetchFn: answering({ decision: 'allow', cache_ttl_ms: 0 }).fetchFn
+    });
+
+    await expect(fs.access(file)).rejects.toThrow();
+  });
+});

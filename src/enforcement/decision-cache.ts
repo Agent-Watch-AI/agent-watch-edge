@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
 import { asRecord } from '../core/object.js';
 import { writeFileAtomic } from '../storage/atomic-file.js';
 import { SECRET_FILE_MODE } from '../storage/constants/storage.constants.js';
@@ -62,6 +63,34 @@ export class DecisionCache {
   }
 
   /**
+   * Drop what has expired, without storing anything new.
+   *
+   * `write` was the only thing that pruned this file, and an answer the platform
+   * says not to keep is never written — which is every answer once a tenant sets
+   * a feature cap. Without this the file stops being rewritten at the moment it
+   * stops being added to, and the entries already in it stay on disk long past
+   * their expiry. Reads reject them, so nothing is decided wrongly; but each one
+   * holds a sentence naming a person and what they spent, which is why the file
+   * is 0600, and there is no reason to keep them.
+   */
+  async prune(): Promise<void> {
+    const at = this.now().getTime();
+    const live = liveEntries(await this.entries(), at);
+
+    try {
+      if (Object.keys(live).length === 0) {
+        await fs.rm(this.file, { force: true });
+
+        return;
+      }
+
+      await writeFileAtomic(this.file, JSON.stringify(bounded(live)), SECRET_FILE_MODE);
+    } catch {
+      // Housekeeping. A file that cannot be tidied is still a correct cache.
+    }
+  }
+
+  /**
    * Raw entries of the cache file.
    *
    * @returns The entries, or an empty bag when the file is absent or unusable.
@@ -87,10 +116,29 @@ export class DecisionCache {
  * @param url - The decision endpoint.
  * @param token - Edge token the question is asked with.
  * @param developerId - Identity the question is about.
+ * @param checkout - Where the turn is happening, when the caller could say.
+ * @param checkout.repository - Canonical remote of that checkout.
+ * @param checkout.branch - Its checked-out branch.
  * @returns The key.
  */
-export function decisionKey(url: string, token: string, developerId: string): string {
-  return crypto.createHash('sha256').update(`${url}|${token}|${developerId}`).digest('hex');
+export function decisionKey(
+  url: string,
+  token: string,
+  developerId: string,
+  checkout?: { repository: string; branch: string }
+): string {
+  // The checkout is part of the question, so it is part of the key. Left out, an
+  // answer earned on one branch is served on another for as long as the entry
+  // lives — and it lives whenever the platform does not say otherwise, which is
+  // every tenant without a feature cap and every platform predating the field.
+  // A cache whose correctness depends on the server remembering to disable it is
+  // not correct.
+  const scope = checkout ? `${checkout.repository}|${checkout.branch}` : '';
+
+  return crypto
+    .createHash('sha256')
+    .update(`${url}|${token}|${developerId}|${scope}`)
+    .digest('hex');
 }
 
 /**

@@ -130,3 +130,41 @@ export const RE_SCP_REMOTE = /^([\w.-]{2,}):([^\s]+)$/;
 export const RE_LEADING_SLASHES = /^\/+/;
 export const RE_TRAILING_SLASHES = /\/+$/;
 export const RE_DOT_GIT_SUFFIX = /\.git$/;
+
+/**
+ * What the gate reads out of a working copy, and how far it looks.
+ *
+ * The same ceiling the repository-config walk uses, for the same reason: a walk
+ * that never ends is a hook that never answers.
+ */
+export const GATE_MAX_WALK_DEPTH = 32;
+
+/** A linked worktree's `.git` file names its real git directory on one line. */
+export const GATE_GITDIR_PREFIX = 'gitdir:';
+
+/** `HEAD` on a branch; anything else is a detached HEAD, which names none. */
+export const GATE_BRANCH_REF_PREFIX = 'ref: refs/heads/';
+
+/**
+ * How long a remembered remote is trusted.
+ *
+ * A remote changes approximately never, which is the whole reason this is
+ * memoised — but `git remote set-url` does happen, and a memo with no expiry
+ * would pin a checkout to its old repository for good. An hour is one
+ * subprocess per checkout per working session, and at most an hour of a
+ * repository being reported under the name it had this morning.
+ */
+export const GATE_REMOTE_MEMO_TTL_MS = 3_600_000;
+
+/**
+ * And how long "this checkout has no usable remote" is remembered.
+ *
+ * Much shorter, because the answer cannot be trusted the way a remote can.
+ * `runGit` resolves undefined for a missing key *and* for a timeout, a git that
+ * is not on PATH, a spawn that failed — indistinguishable from here. Remembered
+ * for an hour, one overrun of the one-second budget on a cold checkout would
+ * silence every feature cap in that repository for the rest of the hour, with a
+ * debug line as the only trace. A minute bounds that, and a genuinely
+ * remoteless checkout pays one subprocess a minute rather than one per prompt.
+ */
+export const GATE_REMOTE_ABSENT_TTL_MS = 60_000;

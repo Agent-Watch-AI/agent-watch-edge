@@ -37,6 +37,7 @@ export interface CachedDecision {
 
 /** One request to the decision endpoint. */
 export interface DecisionRequest {
+  readonly checkout?: EnforcementCheckout;
   readonly url: string;
   readonly token: string;
   /** The same identity `turn.summary.developer_id` carries. */
@@ -48,11 +49,24 @@ export interface DecisionRequest {
 }
 
 /** Everything the check needs to answer without touching ambient state. */
+/** Where the turn is happening, when the working copy could say. */
+export interface EnforcementCheckout {
+  readonly repository: string;
+  readonly branch: string;
+}
+
 export interface EnforcementOptions {
   readonly config: AgentWatchConfig;
   readonly paths: AgentWatchPaths;
   /** The identity to ask about, or undefined when this machine has none. */
   readonly developerId?: string;
+  /**
+   * Where the turn is happening, when the working copy could say.
+   *
+   * Both halves or neither: a branch alone identifies nothing, because every
+   * repository has a `main`, and the platform drops a half-stated pair anyway.
+   */
+  readonly checkout?: EnforcementCheckout;
   readonly now: () => Date;
   readonly fetchFn?: typeof fetch;
 }

@@ -1,6 +1,6 @@
 import { debugLog } from '../core/logger.js';
 import { edgeHeaders } from '../transport/headers.js';
-import { DEVELOPER_ID_PARAM } from './constants/enforcement.constants.js';
+import { BRANCH_PARAM, DEVELOPER_ID_PARAM, REPOSITORY_PARAM } from './constants/enforcement.constants.js';
 import { cacheTtlSchema, decisionSchema } from './schemas/enforcement.schema.js';
 import type { AnsweredDecision, DecisionRequest } from './types/enforcement.types.js';
 
@@ -54,6 +54,13 @@ function decisionUrl(request: DecisionRequest): string {
   const url = new URL(request.url);
 
   url.searchParams.set(DEVELOPER_ID_PARAM, request.developerId);
+
+  // Both or neither. The platform drops a half-stated pair, so sending one half
+  // would only cost the request a parameter nobody reads.
+  if (request.checkout) {
+    url.searchParams.set(REPOSITORY_PARAM, request.checkout.repository);
+    url.searchParams.set(BRANCH_PARAM, request.checkout.branch);
+  }
 
   return url.toString();
 }

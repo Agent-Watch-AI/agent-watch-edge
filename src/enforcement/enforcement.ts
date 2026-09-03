@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { enforcementUrl } from '../config/config.js';
+import type { AgentWatchConfig } from '../config/types/config.types.js';
 import { debugLog } from '../core/logger.js';
 import { ALLOW, ENFORCEMENT_CACHE_FILE_NAME } from './constants/enforcement.constants.js';
 import { DecisionCache, decisionKey } from './decision-cache.js';
@@ -27,7 +28,7 @@ export async function resolveEnforcement(options: EnforcementOptions): Promise<E
   const developerId = options.developerId;
 
   // Nothing was asked, so nobody said no.
-  if (!options.config.enforcement.enabled || !url || !token || !developerId) return ALLOW;
+  if (!enforcementWouldAsk(options.config) || !url || !token || !developerId) return ALLOW;
 
   try {
     return await decideThroughCache(options, url, token, developerId);
@@ -36,6 +37,25 @@ export async function resolveEnforcement(options: EnforcementOptions): Promise<E
 
     return ALLOW;
   }
+}
+
+/**
+ * Whether a decision would be asked for at all, from configuration alone.
+ *
+ * Exported because the caller has to know before it pays for anything the
+ * question needs. Working out where a prompt is happening costs a walk of the
+ * working copy and, on a cold checkout, a git process; spending that on a
+ * machine that will not ask is the one cost this feature must not add to the
+ * gate.
+ *
+ * Identity is not part of it: resolving that is the caller's own decision, and
+ * it is already paid for elsewhere.
+ *
+ * @param config - Effective configuration.
+ * @returns True when a configured, enabled check would reach the platform.
+ */
+export function enforcementWouldAsk(config: AgentWatchConfig): boolean {
+  return config.enforcement.enabled && Boolean(config.token) && Boolean(enforcementUrl(config));
 }
 
 /**
@@ -58,7 +78,7 @@ async function decideThroughCache(
   developerId: string
 ): Promise<EnforcementDecision> {
   const cache = new DecisionCache(path.join(options.paths.dataDir, ENFORCEMENT_CACHE_FILE_NAME), options.now);
-  const key = decisionKey(url, token, developerId);
+  const key = decisionKey(url, token, developerId, options.checkout);
   const cached = await cache.read(key);
 
   if (cached) return cached;
@@ -67,6 +87,7 @@ async function decideThroughCache(
     url,
     token,
     developerId,
+    checkout: options.checkout,
     installationId: options.config.installationId,
     timeoutMs: options.config.enforcement.timeoutMs,
     fetchFn: options.fetchFn
@@ -75,8 +96,22 @@ async function decideThroughCache(
   if (!answered) return ALLOW;
 
   const { cacheTtlMs, ...decision } = answered;
+  const ttlMs = effectiveTtlMs(cacheTtlMs, options.config.enforcement.cacheTtlMs);
 
-  await cache.write(key, decision, effectiveTtlMs(cacheTtlMs, options.config.enforcement.cacheTtlMs));
+  // Zero is the platform saying "do not keep this", which it says to every tenant
+  // that has a feature cap: which feature a branch belongs to is a fact about one
+  // checkout, and this cache is keyed on the developer. Written anyway the entry
+  // would already be expired — but it would still be a file write per gated
+  // prompt for something nothing can ever read.
+  if (ttlMs > 0) {
+    await cache.write(key, decision, ttlMs);
+
+    return decision;
+  }
+
+  // Writing is also what prunes, so an answer that must not be kept still has to
+  // sweep what an earlier one left behind.
+  await cache.prune();
 
   return decision;
 }

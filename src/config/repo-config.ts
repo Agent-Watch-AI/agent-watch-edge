@@ -7,6 +7,7 @@ import { readJsonFile } from '../storage/json-file.js';
 import type { AgentWatchPaths } from '../storage/types/storage.types.js';
 import { loadConfig } from './config-store.js';
 import {
+  CAPTURE_KEY,
   GLOBAL_ONLY_BLOCKS,
   GLOBAL_ONLY_EMIT_KEYS,
   GLOBAL_ONLY_KEYS,
@@ -15,7 +16,7 @@ import {
   REPO_CONFIG_NAME
 } from './constants/config.constants.js';
 import { configSchema } from './schemas/config.schema.js';
-import type { AgentWatchConfig, EffectiveConfig, MergedConfig } from './types/config.types.js';
+import type { AgentWatchConfig, CaptureConfig, EffectiveConfig, MergedConfig } from './types/config.types.js';
 
 export { REPO_CONFIG_NAME } from './constants/config.constants.js';
 export type { EffectiveConfig, MergedConfig } from './types/config.types.js';
@@ -48,11 +49,11 @@ export async function findRepoConfigFile(startDir: string): Promise<string | und
  * Overlay repository overrides on the global config.
  *
  * A repo file is committed and shared, which is what every rule here follows
- * from: it may narrow what is captured, and it may not touch identity,
- * credentials, delivery destinations or the usage ledger. Anything refused is
- * reported rather than silently dropped, and an invalid *result* degrades to
- * the global config — a broken repo file must never disable telemetry or break
- * a hook.
+ * from: it may only ever narrow what is captured, and it may not touch
+ * identity, credentials, delivery destinations or the usage ledger. Anything
+ * refused is reported rather than silently dropped, and an invalid *result*
+ * degrades to the global config — a broken repo file must never disable
+ * telemetry or break a hook.
  *
  * @param global - The machine's global config.
  * @param repoValue - Raw decoded contents of the repo file.
@@ -64,16 +65,18 @@ export function mergeRepoConfig(global: AgentWatchConfig, repoValue: unknown): M
   if (!repo) return { config: global, warnings: [`${REPO_CONFIG_NAME}: expected a JSON object`] };
 
   const permitted = withoutGlobalOnly(repo);
-  const merged = overlay(global, permitted.value);
+  const narrowed = withoutWidenedCapture(global, permitted.value);
+  const warnings = [...permitted.warnings, ...narrowed.warnings];
+  const merged = overlay(global, narrowed.value);
   const parsed = configSchema.safeParse(merged);
 
   if (!parsed.success) {
     const detail = parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ');
 
-    return { config: global, warnings: [...permitted.warnings, `${REPO_CONFIG_NAME}: invalid overrides ignored (${detail})`] };
+    return { config: global, warnings: [...warnings, `${REPO_CONFIG_NAME}: invalid overrides ignored (${detail})`] };
   }
 
-  return { config: parsed.data, warnings: permitted.warnings };
+  return { config: parsed.data, warnings };
 }
 
 /**
@@ -170,6 +173,47 @@ function withoutGlobalOnly(repo: UnknownRecord): PermittedOverrides {
   }
 
   return { value: { ...value, emit: omitKeys(emit, refusedEmitKeys) }, warnings };
+}
+
+/**
+ * Drop repo capture flags that would turn collection *on*.
+ *
+ * The other half of "a committed file may only narrow": `withoutGlobalOnly`
+ * decides which keys a repo file may set at all, this decides which direction
+ * it may move the ones it may. Without it, one line in a checked-in
+ * `.agentwatch.json` starts shipping prompts and tool I/O for everyone who
+ * clones the repository, on machines whose owners opted out.
+ *
+ * Compared against the base config rather than the schema defaults, so a
+ * developer who did opt in globally still gets what they asked for, and a repo
+ * file setting the same flag is a permitted no-op. Iterating the repo block's
+ * keys and requiring an explicit `false` on the base means unknown keys are
+ * left to the schema, which strips them.
+ *
+ * @param global - The base config the overlay applies to.
+ * @param repo - Repo overrides with the global-only keys already removed.
+ * @returns The overrides with every widening removed, and one warning each.
+ */
+function withoutWidenedCapture(global: AgentWatchConfig, repo: UnknownRecord): PermittedOverrides {
+  const capture = asRecord(repo[CAPTURE_KEY]);
+
+  if (!capture) return { value: repo, warnings: [] };
+
+  const warnings: string[] = [];
+  const refused = new Set<string>();
+
+  for (const key of Object.keys(capture)) {
+    if (capture[key] !== true) continue;
+
+    if (global.capture[key as keyof CaptureConfig] !== false) continue;
+
+    warnings.push(`${REPO_CONFIG_NAME}: "capture.${key}" may only be narrowed by a repository file and was ignored`);
+    refused.add(key);
+  }
+
+  if (refused.size === 0) return { value: repo, warnings };
+
+  return { value: { ...repo, [CAPTURE_KEY]: omitKeys(capture, refused) }, warnings };
 }
 
 /**

@@ -50,10 +50,15 @@ describe('CLI commands', () => {
 
       expect(config.endpoint).toBe('https://backend.example.com');
       expect(config.installationId).toBeTruthy();
-      expect(config.capture.prompts).toBe(true);
-      expect(config.capture.responses).toBe(true);
-      expect(config.capture.toolInput).toBe(true);
-      expect(config.capture.toolOutput).toBe(true);
+      // Setup never turns content capture on: prompts and tool I/O stay on the
+      // machine until someone edits the config deliberately.
+      expect(config.capture.prompts).toBe(false);
+      expect(config.capture.responses).toBe(false);
+      expect(config.capture.toolInput).toBe(false);
+      expect(config.capture.toolOutput).toBe(false);
+      // Metadata, which attribution is built from, is on.
+      expect(config.capture.git).toBe(true);
+      expect(config.capture.files).toBe(true);
 
       const claudeSettings = await readJson(path.join(world.home, '.claude', 'settings.json'));
 

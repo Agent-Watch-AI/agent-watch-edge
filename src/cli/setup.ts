@@ -47,8 +47,8 @@ export async function runSetup(options: SetupOptions): Promise<number> {
     return 1;
   }
 
-  // A fresh install starts from the real defaults (full capture), not the
-  // fail-safe metadata-only fallback the hook runtime uses.
+  // A fresh install starts from the schema defaults: metadata on, content off.
+  // Turning content capture on is a separate, deliberate edit to the config.
   const baseConfig = context.configState === 'missing' ? defaultConfig() : context.config;
   const otel = resolveOtel(baseConfig, options.otel);
 

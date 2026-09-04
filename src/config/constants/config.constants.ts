@@ -71,8 +71,11 @@ export const GLOBAL_ONLY_BLOCKS = ['delivery', 'otel', 'enforcement'] as const;
  */
 export const GLOBAL_ONLY_EMIT_KEYS: ReadonlySet<string> = new Set(['llmCalls', 'turnSummaries']);
 
+/** The capture block, which a repo file may narrow but never widen. */
+export const CAPTURE_KEY = 'capture';
+
 /** Nested blocks merged field-by-field instead of replaced wholesale. */
-export const MERGE_BLOCKS = ['capture', 'emit'] as const;
+export const MERGE_BLOCKS = [CAPTURE_KEY, 'emit'] as const;
 
 /** Ceiling on the upward walk looking for a repo config. */
 export const MAX_WALK_DEPTH = 32;

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Content capture is now off by default.** `capture.prompts`, `capture.responses`,
+  `capture.toolInput` and `capture.toolOutput` default to `false`: a fresh install collects
+  metadata only, and shipping prompts or tool I/O off the machine is a deliberate opt-in.
+  `capture.git` and `capture.files` stay `true` — they gate the repo remote/branch/SHA and the
+  per-file *path*, which is what feature and project attribution is built from, not content.
+  `prompt_evidence`/`response_evidence` (length + SHA-256, never the text) are unaffected, so turn
+  counts and cost attribution work with capture fully off. Existing configs are not migrated: a
+  machine that already has `prompts: true` written into `~/.agentwatch/config.json` keeps capturing.
+- A committed `.agentwatch.json` can now only ever *narrow* capture. A repository file that sets a
+  capture flag the machine has off is ignored and reported — `agentwatch config` and
+  `agentwatch doctor` both print the refusal — so checking a repository out can never start
+  collecting content on someone else's machine. The `capture` block also drops unknown keys instead
+  of passing them through.
+
 - `agentwatch setup` now refuses an install it cannot attribute: with no `--developer-email` and no
   `git config user.email`, it exits non-zero with the two remedies on stderr and writes no config
   file. An unknown identity is allowed silently by the enforcement gate, so an unattributable

@@ -10,20 +10,30 @@ import {
 } from '../constants/config.constants.js';
 
 /**
- * Everything is captured by default so the backend gets full turn context
- * (prompts, responses, tool I/O, tokens); users opt out per field. Secrets are
- * still scrubbed by the sanitizer regardless of these flags.
+ * Content is opt-IN; metadata stays on.
+ *
+ * The first four flags carry raw content off the machine — what the developer
+ * typed, what the agent answered, what went into and came out of a tool. That
+ * is the material an IT review will not wave through, so nothing ships it
+ * unless someone deliberately turned it on. `git` and `files` are a different
+ * kind of thing: they gate the repo/branch/SHA and the per-file *path*, which
+ * is metadata about where work happened, not the work itself — and it is what
+ * feature and project attribution is made of, so it stays on by default.
+ *
+ * Independent of all six: `contentEvidence()` still records a length and a
+ * SHA-256 of prompts and responses (never the text), and the sanitizer scrubs
+ * secrets from whatever does get sent.
  */
 export const captureSchema = z
   .object({
-    prompts: z.boolean().default(true),
-    responses: z.boolean().default(true),
-    toolInput: z.boolean().default(true),
-    toolOutput: z.boolean().default(true),
+    prompts: z.boolean().default(false),
+    responses: z.boolean().default(false),
+    toolInput: z.boolean().default(false),
+    toolOutput: z.boolean().default(false),
     git: z.boolean().default(true),
     files: z.boolean().default(true)
   })
-  .passthrough();
+  .strip();
 
 /** Tuning for the in-hook send and the machine-global offline queue. */
 export const deliverySchema = z

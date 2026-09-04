@@ -61,9 +61,9 @@ export function ensureInstallationId(config: AgentWatchConfig): AgentWatchConfig
  * Fail-safe runtime config for a missing or corrupt file.
  *
  * Hooks keep running, but content capture is OFF: an accidental config wipe
- * must not silently start collecting prompts and tool I/O. Deliberately
- * different from `defaultConfig()`, which is what setup writes when the user
- * asked for an install.
+ * must not silently start collecting prompts and tool I/O. The schema defaults
+ * are already off, so this now only pins the guarantee — deliberately, so that
+ * a future default cannot quietly widen what a *broken* config collects.
  *
  * @returns A metadata-only config.
  */

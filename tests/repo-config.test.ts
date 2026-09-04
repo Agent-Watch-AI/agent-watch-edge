@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { makeTempEnv, writeJson, type TempWorld } from './helpers.js';
+import { CONTENT_CAPTURE_ON, makeTempEnv, writeJson, type TempWorld } from './helpers.js';
 import { loadEffectiveConfig, mergeRepoConfig, findRepoConfigFile } from '../src/config/repo-config.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { defaultConfig } from '../src/config/config.js';
@@ -53,6 +53,40 @@ describe('repo config merge', () => {
     expect(merged.config.delivery.maxQueueEvents).toBe(defaultConfig().delivery.maxQueueEvents);
     expect(merged.config.delivery.maxAttempts).toBe(defaultConfig().delivery.maxAttempts);
     expect(merged.warnings.join(' ')).toMatch(/"delivery" is global-only/);
+  });
+
+  it('refuses a repo file that would turn a capture flag on', () => {
+    const global = defaultConfig();
+
+    global.capture = { ...global.capture, prompts: true };
+    const merged = mergeRepoConfig(global, {
+      capture: { prompts: true, responses: true, toolInput: true, toolOutput: true, git: true, files: false }
+    });
+
+    // Off on this machine, so the repo file cannot switch it on for whoever
+    // clones the repository.
+    expect(merged.config.capture.responses).toBe(false);
+    expect(merged.config.capture.toolInput).toBe(false);
+    expect(merged.config.capture.toolOutput).toBe(false);
+    // Already on globally: repeating it is a permitted no-op, not a refusal.
+    expect(merged.config.capture.prompts).toBe(true);
+    expect(merged.config.capture.git).toBe(true);
+    // Narrowing is exactly what the repo file is for, and still works.
+    expect(merged.config.capture.files).toBe(false);
+
+    const warnings = merged.warnings.join(' ');
+
+    expect(warnings).toMatch(/"capture\.responses" may only be narrowed/);
+    expect(warnings).toMatch(/"capture\.toolInput" may only be narrowed/);
+    expect(warnings).toMatch(/"capture\.toolOutput" may only be narrowed/);
+    expect(warnings).not.toMatch(/capture\.prompts/);
+    expect(warnings).not.toMatch(/capture\.files/);
+  });
+
+  it('drops unknown capture keys instead of passing them through', () => {
+    const merged = mergeRepoConfig(defaultConfig(), { capture: { promptz: true } });
+
+    expect('promptz' in merged.config.capture).toBe(false);
   });
 
   it('refuses to switch off budget enforcement, or redirect its check, from the repo file', () => {
@@ -122,14 +156,17 @@ describe('effective config through the hook pipeline', () => {
   it('repo overrides apply to hook processing based on the payload cwd', async () => {
     const paths = resolvePaths(world.env);
 
-    await writeJson(paths.configFile, { ...defaultConfig(), developerEmail: 'global@company.com' });
+    const global = defaultConfig();
+
+    global.capture = { ...global.capture, ...CONTENT_CAPTURE_ON };
+    await writeJson(paths.configFile, { ...global, developerEmail: 'global@company.com' });
 
     const repo = path.join(world.home, 'repo');
 
     await fs.mkdir(repo, { recursive: true });
     await writeJson(path.join(repo, '.agentwatch.json'), {
       developerEmail: 'spoofed@evil.com',
-      capture: { prompts: true, responses: true }
+      capture: { responses: false }
     });
 
     async function hookDryRun(payload: Record<string, unknown>): Promise<{ events: any[] }> {
@@ -152,10 +189,10 @@ describe('effective config through the hook pipeline', () => {
     const result = await hookDryRun({ hook_event_name: 'Stop', session_id: 'sess-r', last_assistant_message: 'the answer', cwd: repo });
     const summary = result.events.find((event: any) => event.event.type === 'turn.summary');
 
-    // capture override applied, identity override refused
+    // capture narrowing applied, identity override refused
     expect(summary.developer_id).toBe('global@company.com');
     expect(summary.prompt).toBe('repo prompt text');
-    expect(summary.response).toBe('the answer');
+    expect(summary.response).toBeUndefined();
   });
 
   it('ignores repo overrides entirely while the global config is missing or invalid', async () => {
@@ -175,6 +212,22 @@ describe('effective config through the hook pipeline', () => {
     expect(effective.config.capture.toolInput).toBe(false);
     expect('offlineQueue' in effective.config.delivery).toBe(false);
     expect(effective.warnings.join(' ')).toMatch(/global config/);
+  });
+
+  it('a committed repo file cannot re-enable content capture on a machine that has it off', async () => {
+    const paths = resolvePaths(world.env);
+    const repo = path.join(world.home, 'repo');
+
+    await writeJson(paths.configFile, defaultConfig());
+    await fs.mkdir(repo, { recursive: true });
+    await writeJson(path.join(repo, '.agentwatch.json'), { capture: { prompts: true, toolOutput: true } });
+
+    const effective = await loadEffectiveConfig(paths, repo);
+
+    expect(effective.config.capture.prompts).toBe(false);
+    expect(effective.config.capture.toolOutput).toBe(false);
+    // Refused, not silently dropped: `agentwatch config` and `doctor` print these.
+    expect(effective.warnings.join(' ')).toMatch(/"capture\.prompts" may only be narrowed/);
   });
 
   it('loadEffectiveConfig without a repo file returns the global config unchanged', async () => {

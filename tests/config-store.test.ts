@@ -22,10 +22,23 @@ describe('config load fallback', () => {
     expect(Object.keys(config.emit).sort()).toEqual(['llmCalls', 'turnSummaries']);
   });
 
+  it('the shipped defaults capture metadata but no content', () => {
+    const capture = defaultConfig().capture;
+
+    expect(capture.prompts).toBe(false);
+    expect(capture.responses).toBe(false);
+    expect(capture.toolInput).toBe(false);
+    expect(capture.toolOutput).toBe(false);
+    // Repo/branch/SHA and per-file paths are metadata, and are what feature
+    // and project attribution is built from.
+    expect(capture.git).toBe(true);
+    expect(capture.files).toBe(true);
+  });
+
   it('a parsed config keeps its capture settings', async () => {
     const paths = resolvePaths(world.env);
 
-    await writeJson(paths.configFile, defaultConfig());
+    await writeJson(paths.configFile, { ...defaultConfig(), capture: { ...defaultConfig().capture, prompts: true } });
     const result = await loadConfig(paths);
 
     expect(result.state).toBe('ok');

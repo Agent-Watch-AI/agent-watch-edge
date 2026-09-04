@@ -12,15 +12,17 @@ import { resolvePaths } from '../src/storage/paths.js';
 import { defaultConfig } from '../src/config/config.js';
 import { realEnv } from '../src/core/env.js';
 import { runHook } from '../src/cli/hook.js';
-import { makeTempEnv, readJson, writeJson, type TempWorld } from './helpers.js';
+import { CONTENT_CAPTURE_ON, makeTempEnv, readJson, writeJson, type TempWorld } from './helpers.js';
 import * as cursor from './fixtures/cursor.js';
 
 const HOOK_CMD = 'agentwatch hook --agent cursor';
 
+// Adapter *mapping* is the subject here, not the shipped default, so these
+// contexts opt into content capture and each test narrows what it is about.
 function context(overrides: Partial<ReturnType<typeof defaultConfig>['capture']> = {}): HookContext {
   const config = defaultConfig();
 
-  config.capture = { ...config.capture, ...overrides };
+  config.capture = { ...config.capture, ...CONTENT_CAPTURE_ON, ...overrides };
 
   return { env: realEnv(), config };
 }
@@ -63,7 +65,7 @@ describe('Cursor adapter', () => {
     expect(prompt.sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('includes prompt text by default', () => {
+  it('includes prompt text when capture.prompts is on', () => {
     const [event] = parseCursorHookEvent(cursor.cursorBeforeSubmitPrompt, context());
 
     expect(event!.metadata?.['promptText']).toContain('Refactor the auth middleware');

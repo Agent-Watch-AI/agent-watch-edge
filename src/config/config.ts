@@ -15,10 +15,7 @@ export { captureSchema, configSchema, deliverySchema, emitSchema, enforcementSch
 export type { AgentWatchConfig, CaptureConfig, EnforcementConfig, OtelConfig, OtelSignalName } from './types/config.types.js';
 
 /**
- * The configuration a deliberate `agentwatch setup` writes: full capture.
- *
- * Distinct from the runtime fallback in config-store, which is what a
- * *missing* config degrades to.
+ * The configuration a deliberate `agentwatch setup` writes: metadata only.
  *
  * @returns A config with every default applied.
  */

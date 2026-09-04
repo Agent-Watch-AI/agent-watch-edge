@@ -4,6 +4,14 @@ import path from 'node:path';
 import process from 'node:process';
 import type { Env } from '../src/core/env.js';
 
+/**
+ * The four content capture flags, on.
+ *
+ * Content capture ships OFF, so a test about what the edge does *with* content
+ * has to opt in the way a real user would. Spread over `config.capture`.
+ */
+export const CONTENT_CAPTURE_ON = { prompts: true, responses: true, toolInput: true, toolOutput: true } as const;
+
 export interface TempWorld {
   env: Env;
   home: string;

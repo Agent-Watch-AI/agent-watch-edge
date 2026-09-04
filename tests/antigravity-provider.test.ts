@@ -9,7 +9,7 @@ import { resolvePaths } from '../src/storage/paths.js';
 import { defaultConfig } from '../src/config/config.js';
 import { isAgentWatchHookCommand, type SetupContext } from '../src/providers/provider.js';
 import { runHook } from '../src/cli/hook.js';
-import { makeTempEnv, readJson, writeJson, type TempWorld } from './helpers.js';
+import { CONTENT_CAPTURE_ON, makeTempEnv, readJson, writeJson, type TempWorld } from './helpers.js';
 import {
   ANTIGRAVITY_COMMON,
   EDIT_FILE_ARGS,
@@ -50,10 +50,18 @@ describe('Antigravity provider', () => {
     };
   }
 
-  async function parse(payload: unknown) {
+  // Content capture ships off; these tests are about what the adapter does
+  // with a prompt and a response, so they opt in the way a user would.
+  function contentConfig() {
     const config = defaultConfig();
 
-    return antigravityProvider.parseHookEvent(payload, { env: world.env, config });
+    config.capture = { ...config.capture, ...CONTENT_CAPTURE_ON };
+
+    return config;
+  }
+
+  async function parse(payload: unknown) {
+    return antigravityProvider.parseHookEvent(payload, { env: world.env, config: contentConfig() });
   }
 
   describe('hook payload parsing', () => {
@@ -112,7 +120,7 @@ describe('Antigravity provider', () => {
     });
 
     it('takes the turn prompt from common.lastUserInput on the first invocation only', async () => {
-      const config = defaultConfig();
+      const config = contentConfig();
       const [first] = await antigravityProvider.parseHookEvent(antigravityPreInvocation(1), { env: world.env, config });
 
       expect(first?.event.type).toBe('prompt.submitted');
@@ -318,7 +326,7 @@ describe('Antigravity provider', () => {
   describe('through the hook pipeline', () => {
     it('emits one turn.summary per execution, with prompt, response and tools', async () => {
       const paths = resolvePaths(world.env);
-      const config = defaultConfig();
+      const config = contentConfig();
 
       // Unroutable endpoint: the direct send fails and the event lands in the
       // queue exactly as it would have been posted.
@@ -365,7 +373,7 @@ describe('Antigravity provider', () => {
 
     it('does not double the prompt when the first-invocation hook fires twice', async () => {
       const paths = resolvePaths(world.env);
-      const config = defaultConfig();
+      const config = contentConfig();
 
       config.endpoint = 'http://127.0.0.1:1';
       config.delivery.timeoutMs = 200;

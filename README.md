@@ -104,14 +104,18 @@ agentwatch uninstall --purge                              # Also delete ~/.agent
 ## Configuration
 
 * **Global configuration**: `~/.agentwatch/config.json` (managed via `agentwatch setup`).
-* **Repository overrides**: Place a `.agentwatch.json` in any repository root to adjust content capture:
+
+### Content capture
+
+Content capture is **off by default**. Prompts, agent responses, tool inputs and tool outputs stay
+on the machine unless you turn them on in `~/.agentwatch/config.json`:
 
 ```json
 {
   "capture": {
-    "prompts": true,
+    "prompts": false,
     "responses": false,
-    "toolInput": true,
+    "toolInput": false,
     "toolOutput": false,
     "git": true,
     "files": true
@@ -119,9 +123,33 @@ agentwatch uninstall --purge                              # Also delete ~/.agent
 }
 ```
 
-*Note: Infrastructure settings (`endpoint`, `token`, `developerEmail`, `enforcementUrl`) and the
-`delivery`, `otel` and `enforcement` blocks are global-only — a committed repo file cannot redirect
-delivery or switch off a budget cap for everyone who clones the repository.*
+`git` and `files` are on by default because they carry metadata, not content: the repo remote,
+branch and SHA, and the *path* of a file the agent touched. That is what feature and project
+attribution is built from. A prompt is still recorded as a length and a SHA-256 either way — never
+the text — so turn counts and cost attribution work with capture fully off.
+
+*Upgrading?* The default applies to configs that do not say otherwise. A machine installed on an
+earlier release has all six flags written into `~/.agentwatch/config.json`, and `agentwatch setup`
+keeps an existing config's capture settings — so set the four content flags to `false` yourself, or
+delete the file and re-run setup. `agentwatch doctor` reports the effective posture for the
+directory you are in.
+
+* **Repository overrides**: Place a `.agentwatch.json` in any repository root to turn capture
+  **down** for that repository:
+
+```json
+{
+  "capture": { "prompts": false, "toolOutput": false }
+}
+```
+
+*Note: a repository file may only ever narrow capture. A committed `.agentwatch.json` that sets a
+capture flag the machine has off is ignored, with a warning — `agentwatch doctor` and
+`agentwatch config` both show it — so checking a repository out can never start collecting content
+on someone else's machine. Infrastructure settings (`endpoint`, `token`, `developerEmail`,
+`enforcementUrl`) and the `delivery`, `otel` and `enforcement` blocks are global-only too: a
+committed repo file cannot redirect delivery or switch off a budget cap for everyone who clones the
+repository.*
 
 ### Budget enforcement (pre-turn check)
 

@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { makeTempEnv, writeJson, type TempWorld } from './helpers.js';
+import { CONTENT_CAPTURE_ON, makeTempEnv, writeJson, type TempWorld } from './helpers.js';
 import { readTurnUsage } from '../src/turns/claude-transcript.js';
 import { TurnStateStore } from '../src/turns/turn-state.js';
 import { buildTurnSummary } from '../src/turns/turn-summary.js';
@@ -324,7 +324,7 @@ describe('turn tracking through the hook pipeline', () => {
     await writeJson(paths.configFile, {
       ...defaultConfig(),
       developerEmail: 'dev@company.com',
-      capture: { ...defaultConfig().capture, prompts: true, responses: true },
+      capture: { ...defaultConfig().capture, ...CONTENT_CAPTURE_ON },
       ...overrides
     });
   }

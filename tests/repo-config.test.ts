@@ -56,7 +56,9 @@ describe('repo config merge', () => {
   });
 
   it('refuses a repo file that would turn a capture flag on', () => {
-    const global = defaultConfig();
+    // A machine with `prompts` genuinely on is one that granted consent; without
+    // the marker the gate would zero the flag and this would test nothing.
+    const global = { ...defaultConfig(), contentCaptureConsent: true };
 
     global.capture = { ...global.capture, prompts: true };
     const merged = mergeRepoConfig(global, {
@@ -159,7 +161,9 @@ describe('effective config through the hook pipeline', () => {
     const global = defaultConfig();
 
     global.capture = { ...global.capture, ...CONTENT_CAPTURE_ON };
-    await writeJson(paths.configFile, { ...global, developerEmail: 'global@company.com' });
+    // Consent is what makes the global `prompts: true` above real; the point of
+    // this test is the repo file narrowing it, not the gate refusing it.
+    await writeJson(paths.configFile, { ...global, contentCaptureConsent: true, developerEmail: 'global@company.com' });
 
     const repo = path.join(world.home, 'repo');
 

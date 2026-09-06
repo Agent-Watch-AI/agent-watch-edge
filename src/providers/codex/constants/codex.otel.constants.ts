@@ -24,3 +24,6 @@ export const RE_LEADING_NEWLINE = /^\n/;
 export const RE_TRAILING_NEWLINES = /\n+$/;
 export const RE_TOML_BACKSLASH = /\\/g;
 export const RE_TOML_QUOTE = /"/g;
+
+/** Start of any TOML table header, used to find where our block stops being ours. */
+export const RE_TOML_TABLE_HEADER = /^\s*\[/;

@@ -8,7 +8,7 @@ import { resolvePaths } from '../src/storage/paths.js';
 import { defaultConfig } from '../src/config/config.js';
 import type { SetupContext } from '../src/providers/provider.js';
 import { parse as parseToml } from 'smol-toml';
-import { makeTempEnv, readJson, writeJson, type TempWorld } from './helpers.js';
+import { CONTENT_CAPTURE_ON, makeTempEnv, readJson, writeJson, type TempWorld } from './helpers.js';
 
 const HOOK_CMD = 'agentwatch hook --agent codex';
 
@@ -28,6 +28,8 @@ describe('Codex provider', () => {
 
     config.endpoint = 'https://backend.example.com';
     config.installationId = 'inst-1';
+    config.contentCaptureConsent = true;
+    config.capture = { ...CONTENT_CAPTURE_ON, git: true, files: true };
 
     return {
       env: world.env,

@@ -5,6 +5,7 @@
 export type { AgentInstallState, AgentWatchPaths, InstallState, JsonReadResult, ReleaseLock } from './types/storage.types.js';
 
 export { resolvePaths } from './paths.js';
+export { disabledFile, isDisabled } from './disabled.js';
 export { readJsonFile } from './json-file.js';
 export { backupFile, writeFileAtomic } from './atomic-file.js';
 export { acquireLock } from './lock.js';

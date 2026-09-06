@@ -40,6 +40,7 @@ export const REPO_CONFIG_NAME = '.agentwatch.json';
  * would exfiltrate the global bearer token along with the telemetry.
  */
 export const GLOBAL_ONLY_KEYS: ReadonlySet<string> = new Set([
+  'contentCaptureConsent',
   'token',
   'installationId',
   'developerEmail',
@@ -70,6 +71,16 @@ export const GLOBAL_ONLY_BLOCKS = ['delivery', 'otel', 'enforcement'] as const;
  * to silence usage telemetry for everyone who clones the repository.
  */
 export const GLOBAL_ONLY_EMIT_KEYS: ReadonlySet<string> = new Set(['llmCalls', 'turnSummaries']);
+
+/**
+ * The four capture flags that carry raw content off the machine.
+ *
+ * Named once because two rules key on exactly this set: the consent gate zeroes
+ * them on load, and `saveConfig` preserves the user's own values rather than the
+ * gated ones, so granting consent later restores a choice instead of finding it
+ * erased.
+ */
+export const CONTENT_CAPTURE_KEYS = ['prompts', 'responses', 'toolInput', 'toolOutput'] as const;
 
 /** The capture block, which a repo file may narrow but never widen. */
 export const CAPTURE_KEY = 'capture';

@@ -179,12 +179,13 @@ export function withHooksBlock(config: UnknownRecord, hooks: UnknownRecord, key 
  *
  * @param targetPath - File to write.
  * @param value - The whole config object.
+ * @param mode - Permissions for credential-bearing settings.
  */
-export async function writeJsonValidated(targetPath: string, value: UnknownRecord): Promise<void> {
+export async function writeJsonValidated(targetPath: string, value: UnknownRecord, mode?: number): Promise<void> {
   const serialized = `${JSON.stringify(value, null, 2)}\n`;
 
   JSON.parse(serialized);
-  await writeFileAtomic(targetPath, serialized);
+  await writeFileAtomic(targetPath, serialized, mode);
 }
 
 /**

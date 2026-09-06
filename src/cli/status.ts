@@ -25,6 +25,10 @@ export async function runStatus(env: Env): Promise<number> {
   const context = await buildCliContext(env);
 
   println(bold('AgentWatch Edge'));
+  println(context.disabled ? 'DISABLED — restart running agents to stop native exporters.' : 'enabled');
+  println(`Content capture consent: ${context.config.contentCaptureConsent ? 'granted (global)' : 'absent — metadata only'}`);
+  println(`Effective global capture: ${JSON.stringify(context.config.capture)}`);
+  println('Native provider exporters may require broader consent than hook summaries; see doctor and docs/DATA_HANDLING.md.');
   println();
 
   reportBackend(context);
@@ -129,7 +133,7 @@ async function reportAgent(provider: AgentProvider, context: CliContext): Promis
   println(`${symbols.ok} detected ${dim(`(${detection.evidence[0] ?? ''})`)}`);
   println(detection.hooksInstalled ? `${symbols.ok} hooks installed` : `${symbols.off} hooks not installed`);
 
-  if (!provider.nativeTelemetry) return;
+  if (!provider.nativeTelemetry || context.disabled) return;
 
   const setupContext: SetupContext = {
     env: context.env,

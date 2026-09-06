@@ -14,7 +14,7 @@ describe('config load fallback', () => {
   });
   afterEach(() => world.cleanup());
 
-  it('defaults to the two-record product contract', () => {
+  it('defaults to mandatory usage and turn-summary emission', () => {
     const config = defaultConfig();
 
     expect(config.emit.turnSummaries).toBe(true);
@@ -42,7 +42,7 @@ describe('config load fallback', () => {
     const result = await loadConfig(paths);
 
     expect(result.state).toBe('ok');
-    expect(result.config.capture.prompts).toBe(true);
+    expect(result.config.capture.prompts).toBe(false);
   });
 
   it('migrates legacy emit.llmCalls=false without invalidating the rest of the config', async () => {

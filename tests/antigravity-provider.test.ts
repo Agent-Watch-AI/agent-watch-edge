@@ -331,6 +331,8 @@ describe('Antigravity provider', () => {
       // Unroutable endpoint: the direct send fails and the event lands in the
       // queue exactly as it would have been posted.
       config.endpoint = 'http://127.0.0.1:1';
+      config.contentCaptureConsent = true;
+      config.capture = { ...config.capture, ...CONTENT_CAPTURE_ON };
       config.token = 'test-token';
       config.installationId = 'inst-1';
       config.delivery.timeoutMs = 200;
@@ -376,6 +378,8 @@ describe('Antigravity provider', () => {
       const config = contentConfig();
 
       config.endpoint = 'http://127.0.0.1:1';
+      config.contentCaptureConsent = true;
+      config.capture = { ...config.capture, ...CONTENT_CAPTURE_ON };
       config.delivery.timeoutMs = 200;
       await writeJson(paths.configFile, config);
 

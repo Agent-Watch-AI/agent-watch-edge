@@ -134,3 +134,17 @@ export function enforcementUrl(config: AgentWatchConfig): string | undefined {
 export function joinUrl(base: string, suffix: string): string {
   return base.replace(RE_TRAILING_SLASHES, '') + suffix;
 }
+
+/**
+ * Whether the machine has consented to tool arguments and results leaving it.
+ *
+ * Native provider logs carry both with no per-field filter, so this one answer
+ * decides whether a Codex or Gemini exporter may be configured at all — and
+ * `doctor` needs the same answer to explain why one was not.
+ *
+ * @param config - Effective configuration.
+ * @returns True when global consent and both tool flags are on.
+ */
+export function toolContentConsented(config: AgentWatchConfig): boolean {
+  return config.contentCaptureConsent && config.capture.toolInput && config.capture.toolOutput;
+}

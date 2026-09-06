@@ -6,3 +6,4 @@ export type { SecretPattern } from './types/privacy.types.js';
 
 export { REDACTED, SECRET_PATTERNS, SENSITIVE_KEY_PATTERN } from './constants/privacy.constants.js';
 export { sanitizeText, sanitizeValue } from './sanitizer.js';
+export { applyProductCapture } from './product-capture.js';

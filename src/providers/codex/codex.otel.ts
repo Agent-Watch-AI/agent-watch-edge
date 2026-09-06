@@ -2,8 +2,8 @@ import fs from 'node:fs/promises';
 import { parse as parseToml } from 'smol-toml';
 import { asRecord } from '../../core/object.js';
 import type { Env, UnknownRecord } from '../../core/types/core.types.js';
-import { joinUrl, otlpBaseUrl } from '../../config/config.js';
-import type { AgentWatchConfig, OtelConfig } from '../../config/types/config.types.js';
+import { joinUrl, otlpBaseUrl, toolContentConsented } from '../../config/config.js';
+import type { AgentWatchConfig, OtelConfig, OtelSignalName } from '../../config/types/config.types.js';
 import { backupFile, writeFileAtomic } from '../../storage/atomic-file.js';
 import { SECRET_FILE_MODE } from '../../storage/constants/storage.constants.js';
 import { withOtelInstall, withoutOtelInstall } from '../shared/install-record.js';
@@ -19,6 +19,7 @@ import {
   RE_LEADING_NEWLINE,
   RE_TOML_BACKSLASH,
   RE_TOML_QUOTE,
+  RE_TOML_TABLE_HEADER,
   RE_TRAILING_NEWLINES,
   TRACES_PATH
 } from './constants/codex.otel.constants.js';
@@ -59,7 +60,11 @@ export class CodexOtelConfigurator implements NativeTelemetryConfigurator {
 
     const hasBlock = raw.includes(BLOCK_START);
 
-    if (disabled) return inspectDisabled(hasBlock);
+    if (disabled) {
+      const detail = context.config.otel.logs || context.config.otel.traces ? 'disabled by content consent' : 'disabled in config (otel)';
+
+      return inspectDisabled(hasBlock, detail);
+    }
 
     if (hasBlock) return inspectManagedBlock(raw, context.config);
 
@@ -122,8 +127,10 @@ export class CodexOtelConfigurator implements NativeTelemetryConfigurator {
   /**
    * Remove the managed block from Codex's config.toml.
    *
-   * Only the marker-delimited region goes; everything the developer wrote
-   * around it — comments included — is preserved byte for byte.
+   * Only our own `[otel]` table goes. Everything the developer wrote around the
+   * markers — comments included — is preserved byte for byte, and so is
+   * anything the agent wrote *inside* them: Codex parks its `[hooks.state]`
+   * trust hashes there when it re-serializes the file.
    *
    * @param context - Environment, paths and install state.
    * @returns Whether the file changed, what to tell the user, and the next
@@ -141,6 +148,13 @@ export class CodexOtelConfigurator implements NativeTelemetryConfigurator {
 
     if (typeof next !== 'string') return { ok: false, changed: false, messages: [next.error(configPath)] };
 
+    // Removal now lifts the agent's own tables back out of the span, so it can
+    // reorder the file. A config that parsed before must still parse after; one
+    // that never parsed is not ours to refuse over.
+    if (tryParseToml(raw) !== undefined && tryParseToml(next) === undefined) {
+      return { ok: false, changed: false, messages: [`removing the AgentWatch block from ${configPath} would leave it unparseable; nothing written`] };
+    }
+
     await backupFile(configPath, context.paths.backupsDir, context.env.now());
     await writeFileAtomic(configPath, next);
 
@@ -150,6 +164,22 @@ export class CodexOtelConfigurator implements NativeTelemetryConfigurator {
       messages: ['native OpenTelemetry configuration removed'],
       installState: withoutOtelInstall(context.installState, CODEX_PROVIDER_ID)
     };
+  }
+
+  /**
+   * Signals Codex was asked for but will not be given under current consent.
+   *
+   * Codex's usage logs and traces both carry tool arguments and results with no
+   * per-field filter, so the two of them stand or fall together on
+   * `toolContentConsented`.
+   *
+   * @param config - Effective configuration.
+   * @returns The requested signals that are held back; empty when none are.
+   */
+  withheldSignals(config: AgentWatchConfig): readonly OtelSignalName[] {
+    if (codexOtelEnabled(config)) return [];
+
+    return CODEX_OTEL_SIGNALS.filter((name) => config.otel[name]);
   }
 
   /**
@@ -168,8 +198,8 @@ export class CodexOtelConfigurator implements NativeTelemetryConfigurator {
       changed: removed.changed,
       messages: [
         removed.changed
-          ? 'native OpenTelemetry disabled in config; previous configuration removed'
-          : 'native OpenTelemetry disabled in config (otel: none)'
+          ? 'native OpenTelemetry disabled by config or content consent; previous configuration removed'
+          : 'native OpenTelemetry disabled by config or content consent'
       ],
       installState: removed.installState
     };
@@ -190,6 +220,8 @@ interface BlockFailure {
  * @returns True when logs or traces are on.
  */
 function codexOtelEnabled(config: AgentWatchConfig): boolean {
+  if (!toolContentConsented(config)) return false;
+
   return config.otel.logs || config.otel.traces;
 }
 
@@ -207,15 +239,16 @@ function codexSignalNames(signals: OtelConfig): string[] {
  * Status when Codex telemetry is deliberately off.
  *
  * @param hasBlock - Whether our managed block is still in the file.
+ * @param detail - Why native telemetry should be absent.
  * @returns Configured, unless our leftovers are still there.
  */
-function inspectDisabled(hasBlock: boolean): NativeTelemetryStatus {
-  if (!hasBlock) return { supported: true, configured: true, detail: 'disabled in config (otel)' };
+function inspectDisabled(hasBlock: boolean, detail: string): NativeTelemetryStatus {
+  if (!hasBlock) return { supported: true, configured: true, detail };
 
   return {
     supported: true,
     configured: false,
-    detail: 'disabled in config, but the AgentWatch [otel] block remains — run `agentwatch setup`'
+    detail: `${detail}, but the AgentWatch [otel] block remains — run \`agentwatch setup\``
   };
 }
 
@@ -256,6 +289,7 @@ function renderBlock(otlpBase: string, token: string | undefined, signals: OtelC
   return [
     BLOCK_START,
     `[${OTEL_TABLE_KEY}]`,
+    'log_user_prompt = false',
     signals.logs
       ? `exporter = { otlp-http = { endpoint = "${escapeTomlString(joinUrl(otlpBase, LOGS_PATH))}", protocol = "json"${headers} } }`
       : 'exporter = "none"',
@@ -272,21 +306,39 @@ function renderBlock(otlpBase: string, token: string | undefined, signals: OtelC
 /**
  * Replace, or remove, the marker-delimited block.
  *
+ * Only our own `[otel]` table goes. Codex re-serializes config.toml as it runs
+ * and writes its own tables — the `[hooks.state]` trust hashes among them —
+ * after `[otel]` but before our end marker, which puts them inside the span.
+ * Deleting the span whole took those with it, so every `off`/`on` cost the
+ * developer another `codex` → `/hooks` → trust round.
+ *
  * @param raw - The whole config.toml.
  * @param block - The new block, or undefined to remove it.
  * @returns The next contents, or a failure when the markers are malformed.
  */
 function replaceBlock(raw: string, block: string | undefined): string | BlockFailure {
-  const bounds = blockBounds(raw);
+  const span = managedSpan(raw);
 
-  if (!bounds) return malformedMarkers;
+  if (!span) return malformedMarkers;
 
-  const head = raw.slice(0, bounds.start);
-  const tail = raw.slice(bounds.end).replace(RE_LEADING_NEWLINE, '');
+  const head = raw.slice(0, span.start);
+  const tail = raw.slice(span.end).replace(RE_LEADING_NEWLINE, '');
+  const kept = block === undefined ? head.replace(RE_TRAILING_NEWLINES, '\n') : head + block;
 
-  if (block === undefined) return head.replace(RE_TRAILING_NEWLINES, '\n') + tail;
+  return withForeign(kept, span.foreign) + tail;
+}
 
-  return head + block + tail;
+/**
+ * Put back the TOML the agent wrote inside our markers.
+ *
+ * @param base - Everything up to and including our block, when it stays.
+ * @param foreign - The lifted tables, without surrounding blank lines.
+ * @returns The two, separated by a blank line.
+ */
+function withForeign(base: string, foreign: string): string {
+  if (foreign === '') return base;
+
+  return base === '' ? `${foreign}\n` : `${base}\n${foreign}\n`;
 }
 
 /**
@@ -324,18 +376,53 @@ function blockBounds(raw: string): { start: number; end: number } | undefined {
   return { start, end: endMarker + BLOCK_END.length };
 }
 
+/** The marker span, split into the block we wrote and the tables Codex added after it. */
+interface ManagedSpan {
+  readonly start: number;
+  readonly end: number;
+  /** Markers included, so it compares against `renderBlock` directly. */
+  readonly managed: string;
+  /** Foreign tables found inside the markers, trimmed of blank lines. */
+  readonly foreign: string;
+}
+
 /**
- * The managed block as it currently stands in the file.
+ * Split the marker span at the first table header that is not ours.
+ *
+ * Everything from our `[otel]` header to the next `[table]` is the block; the
+ * rest of the span belongs to whoever wrote it and has to survive.
+ *
+ * @param raw - The whole config.toml.
+ * @returns The split span, or undefined when the markers are broken.
+ */
+function managedSpan(raw: string): ManagedSpan | undefined {
+  const bounds = blockBounds(raw);
+
+  if (!bounds) return undefined;
+
+  const span = raw.slice(bounds.start, bounds.end);
+  const inner = span.slice(BLOCK_START.length, span.length - BLOCK_END.length);
+  const lines = inner.split('\n');
+  const ours = lines.findIndex((line) => line.trimStart().startsWith(`[${OTEL_TABLE_KEY}]`));
+  const next = lines.findIndex((line, index) => index > ours && RE_TOML_TABLE_HEADER.test(line));
+
+  if (ours === -1 || next === -1) return { ...bounds, managed: span, foreign: '' };
+
+  return {
+    ...bounds,
+    managed: BLOCK_START + lines.slice(0, next).join('\n') + BLOCK_END,
+    foreign: lines.slice(next).join('\n').trim()
+  };
+}
+
+/**
+ * The managed block as it currently stands in the file, foreign tables excluded.
  *
  * @param raw - The whole config.toml.
  * @returns The block text, or undefined when the markers are broken.
  */
 function extractBlock(raw: string): string | undefined {
-  const bounds = blockBounds(raw);
-
-  if (!bounds) return undefined;
-
-  return raw.slice(bounds.start, bounds.end).trim();
+  return managedSpan(raw)?.managed.trim();
 }
 
 /**

@@ -19,6 +19,21 @@ import {
 } from './constants/claude.otel.constants.js';
 
 /**
+ * Claude's own content-logging switches, forced off.
+ *
+ * Never treated as a foreign key: a user who set `OTEL_LOG_USER_PROMPTS=1`
+ * before installing is exactly the case this exists to override, and refusing
+ * to configure them would leave prompt logging on *and* drop the llm.call
+ * ledger. Overriding a switch that only ever reduces what leaves the machine
+ * is not the redirection the conflict check protects against.
+ */
+const CONTENT_LOG_OFF: Record<string, string> = {
+  OTEL_LOG_USER_PROMPTS: '0',
+  OTEL_LOG_TOOL_DETAILS: '0',
+  OTEL_LOG_TOOL_CONTENT: '0'
+};
+
+/**
  * The telemetry environment AgentWatch wants in Claude Code's settings.
  *
  * Claude Code's native OpenTelemetry (verified against
@@ -41,6 +56,7 @@ export function desiredClaudeOtelEnv(context: SetupContext): Record<string, stri
 
   return {
     CLAUDE_CODE_ENABLE_TELEMETRY: '1',
+    ...CONTENT_LOG_OFF,
     OTEL_METRICS_EXPORTER: signals.metrics ? OTEL_EXPORTER_OTLP : OTEL_EXPORTER_NONE,
     OTEL_LOGS_EXPORTER: signals.logs ? OTEL_EXPORTER_OTLP : OTEL_EXPORTER_NONE,
     OTEL_TRACES_EXPORTER: signals.traces ? OTEL_EXPORTER_OTLP : OTEL_EXPORTER_NONE,
@@ -324,7 +340,7 @@ function inspectDisabled(settings: UnknownRecord, envBlock: UnknownRecord, owned
  * @returns The conflicting key names.
  */
 function foreignKeys(envBlock: UnknownRecord, desired: Record<string, string>, ownedKeys: readonly string[]): string[] {
-  const owned = new Set(ownedKeys);
+  const owned = new Set([...ownedKeys, ...Object.keys(CONTENT_LOG_OFF)]);
 
   return Object.keys(desired).filter((key) => envBlock[key] !== undefined && envBlock[key] !== desired[key] && !owned.has(key));
 }

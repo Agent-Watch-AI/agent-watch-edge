@@ -44,6 +44,7 @@ export async function runConfig(env: Env): Promise<number> {
   const context = await buildCliContext(env);
 
   println(dim(`# global: ${context.paths.configFile} (${context.configState})`));
+  println(`# AgentWatch ${context.disabled ? 'DISABLED' : 'enabled'}`);
 
   const effective = await loadEffectiveConfig(context.paths, env.cwd);
 
@@ -68,7 +69,7 @@ export async function runConfig(env: Env): Promise<number> {
  */
 export async function runOtelHeaders(env: Env): Promise<number> {
   const context = await buildCliContext(env);
-  const headers = context.config.token ? { Authorization: `Bearer ${context.config.token}` } : {};
+  const headers = !context.disabled && context.config.token ? { Authorization: `Bearer ${context.config.token}` } : {};
 
   process.stdout.write(JSON.stringify(headers));
 

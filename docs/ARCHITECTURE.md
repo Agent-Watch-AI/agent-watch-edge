@@ -84,15 +84,18 @@ tests/                       # vitest; fixtures/ with realistic provider payload
 
 ## 4. Public product schema (v1)
 
-Exactly two public discriminators exist:
+Exactly three public discriminators exist:
 
 - `llm.call`: one physical provider request/completion with stable call id, model, usage, cost,
   session/turn/agent links, and joined Git/feature attribution.
 - `turn.summary`: one prompt→final-response aggregate with `llm_calls`, final totals,
   `agent_usage[]`, and `usage_status`.
+- `repo.snapshot`: bounded branch and commit metadata emitted when a repository
+  changes and Git capture is enabled.
 
 All canonical lifecycle types below are internal. The queue and transport accept only the
-`ProductEvent = LlmCallEvent | TurnSummaryEvent` union.
+`ProductEvent = LlmCallEvent | TurnSummaryEvent | RepoSnapshotEvent` union, and re-apply the
+current capture policy to every record on the way out — a queued record may predate a revoked flag.
 
 As specified in the product brief, with these refinements:
 
@@ -199,8 +202,9 @@ total and degrades only to an agent-type or `unattributed` group. Calls are idem
    future `RemoteEnrollmentProvider` (`agentwatch setup <enrollment-url>`) slots in without
    changing setup.
 4. Per detected agent: install hooks (merge, idempotent, backup + atomic write + post-write
-   validation) and configure mandatory native OTel. A conflict or incomplete exporter makes
-   setup fail instead of silently creating an accounting gap.
+   validation) and configure native OTel where the requested signals are safe under explicit
+   global content consent. Codex and Gemini usage logs remain off in metadata-only mode because
+   current provider logs can contain tool arguments/results.
 5. Print summary + any manual steps (e.g. Codex hook approval, restarting agents).
 
 ## 10. Risks & unknowns

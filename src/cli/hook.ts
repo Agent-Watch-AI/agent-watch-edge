@@ -5,6 +5,7 @@ import { runHookPipeline } from '../pipeline/hook-pipeline.js';
 import type { HookPipelineState } from '../pipeline/types/pipeline.types.js';
 import { getProvider } from '../providers/registry.js';
 import type { AgentProvider, ProviderHookResponse } from '../providers/types/provider.types.js';
+import { isDisabled } from '../storage/disabled.js';
 import { resolvePaths } from '../storage/paths.js';
 import { MAX_STDIN_BYTES, STDIN_TIMEOUT_MS } from './constants/cli.constants.js';
 import type { HookRunOptions } from './types/cli.types.js';
@@ -37,9 +38,27 @@ export async function runHook(agentId: string, options: HookRunOptions): Promise
     return 0;
   }
 
+  const disabled = await isDisabled(resolvePaths(options.env));
   const payload = await readPayload(options);
 
   try {
+    // Disabled: answer the agent and do nothing else. The payload is read but
+    // never parsed, enriched, queued or sent — it is read because the answer
+    // depends on which hook fired. Antigravity's Stop wants `stop`, its PreToolUse
+    // wants `allow`, and its post-tool hooks want silence; the payload-less
+    // fallback would send `allow` to all three.
+    //
+    // Inside the try with everything else: a provider that throws here would
+    // exit 0 through cli.ts having written nothing, and an Antigravity hook
+    // reads that empty stdout as no decision at all.
+    if (disabled) {
+      const idle = provider.getHookResponse(payload);
+
+      if (idle.stdout) writeStdout(options, idle.stdout);
+
+      return idle.exitCode;
+    }
+
     const result = payload === undefined ? undefined : await processPayload(provider, payload, options);
     const response = respondToDecision(provider, payload, result);
 
@@ -47,8 +66,33 @@ export async function runHook(agentId: string, options: HookRunOptions): Promise
 
     return response.exitCode;
   } catch (error) {
-    // Telemetry must never break the coding agent.
+    // Telemetry must never break the coding agent — but exit 0 alone is not an
+    // answer. Antigravity's PreToolUse and Stop hooks read stdout for the
+    // decision, and silence is not the passive one; try the provider's safe
+    // response before giving up on saying anything at all.
     debugLog('hook processing failed:', error);
+
+    return answerSafely(provider, payload, options);
+  }
+}
+
+/**
+ * Last-resort answer after something in the flow threw.
+ *
+ * @param provider - The agent's provider.
+ * @param payload - Decoded hook payload.
+ * @param options - Environment and the stdout sink.
+ * @returns The provider's passive exit code, or 0 when even that cannot be built.
+ */
+function answerSafely(provider: AgentProvider, payload: unknown, options: HookRunOptions): number {
+  try {
+    const response = provider.getHookResponse(payload);
+
+    if (response.stdout) writeStdout(options, response.stdout);
+
+    return response.exitCode;
+  } catch (error) {
+    debugLog('hook fallback response failed:', error);
 
     return 0;
   }

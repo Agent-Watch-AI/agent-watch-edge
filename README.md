@@ -76,6 +76,8 @@ agentwatch hook --agent claude                            # Process stdin payloa
 agentwatch hook --agent codex --dry-run                   # Test hook output without sending
 
 # Telemetry & Teardown
+agentwatch off                                           # Stop hooks; remove managed native exporters
+agentwatch on                                            # Restore operation (restart running agents)
 agentwatch otel-headers                                   # Output formatted OTel headers
 agentwatch uninstall                                      # Remove hooks and restore backups
 agentwatch uninstall --purge                              # Also delete ~/.agentwatch and queues
@@ -108,10 +110,13 @@ agentwatch uninstall --purge                              # Also delete ~/.agent
 ### Content capture
 
 Content capture is **off by default**. Prompts, agent responses, tool inputs and tool outputs stay
-on the machine unless you turn them on in `~/.agentwatch/config.json`:
+on the machine unless you turn them on in `~/.agentwatch/config.json` — which takes two things: the
+global `contentCaptureConsent` marker *and* the individual flag. The marker on its own enables
+nothing, and a flag on its own collects nothing.
 
 ```json
 {
+  "contentCaptureConsent": true,
   "capture": {
     "prompts": false,
     "responses": false,
@@ -128,11 +133,34 @@ branch and SHA, and the *path* of a file the agent touched. That is what feature
 attribution is built from. A prompt is still recorded as a length and a SHA-256 either way — never
 the text — so turn counts and cost attribution work with capture fully off.
 
-*Upgrading?* The default applies to configs that do not say otherwise. A machine installed on an
-earlier release has all six flags written into `~/.agentwatch/config.json`, and `agentwatch setup`
-keeps an existing config's capture settings — so set the four content flags to `false` yourself, or
-delete the file and re-run setup. `agentwatch doctor` reports the effective posture for the
+*Upgrading?* An existing config is **not** trusted to keep capturing. A machine installed on an
+earlier release has all six flags written into `~/.agentwatch/config.json`, but without
+`contentCaptureConsent` those four content flags read as `false` — an upgrade that replaces the CLI
+cannot silently carry an old decision forward. Your flags are kept as written, by loading and by
+`agentwatch setup` alike, so adding the marker later turns them back on rather than starting over;
+setup says which ones are set but inert. `agentwatch doctor` reports the effective posture for the
 directory you are in.
+
+*Native exporters are separate.* Codex and Gemini usage logs can carry tool arguments and results
+with no per-field filter, so setup configures them only when consent covers both `toolInput` and
+`toolOutput` — which can leave `llm.call` usage unavailable for those two in metadata-only mode.
+Claude's own content-logging switches are forced off either way. None of this takes effect in an
+agent that is already running: rerun `agentwatch setup` after upgrading, then restart your agents.
+
+### Fleet deployment
+
+[`examples/mdm/`](https://github.com/agent-watch-ai/agent-watch-edge/tree/main/examples/mdm) has a Jamf/Kandji script, an Intune
+script, and a Claude Code `managed-settings.json` policy file — plus a straight
+per-agent answer about what an administrator can and cannot lock, which for
+every agent but Claude Code is currently "the developer can remove the hooks".
+
+### Stopping collection without uninstalling
+
+`agentwatch off` stops hooks, withholds the OTLP bearer token, and removes the native exporters
+AgentWatch installed — keeping your config, queued events and everything else in place.
+`agentwatch on` puts them back. Restart running agents either way: an already-started agent holds
+its exporters and headers in memory. See [docs/DATA_HANDLING.md](docs/DATA_HANDLING.md) for what
+the off switch does and does not reach.
 
 * **Repository overrides**: Place a `.agentwatch.json` in any repository root to turn capture
   **down** for that repository:
@@ -165,8 +193,13 @@ the turn before the agent's first LLM call: the prompt is refused in the agent's
 
 The check **fails open, always**. A turn stops only on an explicit `{"decision":"block","message":"…"}`
 from `GET <backend>/v1/enforcement/decision`; an unreachable backend, a timeout, any other status and
-any body the Edge cannot read all let the turn proceed silently. Decisions are cached locally for
-`cacheTtlMs`, so the check costs one bounded request per turn at most. Set `enabled: false` to opt out.
+any body the Edge cannot read all let the turn proceed silently. Set `enabled: false` to opt out.
+
+Decisions are cached locally for `cacheTtlMs`, so a flat cap costs at most one bounded request per
+turn. A *feature-scoped* cap costs one per gated prompt: the platform answers `cache_ttl_ms: 0`
+because a reuse key cannot tell one checkout from another, and the Edge honours that by not storing
+the answer. Either way the request is on the hook path, which means an outage un-enforces budgets
+rather than stopping anyone — see [docs/DATA_HANDLING.md](docs/DATA_HANDLING.md).
 
 Antigravity is not gated: its pre-invocation hook carries no decision field, so there is no
 prompt-level refusal to send. Its usage is still reported and still raises alerts.
@@ -177,9 +210,15 @@ To try it locally: `BLOCK=1 npm run example` answers every check with a refusal.
 
 ## Data Flow & Backend Integration
 
-1. **`turn.summary`**: Generated via agent hooks (`POST <backend>/v1/events`). Captures user prompt, tools executed, files touched, Git branch, and ticket keys.
+1. **`turn.summary`**: Generated via agent hooks (`POST <backend>/v1/events`). Includes prompt/response length and hash metadata, tool counts, file paths, Git branch, and ticket keys. Raw prompt and response text require explicit global consent and enabled capture flags.
 2. **`llm.call`**: Emitted via native OTLP (`POST <backend>/v1/otlp/v1/logs`). Contains token usage, cost, and latency per model request.
 3. The backend joins `llm.call` to `turn.summary` records using conversation/turn IDs.
+4. **`repo.snapshot`**: Reports changed branch/commit metadata, including commit subjects, when Git capture is enabled.
+
+Read the [data handling contract](docs/DATA_HANDLING.md) for the exact fields,
+privacy migration, local retention, native-exporter limitations, and off-switch
+behavior. See [enterprise deployment](docs/ENTERPRISE_DEPLOYMENT.md) for release
+artifacts and explicitly deferred enterprise features.
 
 ### Backend SDK Helpers
 

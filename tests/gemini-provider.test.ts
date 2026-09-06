@@ -8,7 +8,7 @@ import { parseGeminiHookEvent } from '../src/providers/gemini/gemini.adapter.js'
 import { resolvePaths } from '../src/storage/paths.js';
 import { defaultConfig } from '../src/config/config.js';
 import type { SetupContext } from '../src/providers/provider.js';
-import { makeTempEnv, readJson, writeJson, type TempWorld } from './helpers.js';
+import { CONTENT_CAPTURE_ON, makeTempEnv, readJson, writeJson, type TempWorld } from './helpers.js';
 
 const HOOK_CMD = 'agentwatch hook --agent gemini';
 
@@ -28,6 +28,8 @@ describe('Gemini provider', () => {
 
     config.endpoint = 'https://backend.example.com';
     config.installationId = 'inst-1';
+    config.contentCaptureConsent = true;
+    config.capture = { ...CONTENT_CAPTURE_ON, git: true, files: true };
 
     return {
       env: world.env,
@@ -193,6 +195,20 @@ describe('Gemini provider', () => {
       const settings = await readJson(geminiSettingsPath(world.env));
 
       expect(settings.otelHeadersHelper).toBe('/opt/other-tool headers');
+    });
+
+    it('overrides a user prompt-logging switch instead of refusing the whole install', async () => {
+      // The forced-off switch is ours to set. Treating a user's `true` as a
+      // foreign key made setup exit with their prompt logging still on and the
+      // llm.call ledger gone — the opposite of what forcing it off is for.
+      await writeJson(geminiSettingsPath(world.env), { env: { GEMINI_TELEMETRY_LOG_PROMPTS: 'true', UNRELATED: 'keep' } });
+      const outcome = await new GeminiOtelConfigurator().configure(setupContext());
+
+      expect(outcome.ok).toBe(true);
+      const settings = await readJson(geminiSettingsPath(world.env));
+
+      expect(settings.env.GEMINI_TELEMETRY_LOG_PROMPTS).toBe('false');
+      expect(settings.env.UNRELATED).toBe('keep');
     });
 
     it('uninstalls native OTel cleanly', async () => {

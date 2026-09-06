@@ -3,10 +3,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { eventsUrl, otlpBaseUrl } from '../config/config.js';
+import { enabledSignalNames, eventsUrl, otlpBaseUrl } from '../config/config.js';
 import { loadEffectiveConfig } from '../config/repo-config.js';
 import { CONTENT_CAPTURE_FLAGS } from '../config/constants/config.constants.js';
-import type { CaptureConfig } from '../config/types/config.types.js';
+import type { AgentWatchConfig, CaptureConfig, OtelConfig, OtelSignalName } from '../config/types/config.types.js';
 import type { Env } from '../core/types/core.types.js';
 import { meetsMinVersion, parseVersion } from '../core/version.js';
 import { findExecutable } from '../core/which.js';
@@ -14,6 +14,7 @@ import { developerIdentity } from '../git/git-context.js';
 import { providers } from '../providers/registry.js';
 import type { AgentProvider, SetupContext } from '../providers/types/provider.types.js';
 import { buildCliContext, buildHookCommand, buildQueue } from './context.js';
+import { installedHookChecks } from './hook-check.js';
 import {
   BACKEND_PROBE_TIMEOUT_MS,
   CLAUDE_MIN_VERSION_FOR_PROMPT_ID,
@@ -42,7 +43,11 @@ import { bold, dim, levelSymbol, println } from './ui.js';
  */
 export async function runDoctor(env: Env, options: DoctorOptions = {}): Promise<number> {
   const context = await buildCliContext(env);
+  const gated = await withheldNativeSignals(env, context.config);
   const checks: Check[] = [
+    { name: 'AgentWatch operation', level: context.disabled ? 'warn' : 'ok', detail: context.disabled ? 'DISABLED; restart running agents to stop native exporters' : 'enabled' },
+    { name: 'content capture consent', level: 'ok', detail: context.config.contentCaptureConsent ? 'granted globally' : 'absent — content disabled, including legacy capture flags' },
+    nativePrivacyCheck(gated),
     nodeVersionCheck(),
     configurationCheck(context),
     ...endpointChecks(context),
@@ -73,6 +78,54 @@ export async function runDoctor(env: Env, options: DoctorOptions = {}): Promise<
   println();
 
   return exitCode(checks);
+}
+
+/**
+ * Detected providers holding back signals, and which signals each one loses.
+ *
+ * Asks every configurator its own rule rather than keying on `otel.logs` and
+ * one global predicate: Codex drops logs *and* traces together on the two tool
+ * flags, Gemini drops traces without prompt/response consent even when its logs
+ * are allowed, and a provider with per-field switches — Claude — answers
+ * nothing. Keying on `otel.logs` alone reported "compatible" for both of the
+ * cases above while the exporters were in fact being withheld.
+ *
+ * @param env - User environment, for detection.
+ * @param config - Effective global configuration.
+ * @returns One `Name (signals)` entry per affected provider that is installed.
+ */
+async function withheldNativeSignals(env: Env, config: AgentWatchConfig): Promise<string[]> {
+  const gated = await Promise.all(
+    providers.map(async (provider) => {
+      const withheld = provider.nativeTelemetry?.withheldSignals?.(config) ?? [];
+
+      if (withheld.length === 0 || !(await provider.detect(env)).detected) return undefined;
+
+      return `${provider.displayName} (${withheld.join(', ')})`;
+    })
+  );
+
+  return gated.filter((entry): entry is string => entry !== undefined);
+}
+
+/**
+ * Explain why a detected provider's native signals cannot run in metadata-only mode.
+ *
+ * Named providers only: warning about Codex and Gemini on a Claude-only machine
+ * is a permanent warning nobody can act on, which is how a report stops being read.
+ *
+ * @param gated - Affected providers and the signals they lose.
+ * @returns A visible limitation or the explicit consent state.
+ */
+function nativePrivacyCheck(gated: readonly string[]): Check {
+  return {
+    name: 'native telemetry privacy',
+    level: gated.length > 0 ? 'warn' : 'ok',
+    detail:
+      gated.length > 0
+        ? `native signals withheld because provider telemetry can contain prompts and tool arguments/results: ${gated.join('; ')}; grant the matching global capture consent to enable them`
+        : 'requested native signals are compatible with current global content consent'
+  };
 }
 
 /**
@@ -148,6 +201,8 @@ async function developerIdentityCheck(env: Env, context: CliContext, options: Do
  * @returns The checks.
  */
 async function connectivityChecks(context: CliContext): Promise<Check[]> {
+  if (context.disabled) return [];
+
   const checks: Check[] = [];
   const url = eventsUrl(context.config);
 
@@ -205,6 +260,8 @@ async function agentChecks(env: Env, context: CliContext): Promise<Check[]> {
   for (const provider of providers) {
     const detection = await provider.detect(env);
 
+    checks.push(...(await installedHookChecks(detection.hookConfigPath, env)).map((check) => ({ ...check, name: `${provider.displayName} ${check.name}` })));
+
     if (!detection.detected) {
       checks.push({ name: provider.displayName, level: 'warn', detail: 'not detected' });
       continue;
@@ -218,7 +275,7 @@ async function agentChecks(env: Env, context: CliContext): Promise<Check[]> {
       detail: detection.hooksInstalled ? detection.hookConfigPath : 'not installed — run `agentwatch setup`'
     });
 
-    if (provider.nativeTelemetry) checks.push(await otelCheck(provider, env, context));
+    if (provider.nativeTelemetry && !context.disabled) checks.push(await otelCheck(provider, env, context));
   }
 
   return checks;
@@ -303,14 +360,35 @@ async function otelCheck(provider: AgentProvider, env: Env, context: CliContext)
     installState: context.installState
   };
   const status = await provider.nativeTelemetry!.inspect(setupContext);
+  const withheld = provider.nativeTelemetry!.withheldSignals?.(context.config) ?? [];
 
   return {
     name: `${provider.displayName} native OpenTelemetry`,
     level: status.configured ? 'ok' : 'fail',
     detail: status.configured
-      ? (status.detail ?? 'configured (llm.call ledger enabled)')
+      ? (status.detail ?? configuredDetail(context.config.otel, withheld))
       : (status.conflict ?? status.detail ?? 'not configured — llm.call records would be lost')
   };
+}
+
+/**
+ * What "configured" actually means for this agent right now.
+ *
+ * Gemini under partial consent is configured *and* exporting metrics only, so
+ * the flat "llm.call ledger enabled" line claimed a ledger that consent had
+ * already withheld. Name the signals instead of the intent.
+ *
+ * @param requested - The signals the machine asked for.
+ * @param withheld - The ones consent holds back.
+ * @returns The detail line.
+ */
+function configuredDetail(requested: OtelConfig, withheld: readonly OtelSignalName[]): string {
+  if (withheld.length === 0) return 'configured (llm.call ledger enabled)';
+
+  const live = enabledSignalNames(requested).filter((name) => !withheld.includes(name));
+  const exporting = live.length > 0 ? live.join(', ') : 'nothing';
+
+  return `configured for ${exporting}; ${withheld.join(', ')} withheld by content consent${withheld.includes('logs') ? ' — no llm.call ledger from this agent' : ''}`;
 }
 
 /**

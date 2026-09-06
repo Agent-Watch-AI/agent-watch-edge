@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { CONTENT_CAPTURE_KEYS } from '../constants/config.constants.js';
 import {
   DEFAULT_DRAIN_BATCH_SIZE,
   DEFAULT_ENFORCEMENT_CACHE_TTL_MS,
@@ -8,6 +9,21 @@ import {
   DEFAULT_MAX_QUEUE_EVENTS,
   DEFAULT_SEND_TIMEOUT_MS
 } from '../constants/config.constants.js';
+
+/**
+ * The four content flags, off.
+ *
+ * Keyed on `CONTENT_CAPTURE_KEYS` rather than spelled loose, so a fifth content
+ * flag added there fails to compile here instead of quietly escaping the gate.
+ * At module scope because it is a constant, not a per-parse allocation
+ * (STYLEGUIDE 3.1).
+ */
+const CONTENT_OFF: Readonly<Record<(typeof CONTENT_CAPTURE_KEYS)[number], false>> = {
+  prompts: false,
+  responses: false,
+  toolInput: false,
+  toolOutput: false
+};
 
 /**
  * Content is opt-IN; metadata stays on.
@@ -23,6 +39,11 @@ import {
  * Independent of all six: `contentEvidence()` still records a length and a
  * SHA-256 of prompts and responses (never the text), and the sanitizer scrubs
  * secrets from whatever does get sent.
+ *
+ * The four content flags are gated a second time by the global
+ * `contentCaptureConsent` marker below: a config carrying `prompts: true`
+ * without it collects nothing, which is what keeps an upgrade of an older
+ * install from silently continuing to ship content.
  */
 export const captureSchema = z
   .object({
@@ -112,10 +133,15 @@ export const configSchema = z
     installationId: z.string().optional(),
     /** Developer identity attached to turn summaries; falls back to `git config user.email`. */
     developerEmail: z.string().optional(),
+    contentCaptureConsent: z.boolean().default(false),
     capture: captureSchema.default({}),
     emit: emitSchema.default({}),
     otel: otelSchema.default({}),
     delivery: deliverySchema.default({}),
     enforcement: enforcementSchema.default({})
   })
-  .passthrough();
+  .passthrough()
+  .transform((config) => ({
+    ...config,
+    capture: config.contentCaptureConsent ? config.capture : { ...config.capture, ...CONTENT_OFF }
+  }));

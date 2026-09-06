@@ -1,4 +1,4 @@
-import type { AgentWatchConfig } from '../../config/types/config.types.js';
+import type { AgentWatchConfig, OtelSignalName } from '../../config/types/config.types.js';
 import type { Env } from '../../core/types/core.types.js';
 import type { AgentWatchEvent } from '../../events/types/events.types.js';
 import type { AgentWatchPaths, InstallState } from '../../storage/types/storage.types.js';
@@ -64,6 +64,17 @@ export interface NativeTelemetryConfigurator {
   inspect(context: SetupContext): Promise<NativeTelemetryStatus>;
   configure(context: SetupContext): Promise<SetupOutcome>;
   uninstall(context: SetupContext): Promise<SetupOutcome>;
+  /**
+   * Signals this machine asked for that the agent will not be given, because
+   * the content its logs carry has no consent.
+   *
+   * Doctor reports the gate, and the only truthful answer is the configurator's
+   * own rule: Codex takes logs and traces all-or-nothing on the two tool flags,
+   * Gemini additionally drops traces without prompt and response consent. An
+   * agent with no content gate — Claude, which has per-field switches — omits
+   * this and is never reported as held back.
+   */
+  withheldSignals?(config: AgentWatchConfig): readonly OtelSignalName[];
 }
 
 export interface AgentProvider {

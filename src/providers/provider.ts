@@ -134,7 +134,7 @@ function pathBase(value: string): string {
  * @param command - The command line.
  * @returns Its tokens, or undefined when the command is not one we emit.
  */
-function tokenizeHookCommand(command: string): string[] | undefined {
+export function tokenizeHookCommand(command: string): string[] | undefined {
   const tokens: string[] = [];
   let token = '';
   let started = false;

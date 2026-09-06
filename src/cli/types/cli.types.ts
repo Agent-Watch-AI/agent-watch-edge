@@ -12,6 +12,7 @@ export interface ParsedArgs {
 
 /** Everything a command needs, resolved once at its start. */
 export interface CliContext {
+  readonly disabled: boolean;
   readonly env: Env;
   readonly paths: AgentWatchPaths;
   readonly config: AgentWatchConfig;

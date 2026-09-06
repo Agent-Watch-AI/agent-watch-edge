@@ -1,7 +1,9 @@
 import { asRecord, omitKeys } from '../../core/object.js';
 import type { Env, UnknownRecord } from '../../core/types/core.types.js';
-import { enabledSignalNames, otelEnabled, otlpBaseUrl } from '../../config/config.js';
+import { enabledSignalNames, otlpBaseUrl, toolContentConsented } from '../../config/config.js';
+import type { AgentWatchConfig, OtelConfig, OtelSignalName } from '../../config/types/config.types.js';
 import { backupFile } from '../../storage/atomic-file.js';
+import { SECRET_FILE_MODE } from '../../storage/constants/storage.constants.js';
 import { readJsonFile } from '../../storage/json-file.js';
 import { HOOK_COMMAND_MARKER } from '../constants/provider.constants.js';
 import { writeJsonValidated } from '../shared/hook-config.js';
@@ -20,6 +22,19 @@ import {
   OTLP_HEADERS_KEY,
   STANDARD_OTLP_PROTOCOL
 } from './constants/gemini.otel.constants.js';
+
+/**
+ * Gemini's own prompt-logging switch, forced off.
+ *
+ * Never treated as a foreign key: a user who set it to `true` before installing
+ * is exactly the case this exists to override, and refusing to configure it
+ * would leave prompt logging on *and* drop the llm.call ledger. Overriding a
+ * switch that only ever reduces what leaves the machine is not the redirection
+ * the conflict check protects against. Mirrors `CONTENT_LOG_OFF` in claude.otel.
+ */
+const CONTENT_LOG_OFF: Record<string, string> = {
+  GEMINI_TELEMETRY_LOG_PROMPTS: 'false'
+};
 
 /**
  * The environment Gemini CLI actually reads.
@@ -42,13 +57,13 @@ import {
  */
 export function desiredGeminiOtelEnv(context: SetupContext): Record<string, string> | undefined {
   const otlpBase = otlpBaseUrl(context.config);
+  const signals = safeGeminiSignals(context.config);
 
-  if (!otlpBase || !otelEnabled(context.config)) return undefined;
-
-  const signals = context.config.otel;
+  if (!otlpBase || !anySignal(signals)) return undefined;
 
   return {
     GEMINI_TELEMETRY_ENABLED: 'true',
+    ...CONTENT_LOG_OFF,
     GEMINI_TELEMETRY_TARGET: GEMINI_TELEMETRY_TARGET_LOCAL,
     GEMINI_TELEMETRY_OTLP_ENDPOINT: otlpBase,
     GEMINI_TELEMETRY_OTLP_PROTOCOL: GEMINI_OTLP_PROTOCOL,
@@ -81,7 +96,7 @@ export class GeminiOtelConfigurator implements NativeTelemetryConfigurator {
    * @returns The status, naming any foreign configuration in the way.
    */
   async inspect(context: SetupContext): Promise<NativeTelemetryStatus> {
-    const disabled = !otelEnabled(context.config);
+    const disabled = !anySignal(safeGeminiSignals(context.config));
     const read = await readJsonFile(geminiSettingsPath(context.env));
     const settings = read.state === 'ok' ? asRecord(read.value) : undefined;
 
@@ -164,14 +179,14 @@ export class GeminiOtelConfigurator implements NativeTelemetryConfigurator {
 
     if (changed) {
       await backupFile(settingsPath, context.paths.backupsDir, context.env.now());
-      await writeJsonValidated(settingsPath, nextSettings);
+      await writeJsonValidated(settingsPath, nextSettings, SECRET_FILE_MODE);
     }
 
     return {
       ok: true,
       changed,
       messages: changed
-        ? [`native OpenTelemetry configured (signals: ${enabledSignalNames(context.config.otel).join(', ')})`, 'restart running Gemini CLI sessions to pick it up']
+        ? [`native OpenTelemetry configured (signals: ${enabledSignalNames(safeGeminiSignals(context.config)).join(', ')})`, 'restart running Gemini CLI sessions to pick it up']
         : ['native OpenTelemetry already up to date'],
       installState: withOtelInstall(context.installState, GEMINI_PROVIDER_ID, {
         configPath: settingsPath,
@@ -230,7 +245,7 @@ export class GeminiOtelConfigurator implements NativeTelemetryConfigurator {
    * @returns The outcome.
    */
   private async configureDisabled(context: SetupContext): Promise<SetupOutcome> {
-    if (otelEnabled(context.config)) return { ok: false, changed: false, messages: ['no backend endpoint configured'] };
+    if (anySignal(safeGeminiSignals(context.config))) return { ok: false, changed: false, messages: ['no backend endpoint configured'] };
 
     const removed = await this.uninstall(context);
 
@@ -241,12 +256,54 @@ export class GeminiOtelConfigurator implements NativeTelemetryConfigurator {
       changed: removed.changed,
       messages: [
         removed.changed
-          ? 'native OpenTelemetry disabled in config; previous configuration removed'
-          : 'native OpenTelemetry disabled in config (otel: none)'
+          ? 'native OpenTelemetry disabled by config or content consent; previous configuration removed'
+          : 'native OpenTelemetry disabled by config or content consent'
       ],
       installState: removed.installState
     };
   }
+
+  /**
+   * Signals Gemini was asked for but will not be given under current consent.
+   *
+   * Its usage logs always carry function arguments, and its detailed traces can
+   * carry prompts and tool results — two different consent bars, so the answer
+   * is per signal rather than all-or-nothing.
+   *
+   * @param config - Effective configuration.
+   * @returns The requested signals that are held back; empty when none are.
+   */
+  withheldSignals(config: AgentWatchConfig): readonly OtelSignalName[] {
+    const safe = safeGeminiSignals(config);
+
+    return enabledSignalNames(config.otel).filter((name) => !safe[name]);
+  }
+}
+
+/**
+ * Gemini logs always carry function arguments and detailed traces can carry
+ * prompts and tool results. Keep only signals whose content has global consent.
+ * @param config - Global, consent-gated configuration.
+ * @returns The signals safe to materialize in Gemini settings.
+ */
+function safeGeminiSignals(config: AgentWatchConfig): OtelConfig {
+  const toolContent = toolContentConsented(config);
+  const detailedContent = toolContent && config.capture.prompts && config.capture.responses;
+
+  return {
+    logs: config.otel.logs && toolContent,
+    traces: config.otel.traces && detailedContent,
+    metrics: config.otel.metrics
+  };
+}
+
+/**
+ * Whether Gemini has at least one safe signal to export.
+ * @param signals - Consent-filtered signal selection.
+ * @returns True when one signal remains.
+ */
+function anySignal(signals: OtelConfig): boolean {
+  return signals.logs || signals.traces || signals.metrics;
 }
 
 /**
@@ -271,7 +328,7 @@ function inspectDisabled(settings: UnknownRecord, envBlock: UnknownRecord, owned
   const leftover =
     ownedKeys.some((key) => (key === LEGACY_HELPER_KEY ? settings[key] !== undefined : envBlock[key] !== undefined)) || hasOurLegacyHelper(settings);
 
-  if (!leftover) return { supported: true, configured: true, detail: 'disabled in config (otel)' };
+  if (!leftover) return { supported: true, configured: true, detail: 'disabled by config or content consent' };
 
   return {
     supported: true,
@@ -289,7 +346,7 @@ function inspectDisabled(settings: UnknownRecord, envBlock: UnknownRecord, owned
  * @returns The conflicting key names.
  */
 function foreignKeys(envBlock: UnknownRecord, desired: Record<string, string>, ownedKeys: readonly string[]): string[] {
-  const owned = new Set(ownedKeys);
+  const owned = new Set([...ownedKeys, ...Object.keys(CONTENT_LOG_OFF)]);
 
   return Object.keys(desired).filter((key) => envBlock[key] !== undefined && envBlock[key] !== desired[key] && !owned.has(key));
 }

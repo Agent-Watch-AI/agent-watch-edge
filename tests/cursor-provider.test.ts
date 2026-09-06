@@ -473,6 +473,7 @@ describe('Cursor provider files', () => {
       await writeJson(paths.configFile, {
         ...defaultConfig(),
         developerEmail: 'dev@company.com',
+        contentCaptureConsent: true,
         capture: { ...defaultConfig().capture, prompts: true, responses: true }
       });
       // Today's Cursor transcript format: no usage anywhere.

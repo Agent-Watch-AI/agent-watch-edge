@@ -1,0 +1,62 @@
+name: Verify and prepare release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the verified package using the configured npm trusted publisher
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run release:artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-release
+          path: artifacts/
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-release
+          path: artifacts
+      - name: Verify and publish the tested tarball
+        working-directory: artifacts
+        # The checksums travel in the same artifact as the tarball, so this
+        # catches a corrupted transfer, not a tampered one. Publisher identity
+        # comes from npm trusted publishing and --provenance, not from here.
+        run: |
+          sha256sum --check SHA256SUMS
+          npm publish ./*.tgz --access public --provenance --ignore-scripts

@@ -8,6 +8,16 @@ export const AGENTWATCH_HOME_DIR_NAME = '.agentwatch';
 export const CONFIG_DIR_VAR = 'AGENTWATCH_CONFIG_DIR';
 export const DATA_DIR_VAR = 'AGENTWATCH_DATA_DIR';
 
+/**
+ * Enrollment token, for a setup nobody is watching.
+ *
+ * An MDM policy runs as root with no terminal and has to get the token in
+ * somehow; `--token` puts it on a command line, where `ps` and shell history
+ * can see it. This is the private channel for that one case — the flag still
+ * wins, so an interactive run is unaffected.
+ */
+export const TOKEN_VAR = 'AGENTWATCH_TOKEN';
+
 export const CONFIG_FILE_NAME = 'config.json';
 export const INSTALL_STATE_FILE_NAME = 'install-state.json';
 

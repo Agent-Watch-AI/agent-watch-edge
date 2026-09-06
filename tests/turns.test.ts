@@ -324,6 +324,7 @@ describe('turn tracking through the hook pipeline', () => {
     await writeJson(paths.configFile, {
       ...defaultConfig(),
       developerEmail: 'dev@company.com',
+      contentCaptureConsent: true,
       capture: { ...defaultConfig().capture, ...CONTENT_CAPTURE_ON },
       ...overrides
     });

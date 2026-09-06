@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { asRecord } from '../core/object.js';
+import { applyProductCapture } from '../privacy/product-capture.js';
 import { debugLog } from '../core/logger.js';
 import { next, runFlow, step, stop } from '../core/pipe.js';
 import type { FlowResult, Step, StepOutcome } from '../core/types/core.types.js';
@@ -213,7 +214,8 @@ async function trackTurnStage(state: HookPipelineState): Promise<StepOutcome<Hoo
   // no summary still has a backlog to move, so this stage degrades to "no
   // summary" instead of ending the flow.
   const summary = await trackTurnSafely(state);
-  const outbound = summary && state.config.emit.turnSummaries ? [summary] : [];
+  const gated = summary && state.config.emit.turnSummaries ? applyProductCapture(summary, state.config.capture) : undefined;
+  const outbound = gated ? [gated] : [];
 
   return next({ ...state, summary, outbound });
 }
@@ -342,6 +344,7 @@ function buildTransport(state: HookPipelineState): EventTransport | undefined {
 
   return new HttpTransport({
     eventsUrl: url,
+    capture: state.config.capture,
     token: state.config.token,
     installationId: state.config.installationId,
     timeoutMs: state.config.delivery.timeoutMs

@@ -2,6 +2,8 @@ import process from 'node:process';
 import readline from 'node:readline/promises';
 import { defaultConfig, enabledSignalNames, eventsUrl, parseOtelSignals } from '../config/config.js';
 import { ensureInstallationId, saveConfig } from '../config/config-store.js';
+import { CONTENT_CAPTURE_KEYS } from '../config/constants/config.constants.js';
+import { asRecord } from '../core/object.js';
 import type { AgentWatchConfig, OtelConfig } from '../config/types/config.types.js';
 import { collectGitContext, developerIdentity } from '../git/git-context.js';
 import { ManualEnrollmentProvider } from '../enrollment/manual-enrollment.js';
@@ -9,6 +11,8 @@ import type { EnrollmentResult } from '../enrollment/types/enrollment.types.js';
 import { providers } from '../providers/registry.js';
 import type { AgentProvider, DetectionResult, SetupContext, SetupOutcome } from '../providers/types/provider.types.js';
 import { saveInstallState } from '../storage/install-state.js';
+import { readJsonFile } from '../storage/json-file.js';
+import { TOKEN_VAR } from '../storage/constants/storage.constants.js';
 import type { InstallState } from '../storage/types/storage.types.js';
 import { buildCliContext, buildHookCommand, buildQueue } from './context.js';
 import { DEVELOPER_EMAIL_PROMPT, DEVELOPER_IDENTITY_REMEDIES, NO_CONFIG_WRITTEN, NO_DEVELOPER_IDENTITY } from './constants/cli.constants.js';
@@ -39,6 +43,12 @@ export async function runSetup(options: SetupOptions): Promise<number> {
 
   println(bold('AgentWatch Setup'));
   println();
+
+  if (context.disabled) {
+    println('AgentWatch is disabled. Run agentwatch on before setup; setup does not override the off switch.');
+
+    return 1;
+  }
 
   if (context.configState === 'invalid') {
     println(`${symbols.fail} existing config at ${context.paths.configFile} is invalid: ${context.configError}`);
@@ -95,6 +105,7 @@ export async function runSetup(options: SetupOptions): Promise<number> {
     emit: { ...baseConfig.emit, llmCalls: true }
   });
 
+  await reportContentDowngrade(context, config);
   await saveConfig(context.paths, config);
   await offerBacklogRetarget(context, baseConfig, config, ask);
 
@@ -110,6 +121,30 @@ export async function runSetup(options: SetupOptions): Promise<number> {
   println(dim('  run `agentwatch status` anytime, `agentwatch doctor` to diagnose'));
 
   return failures === 0 ? 0 : 1;
+}
+
+/**
+ * Name the content flags this machine has set but cannot use.
+ *
+ * The gate runs on load, so a file whose flags say `true` without the global
+ * marker is metadata-only in memory while still reading as opted-in on disk.
+ * The flags survive the write, so this is not a warning about losing them — it
+ * is the answer to "I set `prompts: true`, why is nothing arriving".
+ *
+ * @param context - Resolved paths and the gated config setup started from.
+ * @param config - The config about to be saved.
+ */
+async function reportContentDowngrade(context: CliContext, config: AgentWatchConfig): Promise<void> {
+  if (config.contentCaptureConsent) return;
+
+  const read = await readJsonFile(context.paths.configFile);
+  const stored = read.state === 'ok' ? asRecord(asRecord(read.value)?.['capture']) : undefined;
+  const inert = CONTENT_CAPTURE_KEYS.filter((key) => stored?.[key] === true && config.capture[key] === false);
+
+  if (inert.length === 0) return;
+
+  println(`${symbols.warn} content capture ${inert.join(', ')} is set but inert: global contentCaptureConsent is not true`);
+  println(dim('  the flags are kept as written; add contentCaptureConsent to ~/.agentwatch/config.json to make them take effect'));
 }
 
 /**
@@ -180,7 +215,15 @@ async function enroll(
     return await new ManualEnrollmentProvider().enroll({
       setupUrl: options.setupUrl,
       endpoint: options.endpoint ?? baseConfig.endpoint,
-      token: options.token ?? baseConfig.token,
+      // Flag, then environment, then what is already stored. An MDM policy runs
+      // with no terminal and has to get the token in somehow; `--token` puts it
+      // on a command line, where `ps` can read it for the life of the process.
+      //
+      // `||`, not `??`: an exported-but-empty variable is a variable nobody set,
+      // and enrollment treats a defined token as final — so `??` would write an
+      // empty token, skip the prompt, and leave an install that authenticates
+      // against nothing while reporting success.
+      token: options.token ?? (options.env.vars[TOKEN_VAR] || baseConfig.token),
       ask
     });
   } catch (error) {

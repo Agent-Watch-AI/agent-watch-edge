@@ -1,11 +1,13 @@
 import crypto from 'node:crypto';
+import { asRecord } from '../core/object.js';
 import { readJsonFile } from '../storage/json-file.js';
 import { writeFileAtomic } from '../storage/atomic-file.js';
 import { SECRET_FILE_MODE } from '../storage/constants/storage.constants.js';
 import type { AgentWatchPaths } from '../storage/types/storage.types.js';
+import { CONTENT_CAPTURE_KEYS } from './constants/config.constants.js';
 import { defaultConfig } from './config.js';
 import { configSchema } from './schemas/config.schema.js';
-import type { AgentWatchConfig, ConfigLoadResult } from './types/config.types.js';
+import type { AgentWatchConfig, CaptureConfig, ConfigLoadResult } from './types/config.types.js';
 
 export type { ConfigLoadResult } from './types/config.types.js';
 
@@ -41,8 +43,44 @@ export async function loadConfig(paths: AgentWatchPaths): Promise<ConfigLoadResu
  * @param config - Config to write.
  */
 export async function saveConfig(paths: AgentWatchPaths, config: AgentWatchConfig): Promise<void> {
+  // Write the flags the user chose, not the flags the consent gate computed.
+  // `loadConfig` re-applies the gate on every read, so persisting the gated
+  // shape would change nothing at runtime and would quietly erase the choice:
+  // a machine that later adds `contentCaptureConsent: true` would find every
+  // content flag already false and no record that it had ever set them.
+  const capture = { ...config.capture, ...(await storedCapture(paths)) };
+
   // 0600: the file may contain a backend token.
-  await writeFileAtomic(paths.configFile, JSON.stringify(config, null, 2) + '\n', SECRET_FILE_MODE);
+  await writeFileAtomic(paths.configFile, JSON.stringify({ ...config, capture }, null, 2) + '\n', SECRET_FILE_MODE);
+}
+
+/**
+ * The content flags as they are written on disk right now.
+ *
+ * Read raw rather than through the schema: the schema is where the gate lives,
+ * so a parsed value has already lost the distinction this exists to keep.
+ * Only the four content flags are carried over — a metadata flag the caller
+ * changed is a change the caller meant.
+ *
+ * @param paths - Resolved AgentWatch paths.
+ * @returns The stored content flags; empty when the file has none.
+ */
+async function storedCapture(paths: AgentWatchPaths): Promise<Partial<CaptureConfig>> {
+  const result = await readJsonFile(paths.configFile);
+
+  if (result.state !== 'ok') return {};
+
+  const capture = asRecord(asRecord(result.value)?.['capture']);
+
+  if (!capture) return {};
+
+  const out: Record<string, boolean> = {};
+
+  for (const key of CONTENT_CAPTURE_KEYS) {
+    if (typeof capture[key] === 'boolean') out[key] = capture[key];
+  }
+
+  return out as Partial<CaptureConfig>;
 }
 
 /**

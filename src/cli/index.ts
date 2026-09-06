@@ -10,5 +10,7 @@ export { runHook } from './hook.js';
 export { runSetup } from './setup.js';
 export { runStatus } from './status.js';
 export { runDoctor } from './doctor.js';
+export { runToggle } from './toggle.js';
+export { checkHookCommand, installedHookChecks } from './hook-check.js';
 export { runUninstall } from './uninstall.js';
 export { runAgents, runConfig, runOtelHeaders } from './misc.js';

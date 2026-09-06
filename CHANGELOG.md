@@ -8,8 +8,39 @@
   `capture.git` and `capture.files` stay `true` — they gate the repo remote/branch/SHA and the
   per-file *path*, which is what feature and project attribution is built from, not content.
   `prompt_evidence`/`response_evidence` (length + SHA-256, never the text) are unaffected, so turn
-  counts and cost attribution work with capture fully off. Existing configs are not migrated: a
-  machine that already has `prompts: true` written into `~/.agentwatch/config.json` keeps capturing.
+  counts and cost attribution work with capture fully off.
+- **Content capture also requires explicit consent.** A new global-only `contentCaptureConsent`
+  marker gates the four content flags: a config carrying `prompts: true` without it collects
+  nothing, so replacing the npm package cannot silently carry an older install's decision forward.
+  The gate is applied on every read and never written back, so a machine that adds the marker later
+  turns its existing flags back on instead of finding them erased; setup names the flags that are
+  set but inert. The gate lives in the config schema, so it also reaches records that
+  were queued before the policy changed — a summary loses text whose flag is off, and a
+  `repo.snapshot` is dropped whole once `capture.git` is off.
+- **Native exporters are gated separately.** Provider logs are not filterable per field, so Codex
+  and Gemini usage logs are configured only with consent for both tool flags, Gemini detailed
+  traces additionally require prompt and response capture, and Claude's own content-logging
+  switches are forced off. This can leave `llm.call` usage unavailable for Codex and Gemini in
+  metadata-only mode. Rerun `agentwatch setup` after upgrading and restart your agents: nothing
+  about replacing the CLI changes an exporter already live inside a running agent.
+  `~/.gemini/settings.json` is now written `0600` — it carries a static bearer token.
+- **`agentwatch off` / `agentwatch on`.** A local marker stops hooks before stdin, withholds the
+  OTLP authorization header, and removes managed native exporters through the same ownership and
+  backup machinery as uninstall — keeping config and queued data. Failures keep the marker, and a
+  repeated `off` re-runs the removal. Restart running agents to make it take effect.
+- `agentwatch doctor` now probes the hook command each provider actually has installed: it never
+  runs the stored shell string, only a verified CLI with a bounded `--version`, and it reports
+  consent, capture and off-switch state.
+- Release: `npm run release:artifacts` packs a verified tarball, a production-only CycloneDX SBOM
+  and `SHA256SUMS`. Publishing is an explicit `workflow_dispatch` on `main` through npm trusted
+  publishing with `--provenance`. New [docs/DATA_HANDLING.md](docs/DATA_HANDLING.md) states the
+  collection contract; [docs/ENTERPRISE_DEPLOYMENT.md](docs/ENTERPRISE_DEPLOYMENT.md) states what
+  is deliberately not built.
+- MDM deployment templates in `examples/mdm/`: a Jamf/Kandji script, an Intune script, and a
+  Claude Code `managed-settings.json` policy file, with a per-agent table of what an
+  administrator can and cannot lock. `agentwatch setup` now also reads the enrollment token
+  from `AGENTWATCH_TOKEN`, because a policy running as root has no private channel other than
+  the environment and `--token` is visible to `ps`. The flag still wins.
 - A committed `.agentwatch.json` can now only ever *narrow* capture. A repository file that sets a
   capture flag the machine has off is ignored and reported — `agentwatch config` and
   `agentwatch doctor` both print the refusal — so checking a repository out can never start

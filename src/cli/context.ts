@@ -4,6 +4,7 @@ import { eventsUrl } from '../config/config.js';
 import { loadConfig } from '../config/config-store.js';
 import type { Env } from '../core/types/core.types.js';
 import { findExecutable } from '../core/which.js';
+import { isDisabled } from '../storage/disabled.js';
 import { loadInstallState } from '../storage/install-state.js';
 import { resolvePaths } from '../storage/paths.js';
 import { DeliveryStats } from '../transport/delivery-stats.js';
@@ -31,6 +32,7 @@ export async function buildCliContext(env: Env): Promise<CliContext> {
 
   return {
     env,
+    disabled: await isDisabled(paths),
     paths,
     config: configResult.config,
     configState: configResult.state,
@@ -76,10 +78,11 @@ export function buildDeliveryStats(context: CliContext): DeliveryStats {
 export function buildTransport(context: CliContext, timeoutMs?: number): EventTransport | undefined {
   const url = eventsUrl(context.config);
 
-  if (!url) return undefined;
+  if (!url || context.disabled) return undefined;
 
   return new HttpTransport({
     eventsUrl: url,
+    capture: context.config.capture,
     token: context.config.token,
     installationId: context.config.installationId,
     timeoutMs: timeoutMs ?? context.config.delivery.timeoutMs

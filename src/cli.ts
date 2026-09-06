@@ -12,6 +12,8 @@ const HELP = `agentwatch — telemetry edge for AI coding agents
 Usage:
   agentwatch setup [enrollment-url] [--endpoint <url>] [--token <token>] [--developer-email <email>] [--otel <signals>] [--yes]
   agentwatch status
+  agentwatch off
+  agentwatch on
   agentwatch doctor [--json]
   agentwatch uninstall [--agent <id>] [--purge]
   agentwatch hook --agent <id> [--dry-run]     (invoked by agents; reads stdin)
@@ -21,7 +23,8 @@ Usage:
 
 Flags:
   --endpoint <url>          backend base URL events are sent to
-  --token <token>           bearer token for the backend
+  --token <token>           bearer token for the backend; $AGENTWATCH_TOKEN is the private
+                            channel for an MDM run, where argv is visible to ps
   --developer-email <email> identity attached to turn summaries and keyed on by per-developer
                             enforcement (default: git config user.email; setup fails when neither
                             names a developer)
@@ -62,6 +65,12 @@ async function main(): Promise<number> {
   const env = realEnv();
 
   switch (parsed.command) {
+    case 'off':
+    case 'on': {
+      const { runToggle } = await import('./cli/toggle.js');
+
+      return runToggle(env, parsed.command === 'on');
+    }
     case 'hook': {
       const { runHook } = await import('./cli/hook.js');
 

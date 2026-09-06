@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import type { ProductEvent } from '../../events/product-event.js';
+import type { CaptureConfig } from '../../config/types/config.types.js';
 import type { queueEntrySchema } from '../schemas/queue.schema.js';
 
 /** Per-event outcome counters the backend reports for an accepted batch. */
@@ -33,6 +34,7 @@ export interface EventTransport {
 }
 
 export interface HttpTransportOptions {
+  readonly capture?: CaptureConfig;
   readonly eventsUrl: string;
   readonly token?: string;
   readonly installationId?: string;

@@ -1,4 +1,5 @@
 import type { ProductEvent } from '../events/product-event.js';
+import { applyProductCapture } from '../privacy/product-capture.js';
 import {
   CONTENT_TYPE_HEADER,
   JSON_CONTENT_TYPE,
@@ -46,11 +47,17 @@ export class HttpTransport implements EventTransport {
   async send(events: readonly ProductEvent[]): Promise<DeliveryResult> {
     if (events.length === 0) return { ok: true, retryable: false };
 
+    // Current policy, not the policy the record was written under: a queued
+    // event may predate a revoked consent or capture flag.
+    const payload = events.map((event) => applyProductCapture(event, this.options.capture)).filter((event) => event !== undefined);
+
+    if (payload.length === 0) return { ok: true, retryable: false };
+
     try {
       const response = await this.fetchFn(this.options.eventsUrl, {
         method: 'POST',
         headers: this.headers(),
-        body: JSON.stringify({ events }),
+        body: JSON.stringify({ events: payload }),
         signal: AbortSignal.timeout(this.options.timeoutMs)
       });
 

@@ -34,8 +34,10 @@
   },
   "files": [
     "dist",
-    "example",
     "README.md",
+    "SECURITY.md",
+    "docs/DATA_HANDLING.md",
+    "docs/ENTERPRISE_DEPLOYMENT.md",
     "LICENSE",
     "CHANGELOG.md"
   ],
@@ -46,6 +48,7 @@
     "lint:fix": "eslint src tests --fix",
     "test": "vitest run",
     "test:watch": "vitest",
+    "release:artifacts": "node scripts/release-artifacts.mjs",
     "example": "node example/server.mjs",
     "prepack": "npm run build",
     "prepare": "npm run build"

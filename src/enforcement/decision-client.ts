@@ -1,6 +1,6 @@
 import { debugLog } from '../core/logger.js';
 import { edgeHeaders } from '../transport/headers.js';
-import { BRANCH_PARAM, DEVELOPER_ID_PARAM, REPOSITORY_PARAM } from './constants/enforcement.constants.js';
+import { BRANCH_PARAM, DEVELOPER_ID_PARAM, MODEL_PARAM, REPOSITORY_PARAM } from './constants/enforcement.constants.js';
 import { cacheTtlSchema, decisionSchema } from './schemas/enforcement.schema.js';
 import type { AnsweredDecision, DecisionRequest } from './types/enforcement.types.js';
 
@@ -61,6 +61,10 @@ function decisionUrl(request: DecisionRequest): string {
     url.searchParams.set(REPOSITORY_PARAM, request.checkout.repository);
     url.searchParams.set(BRANCH_PARAM, request.checkout.branch);
   }
+
+  // Only when there is one. A collector that never learned its model asks the
+  // question it asked before this parameter existed, byte for byte.
+  if (request.model) url.searchParams.set(MODEL_PARAM, request.model);
 
   return url.toString();
 }

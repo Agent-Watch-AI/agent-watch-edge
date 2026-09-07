@@ -189,7 +189,8 @@ Defaults derived from that endpoint are `POST /v1/events`, native OTLP base
 `GET /v1/enforcement/decision`. Global `eventsUrl`, `otlpUrl`, and
 `enforcementUrl` may override those routes. Authentication uses a bearer token
 when configured. Use HTTPS in deployments; the schema does not prohibit HTTP.
-Enforcement sends developer and checkout attribution, not prompt/tool bodies.
+Enforcement sends developer and checkout attribution, and the session's
+model when the agent named one, not prompt/tool bodies.
 Doctor can probe connectivity with an empty events batch. Status can drain the
 queue. Both stop network activity while disabled.
 
@@ -208,14 +209,31 @@ decision. Defaults are a 300 ms request timeout and 60-second local decision
 cache. Antigravity has no verified blocking response. This is not a local signed
 enforcement policy or tamper-resistant control.
 
+The request may also carry the model the session is on, so a budget can be set
+on one model. Codex, Cursor and Gemini name their model on every hook, and
+Antigravity on the first event of an execution, so for those the payload the
+gate already holds names it. Claude Code names it only when a session starts, so
+that one event writes it to `session.json` in that session's own `turns/`
+directory (mode 0600, beside that session's turn records) to be read back at the
+gate.
+That file lives as long as the session does: it is deleted with the session's
+state at SessionEnd, and by the 24-hour sweep for a session that crashed without
+one. The model is stated exactly as reported usage spells it, and it is part of
+the local decision cache key — an answer about one model is never reused for a
+prompt on another. A collector that never learned a model states none and is
+answered as it is today.
+
 **The gate makes a network request.** Before a turn starts, the pre-prompt hook
 reads a local decision cache and, on a miss, asks the platform — one bounded
-request, 300 ms ceiling, every failure allowing the turn. Two consequences are
-worth stating rather than leaving to be discovered. A platform outage does not
-stop developers; it un-enforces every budget for as long as it lasts, which at
-the default cache TTL means decisions go unmade for up to a minute past
-recovery. And the cache is not always a saving: an organization with a
-feature-scoped policy receives `cache_ttl_ms: 0` on every answer, because a
+request, 300 ms ceiling, every failure allowing the turn. Stating the model adds
+one read of a small local file to that, and nothing else: no subprocess, no
+second request, and a file that cannot be read means no model is stated rather
+than a gate that waits. Two consequences are worth stating rather than leaving
+to be discovered. A platform outage does not stop developers; it un-enforces
+every budget for as long as it lasts, which at the default cache TTL means
+decisions go unmade for up to a minute past recovery. And the cache is not
+always a saving: an organization with a feature-scoped policy receives
+`cache_ttl_ms: 0` on every answer, because a
 reuse key cannot distinguish one checkout from another, so those turns each pay
 a request. A gate that evaluates a locally held policy without a network call is
 planned; it requires the platform to send a policy rather than a verdict, and it

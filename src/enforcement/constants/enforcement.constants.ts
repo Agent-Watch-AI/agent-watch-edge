@@ -30,3 +30,6 @@ export const DEVELOPER_ID_PARAM = 'developer_id';
 /** And the checkout, which is what lets a cap on a feature be judged. */
 export const REPOSITORY_PARAM = 'repository';
 export const BRANCH_PARAM = 'branch';
+
+/** And the model, which is what lets a cap on one model be judged. */
+export const MODEL_PARAM = 'model';

@@ -78,7 +78,7 @@ async function decideThroughCache(
   developerId: string
 ): Promise<EnforcementDecision> {
   const cache = new DecisionCache(path.join(options.paths.dataDir, ENFORCEMENT_CACHE_FILE_NAME), options.now);
-  const key = decisionKey(url, token, developerId, options.checkout);
+  const key = decisionKey(url, token, developerId, options.checkout, options.model);
   const cached = await cache.read(key);
 
   if (cached) return cached;
@@ -88,6 +88,7 @@ async function decideThroughCache(
     token,
     developerId,
     checkout: options.checkout,
+    model: options.model,
     installationId: options.config.installationId,
     timeoutMs: options.config.enforcement.timeoutMs,
     fetchFn: options.fetchFn

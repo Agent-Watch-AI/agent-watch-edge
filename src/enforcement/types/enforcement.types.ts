@@ -43,6 +43,8 @@ export interface DecisionRequest {
   /** The same identity `turn.summary.developer_id` carries. */
   readonly developerId: string;
   readonly installationId?: string;
+  /** The model this session is on, when the collector learned one. */
+  readonly model?: string;
   readonly timeoutMs: number;
   /** Injected by tests; the real fetch otherwise. */
   readonly fetchFn?: typeof fetch;
@@ -67,6 +69,14 @@ export interface EnforcementOptions {
    * repository has a `main`, and the platform drops a half-stated pair anyway.
    */
   readonly checkout?: EnforcementCheckout;
+  /**
+   * The model the turn is about, when the collector knows it.
+   *
+   * Absent is a supported answer, not a degraded one: an agent that never names
+   * its model is judged on the developer and the checkout alone, exactly as
+   * every collector was before this field existed.
+   */
+  readonly model?: string;
   readonly now: () => Date;
   readonly fetchFn?: typeof fetch;
 }

@@ -119,13 +119,15 @@ export class DecisionCache {
  * @param checkout - Where the turn is happening, when the caller could say.
  * @param checkout.repository - Canonical remote of that checkout.
  * @param checkout.branch - Its checked-out branch.
+ * @param model - The model stated on the question, when one was stated.
  * @returns The key.
  */
 export function decisionKey(
   url: string,
   token: string,
   developerId: string,
-  checkout?: { repository: string; branch: string }
+  checkout?: { repository: string; branch: string },
+  model?: string
 ): string {
   // The checkout is part of the question, so it is part of the key. Left out, an
   // answer earned on one branch is served on another for as long as the entry
@@ -134,10 +136,15 @@ export function decisionKey(
   // A cache whose correctness depends on the server remembering to disable it is
   // not correct.
   const scope = checkout ? `${checkout.repository}|${checkout.branch}` : '';
+  // The same argument for the model: an answer is about one model, so a prompt on
+  // another must not be served it. Appended only when there is one, so a
+  // collector that states no model keeps the key it had before this field —
+  // including the entries an earlier version of it wrote.
+  const stated = model ? `|${model}` : '';
 
   return crypto
     .createHash('sha256')
-    .update(`${url}|${token}|${developerId}|${scope}`)
+    .update(`${url}|${token}|${developerId}|${scope}${stated}`)
     .digest('hex');
 }
 

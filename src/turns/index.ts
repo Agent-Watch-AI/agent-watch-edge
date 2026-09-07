@@ -11,7 +11,7 @@ export type {
   TurnSummaryEvent,
   TurnUsageStatus
 } from './types/turn-summary.types.js';
-export type { PromptRecord, ResponseRecord, ToolRecord, TurnRecord, TurnStateEntry } from './types/turn-state.types.js';
+export type { PromptRecord, ResponseRecord, SessionModelRecord, ToolRecord, TurnRecord, TurnStateEntry } from './types/turn-state.types.js';
 export type { ReadTurnUsageRetry, TranscriptReader, TranscriptUsageEntry, TurnUsage } from './types/transcript.types.js';
 export type { TrackTurnOptions, TurnWindow } from './types/turn-tracker.types.js';
 export type { AggregateTurnUsageOptions, UsageTotals } from './types/aggregate-usage.types.js';

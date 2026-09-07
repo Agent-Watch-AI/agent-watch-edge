@@ -110,6 +110,18 @@ async function processEvent(
     return closeTurnLocked(store, sessionId, event, options, true);
   }
 
+  // On the session's own hook and no other. Claude names its model only there,
+  // which is the whole reason the memo exists; the agents that name it on every
+  // hook also name it on that one, so once per session is all it ever takes.
+  //
+  // Narrow on purpose, twice over. It keeps a per-hook write off the agent's
+  // critical path for something no later hook can read — those agents carry the
+  // model on the prompt payload the gate already holds. And it keeps the write
+  // out of the two invocations that must not be pre-empted: a failure on
+  // `generation.completed` would degrade the turn to a fallback summary, and one
+  // on `session.ended` would leave a session's raw prompt text undeleted.
+  if (type === 'session.started') await rememberModelSafely(store, sessionId, event);
+
   const record = recordFor(event);
 
   if (record) await store.append(sessionId, recordKeyFor(event), record);
@@ -128,6 +140,33 @@ async function processEvent(
   }
 
   return undefined;
+}
+
+/**
+ * Remember the session's model, or carry on without it.
+ *
+ * A memo that cannot be written is a gate that states no model, which is the
+ * answer it gives for every other reason too. It is never a reason to fail the
+ * hook the agent is waiting on.
+ *
+ * @param store - Per-session state store.
+ * @param sessionId - Provider session id.
+ * @param event - The session's own event, which may or may not name a model.
+ */
+async function rememberModelSafely(
+  store: TurnStateStore,
+  sessionId: string,
+  event: AgentWatchEvent
+): Promise<void> {
+  const model = event.ai?.model;
+
+  if (!model) return;
+
+  try {
+    await store.rememberModel(sessionId, model);
+  } catch (error) {
+    debugLog('could not remember the session model:', error);
+  }
 }
 
 /**

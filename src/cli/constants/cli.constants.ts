@@ -5,7 +5,7 @@
  * itself into a boolean — which is how `--otel none` once ignored the selection
  * entirely.
  */
-export const VALUE_FLAGS: ReadonlySet<string> = new Set(['agent', 'endpoint', 'token', 'developer-email', 'otel']);
+export const VALUE_FLAGS: ReadonlySet<string> = new Set(['agent', 'endpoint', 'token', 'developer-email', 'otel', 'root']);
 
 export const FLAG_PREFIX = '--';
 

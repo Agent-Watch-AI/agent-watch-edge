@@ -10,7 +10,8 @@ import { resolvePaths } from '../storage/paths.js';
 import { DeliveryStats } from '../transport/delivery-stats.js';
 import { HttpTransport } from '../transport/http-transport.js';
 import { EventQueue } from '../transport/queue.js';
-import { DELIVERY_STATS_FILE_NAME } from '../transport/constants/transport.constants.js';
+import { identityPaths, settleLegacyQueue } from '../transport/queue-partition.js';
+import { servesMultipleIdentities } from '../config/root-config.js';
 import type { EventTransport } from '../transport/types/transport.types.js';
 import { RE_NEEDS_QUOTING, RE_QUOTE_ESCAPE } from './constants/cli.constants.js';
 import type { CliContext } from './types/cli.types.js';
@@ -44,12 +45,19 @@ export async function buildCliContext(env: Env): Promise<CliContext> {
 /**
  * The offline queue for this context.
  *
+ * Partitioned by the same token `buildTransport` signs with, so a command can
+ * only ever drain the backlog belonging to the identity it is sending as. A
+ * backlog written by a pre-partition edge is settled first, so `status`,
+ * `doctor` and setup's retarget offer agree about what is in the partition.
+ *
  * @param context - Resolved CLI context.
  * @returns The queue.
  */
-export function buildQueue(context: CliContext): EventQueue {
+export async function buildQueue(context: CliContext): Promise<EventQueue> {
+  await settleLegacyQueue(context.paths.queueDir, context.config.token, servesMultipleIdentities(context.config));
+
   return new EventQueue({
-    queueDir: context.paths.queueDir,
+    queueDir: identityPaths(context.paths, context.config.token).queueDir,
     locksDir: context.paths.locksDir,
     maxEvents: context.config.delivery.maxQueueEvents,
     maxAttempts: context.config.delivery.maxAttempts,
@@ -65,7 +73,7 @@ export function buildQueue(context: CliContext): EventQueue {
  * @returns The tally.
  */
 export function buildDeliveryStats(context: CliContext): DeliveryStats {
-  return new DeliveryStats(path.join(context.paths.dataDir, DELIVERY_STATS_FILE_NAME), context.env.now, context.paths.locksDir);
+  return new DeliveryStats(identityPaths(context.paths, context.config.token).statsFile, context.env.now, context.paths.locksDir);
 }
 
 /**

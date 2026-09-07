@@ -11,7 +11,8 @@ import { resolvePaths } from '../src/storage/paths.js';
 import { EventQueue } from '../src/transport/queue.js';
 import { saveConfig } from '../src/config/config-store.js';
 import { defaultConfig } from '../src/config/config.js';
-import { CONTENT_CAPTURE_ON, makeTempEnv, readJson, writeJson, type TempWorld } from './helpers.js';
+import { CONTENT_CAPTURE_ON, captureStdout, makeTempEnv, queueEntryFiles, readJson, readQueueEntries, writeJson, type TempWorld } from './helpers.js';
+import { queuePartition } from '../src/transport/queue-partition.js';
 import { claudePostToolUseEdit, claudeUserPromptSubmit } from './fixtures/claude.js';
 
 describe('CLI commands', () => {
@@ -243,7 +244,15 @@ describe('CLI commands', () => {
 
     async function enqueuePinned(): Promise<EventQueue> {
       const paths = resolvePaths(world.env);
-      const queue = new EventQueue({ queueDir: paths.queueDir, locksDir: paths.locksDir, maxEvents: 100, maxAttempts: 3, maxEventAgeDays: 7 });
+      const config = await readJson<{ token?: string }>(paths.configFile);
+      // Seed the partition the configured identity actually drains.
+      const queue = new EventQueue({
+        queueDir: queuePartition(paths.queueDir, config.token),
+        locksDir: paths.locksDir,
+        maxEvents: 100,
+        maxAttempts: 3,
+        maxEventAgeDays: 7
+      });
 
       await queue.enqueue([{ id: 'evt_pinned', event: { type: 'turn.summary' } } as unknown as Parameters<EventQueue['enqueue']>[0][number]], 'https://backend.example.com/v1/events');
 
@@ -252,9 +261,9 @@ describe('CLI commands', () => {
 
     async function pinnedDestination(): Promise<string> {
       const paths = resolvePaths(world.env);
-      const files = await fs.readdir(paths.queueDir);
+      const queued = await readQueueEntries<{ destination?: string }>(paths.queueDir);
 
-      return JSON.parse(await fs.readFile(path.join(paths.queueDir, files[0]!), 'utf8')).destination;
+      return queued[0]!.destination!;
     }
 
     it('re-routes the offline backlog to a new backend only after asking', async () => {
@@ -325,9 +334,7 @@ describe('CLI commands', () => {
       expect(code).toBe(0);
       expect(stdout).toBe(''); // passive observer: silence on stdout
 
-      const queueFiles = await fs.readdir(paths.queueDir).catch(() => []);
-
-      expect(queueFiles).toEqual([]);
+      expect(await queueEntryFiles(paths.queueDir)).toEqual([]);
     });
 
     it('tolerates malformed stdin', async () => {
@@ -616,5 +623,141 @@ describe('CLI commands', () => {
 
       expect(JSON.parse(logs.join(''))).toEqual({ Authorization: 'Bearer tok-1' });
     });
+  });
+});
+
+describe('setup --root: a second tenant on one machine', () => {
+  let world: TempWorld;
+
+  beforeEach(async () => {
+    world = await makeTempEnv();
+    await fs.mkdir(path.join(world.home, '.claude'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await world.cleanup();
+  });
+
+  function machineSetup() {
+    return runSetup({
+      env: world.env,
+      endpoint: 'https://backend.example.com',
+      token: 'tok-machine',
+      developerEmail: 'dev@company.com',
+      yes: true,
+      hookCommandFor: (id) => `agentwatch hook --agent ${id}`
+    });
+  }
+
+  async function rootDir(name = 'acme'): Promise<string> {
+    const dir = path.join(world.home, name);
+
+    await fs.mkdir(dir, { recursive: true });
+
+    return fs.realpath(dir);
+  }
+
+  function rootSetup(overrides: Partial<Parameters<typeof runSetup>[0]>) {
+    return runSetup({
+      env: world.env,
+      endpoint: 'https://backend.example.com',
+      developerEmail: 'dev@company.com',
+      yes: true,
+      hookCommandFor: (id) => `agentwatch hook --agent ${id}`,
+      ...overrides
+    });
+  }
+
+  it('refuses a root before the machine has an identity of its own', async () => {
+    // Without a machine token, native OTLP would be installed unauthenticated
+    // and every hook outside the root would send with no bearer.
+    expect(await rootSetup({ root: await rootDir(), token: 'tok-acme' })).toBe(1);
+    await expect(fs.access(resolvePaths(world.env).configFile)).rejects.toThrow();
+  });
+
+  it('refuses to inherit the machine token into a root', async () => {
+    await machineSetup();
+
+    expect(await rootSetup({ root: await rootDir() })).toBe(1);
+
+    const config = await readJson(resolvePaths(world.env).configFile);
+
+    expect(config.token).toBe('tok-machine');
+    expect(config.roots).toBeUndefined();
+  });
+
+  it('refuses --otel under a root, because the signal selection is machine-wide', async () => {
+    await machineSetup();
+
+    expect(await rootSetup({ root: await rootDir(), token: 'tok-acme', otel: 'none' })).toBe(1);
+    expect((await readJson(resolvePaths(world.env).configFile)).otel.logs).toBe(true);
+  });
+
+  it('refuses a root that does not exist', async () => {
+    await machineSetup();
+
+    expect(await rootSetup({ root: path.join(world.home, 'typo'), token: 'tok-acme' })).toBe(1);
+    expect((await readJson(resolvePaths(world.env).configFile)).roots).toBeUndefined();
+  });
+
+  it('files the root by its real path and leaves the machine identity untouched', async () => {
+    await machineSetup();
+
+    const alias = path.join(world.home, 'link-to-acme');
+
+    await fs.symlink(await rootDir(), alias);
+
+    expect(await rootSetup({ root: alias, token: 'tok-acme', developerEmail: 'me@acme.example' })).toBe(0);
+
+    const config = await readJson(resolvePaths(world.env).configFile);
+
+    expect(config.token).toBe('tok-machine');
+    expect(config.developerEmail).toBe('dev@company.com');
+    expect(config.roots).toEqual({ [await rootDir()]: { endpoint: 'https://backend.example.com', token: 'tok-acme', developerEmail: 'me@acme.example' } });
+  });
+
+  it('rotating the machine token moves its backlog to the new partition, after asking', async () => {
+    await machineSetup();
+
+    const paths = resolvePaths(world.env);
+    const before = new EventQueue({ queueDir: queuePartition(paths.queueDir, 'tok-machine'), locksDir: paths.locksDir, maxEvents: 100, maxAttempts: 3, maxEventAgeDays: 7 });
+
+    await before.enqueue([{ id: 'evt_rotated', event: { type: 'turn.summary' } } as unknown as Parameters<EventQueue['enqueue']>[0][number]], 'https://backend.example.com/v1/events');
+
+    const questions: string[] = [];
+
+    expect(
+      await rootSetup({
+        token: 'tok-rotated',
+        yes: false,
+        ask: async (question) => {
+          questions.push(question);
+
+          return question.includes('new token') ? 'y' : '';
+        }
+      })
+    ).toBe(0);
+
+    expect(questions.some((question) => question.includes('previous token'))).toBe(true);
+    expect(await queueEntryFiles(queuePartition(paths.queueDir, 'tok-machine'))).toEqual([]);
+    expect(await queueEntryFiles(queuePartition(paths.queueDir, 'tok-rotated'))).toHaveLength(1);
+  });
+
+  it('otel-headers signs with the root token on the shared collector, and with nothing for a foreign one', async () => {
+    await machineSetup();
+
+    const shared = await rootDir('shared');
+    const foreign = await rootDir('foreign');
+
+    expect(await rootSetup({ root: shared, token: 'tok-shared' })).toBe(0);
+    expect(await rootSetup({ root: foreign, token: 'tok-foreign', endpoint: 'https://other.example.com' })).toBe(0);
+
+    const headersIn = async (cwd: string) => JSON.parse((await captureStdout(() => runOtelHeaders({ ...world.env, cwd }))).stdout);
+
+    expect(await headersIn(shared)).toEqual({ Authorization: 'Bearer tok-shared' });
+    // The agent exports to the machine's collector, which must never see the
+    // foreign tenant's credential.
+    expect(await headersIn(foreign)).toEqual({});
+    expect(await headersIn(world.env.cwd)).toEqual({ Authorization: 'Bearer tok-machine' });
   });
 });

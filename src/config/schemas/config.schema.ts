@@ -119,6 +119,25 @@ export const emitSchema = z
   })
   .strip();
 
+/**
+ * One project root's identity. Only the fields that decide *who* the events
+ * belong to and *where* they go: capture and emission stay machine-wide, so a
+ * second tenant cannot quietly widen what is collected under it.
+ *
+ * `.strip()` rather than passthrough, so a nested `roots` key cannot recurse
+ * and a mistyped block cannot smuggle in delivery tuning.
+ */
+export const rootOverrideSchema = z
+  .object({
+    endpoint: z.string().url().optional(),
+    eventsUrl: z.string().url().optional(),
+    otlpUrl: z.string().url().optional(),
+    token: z.string().optional(),
+    installationId: z.string().optional(),
+    developerEmail: z.string().optional()
+  })
+  .strip();
+
 /** The whole configuration file. Passthrough: forward compatibility. */
 export const configSchema = z
   .object({
@@ -133,6 +152,11 @@ export const configSchema = z
     installationId: z.string().optional(),
     /** Developer identity attached to turn summaries; falls back to `git config user.email`. */
     developerEmail: z.string().optional(),
+    /**
+     * Absolute project root -> the identity to use beneath it. Longest match
+     * wins, so a nested checkout can override the workspace above it.
+     */
+    roots: z.record(z.string(), rootOverrideSchema).optional(),
     contentCaptureConsent: z.boolean().default(false),
     capture: captureSchema.default({}),
     emit: emitSchema.default({}),

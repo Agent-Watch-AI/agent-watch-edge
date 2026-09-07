@@ -1,5 +1,7 @@
 import process from 'node:process';
+import { otlpBaseUrl } from '../config/config.js';
 import { loadEffectiveConfig } from '../config/repo-config.js';
+import { applyRootOverride } from '../config/root-config.js';
 import type { Env } from '../core/types/core.types.js';
 import { providers } from '../providers/registry.js';
 import { buildCliContext } from './context.js';
@@ -48,6 +50,8 @@ export async function runConfig(env: Env): Promise<number> {
 
   const effective = await loadEffectiveConfig(context.paths, env.cwd);
 
+  if (effective.rootPath) println(dim(`# project root: ${effective.rootPath}`));
+
   if (effective.repoConfigFile) println(dim(`# repo overrides: ${effective.repoConfigFile}`));
 
   for (const warning of effective.warnings) println(dim(`# warning: ${warning}`));
@@ -69,7 +73,15 @@ export async function runConfig(env: Env): Promise<number> {
  */
 export async function runOtelHeaders(env: Env): Promise<number> {
   const context = await buildCliContext(env);
-  const headers = !context.disabled && context.config.token ? { Authorization: `Bearer ${context.config.token}` } : {};
+  // Per directory, not machine-wide: with two tenants on one machine the token
+  // that signs this export is decided by where the agent is running. Roots are
+  // all that can move identity (a repo file cannot), so the global config
+  // already in hand is enough. But the agent exports to the machine-wide
+  // collector, so a root enrolled against a different backend gets no bearer
+  // at all rather than presenting its credential to the other tenant's collector.
+  const rooted = applyRootOverride(context.config, env.cwd).config;
+  const token = otlpBaseUrl(rooted) === otlpBaseUrl(context.config) ? rooted.token : undefined;
+  const headers = !context.disabled && token ? { Authorization: `Bearer ${token}` } : {};
 
   process.stdout.write(JSON.stringify(headers));
 

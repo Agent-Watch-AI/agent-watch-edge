@@ -10,7 +10,7 @@ import { saveConfig } from '../src/config/config-store.js';
 import type { AgentWatchConfig } from '../src/config/types/config.types.js';
 import type { GitRunner } from '../src/git/types/git.types.js';
 import { resolvePaths } from '../src/storage/paths.js';
-import { makeTempEnv, readJson, type TempWorld } from './helpers.js';
+import { captureStdout as captureOut, makeTempEnv, readJson, type TempWorld } from './helpers.js';
 
 /** A git that answers `config --get user.email` with exactly this. */
 function gitSaying(email: string | undefined): GitRunner {
@@ -163,20 +163,9 @@ describe('doctor developer identity check', () => {
   afterEach(() => world.cleanup());
 
   async function captureStdout(run: () => Promise<number>): Promise<{ code: number; stdout: string }> {
-    const chunks: string[] = [];
-    const original = process.stdout.write.bind(process.stdout);
+    const { result, stdout } = await captureOut(run);
 
-    process.stdout.write = ((chunk: unknown) => {
-      chunks.push(String(chunk));
-
-      return true;
-    }) as typeof process.stdout.write;
-
-    try {
-      return { code: await run(), stdout: chunks.join('') };
-    } finally {
-      process.stdout.write = original;
-    }
+    return { code: result, stdout };
   }
 
   it('fails the human report when nothing can name the developer', async () => {

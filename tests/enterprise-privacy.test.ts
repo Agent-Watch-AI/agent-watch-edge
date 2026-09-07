@@ -7,7 +7,7 @@ import { loadEffectiveConfig, mergeRepoConfig } from '../src/config/repo-config.
 import { HttpTransport } from '../src/transport/http-transport.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { runHook } from '../src/cli/hook.js';
-import { CONTENT_CAPTURE_ON, makeTempEnv, writeJson, type TempWorld } from './helpers.js';
+import { CONTENT_CAPTURE_ON, makeTempEnv, queueEntryFiles, writeJson, type TempWorld } from './helpers.js';
 
 const allCapture = { ...CONTENT_CAPTURE_ON, git: true, files: true };
 
@@ -140,8 +140,7 @@ describe('enterprise privacy migration', () => {
     await runHook('claude', { env: world.env, input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'migration', prompt: 'old private text' }) });
     await writeJson(paths.configFile, { capture: allCapture });
     await runHook('claude', { env: world.env, input: JSON.stringify({ hook_event_name: 'Stop', session_id: 'migration', last_assistant_message: 'private answer' }) });
-    const entries = await fs.readdir(paths.queueDir);
-    const raw = await Promise.all(entries.map((name) => fs.readFile(path.join(paths.queueDir, name), 'utf8')));
+    const raw = await Promise.all((await queueEntryFiles(paths.queueDir)).map((file) => fs.readFile(file, 'utf8')));
 
     expect(raw.join(' ')).not.toContain('old private text');
     expect(raw.join(' ')).not.toContain('private answer');

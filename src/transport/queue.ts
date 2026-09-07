@@ -144,7 +144,8 @@ export class EventQueue {
   }
 
   /**
-   * Re-pin entries queued for one destination to another.
+   * Re-pin entries queued for one destination to another, and hand them to the
+   * identity that will send them.
    *
    * Setup calls this — with the user's explicit consent — after the backend URL
    * changes, so the backlog follows instead of expiring pinned to a URL nothing
@@ -152,19 +153,31 @@ export class EventQueue {
    * re-routes one reconfigured destination, it is not a license to replay one
    * backend's data to another.
    *
+   * `targetDir` exists because re-enrolling usually changes the token too, and
+   * a queue is partitioned by identity: leaving the entries where they are would
+   * re-pin a backlog no partition drains. Moving them is a second consent-gated
+   * step of the same decision the user just made. The entry is re-pinned in
+   * place and then renamed, so a crash mid-move leaves one copy, never two — at
+   * worst re-pinned but still in the old partition, where the next setup finds
+   * it again.
+   *
    * Runs under the drain lock so a concurrent drain cannot resurrect the old
    * destination from a stale in-memory copy.
    *
    * @param destination - The new events URL.
    * @param previousDestination - The URL being replaced.
+   * @param targetDir - Partition of the identity that will send the re-pinned
+   *   entries; this queue's own directory when the identity did not change.
    * @returns False when the lock never freed and nothing was re-pinned.
    */
-  async retarget(destination: string, previousDestination: string): Promise<boolean> {
+  async retarget(destination: string, previousDestination: string, targetDir: string): Promise<boolean> {
     const release = await this.waitForDrainLock();
 
     if (!release) return false;
 
     try {
+      await fs.mkdir(targetDir, { recursive: true });
+
       for (const name of await this.listFiles()) {
         const file = path.join(this.options.queueDir, name);
         const entry = await this.readEntry(file);
@@ -172,6 +185,8 @@ export class EventQueue {
         if (!entry || entry.destination !== previousDestination) continue;
 
         await writeFileAtomic(file, JSON.stringify({ ...entry, destination }), SECRET_FILE_MODE);
+
+        if (targetDir !== this.options.queueDir) await fs.rename(file, path.join(targetDir, name));
       }
 
       return true;
@@ -355,14 +370,8 @@ export class EventQueue {
    *
    * @returns The names, or an empty list when the directory is absent.
    */
-  private async listFiles(): Promise<string[]> {
-    try {
-      const names = await fs.readdir(this.options.queueDir);
-
-      return names.filter((name) => name.endsWith(QUEUE_FILE_SUFFIX)).sort();
-    } catch {
-      return [];
-    }
+  private listFiles(): Promise<string[]> {
+    return listQueueFiles(this.options.queueDir);
   }
 
   /**
@@ -559,5 +568,20 @@ async function exists(file: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Queue entry filenames directly in a directory, sorted. Sub-directories are
+ * other identities' partitions and never entries.
+ *
+ * @param dir - Directory to list.
+ * @returns The names, or an empty list when the directory is absent.
+ */
+export async function listQueueFiles(dir: string): Promise<string[]> {
+  try {
+    return (await fs.readdir(dir)).filter((name) => name.endsWith(QUEUE_FILE_SUFFIX)).sort();
+  } catch {
+    return [];
   }
 }

@@ -1,10 +1,10 @@
-import path from 'node:path';
 import { asRecord } from '../core/object.js';
 import { applyProductCapture } from '../privacy/product-capture.js';
 import { debugLog } from '../core/logger.js';
 import { next, runFlow, step, stop } from '../core/pipe.js';
 import type { FlowResult, Step, StepOutcome } from '../core/types/core.types.js';
 import { loadEffectiveConfig } from '../config/repo-config.js';
+import { servesMultipleIdentities } from '../config/root-config.js';
 import { DECISION_BLOCK } from '../enforcement/constants/enforcement.constants.js';
 import { enforcementWouldAsk, resolveEnforcement } from '../enforcement/enforcement.js';
 import { enrichEvents } from '../events/enrich.js';
@@ -18,7 +18,7 @@ import { DeliveryStats } from '../transport/delivery-stats.js';
 import { deliverEvents } from '../transport/delivery.js';
 import { HttpTransport } from '../transport/http-transport.js';
 import { EventQueue } from '../transport/queue.js';
-import { COOLDOWN_FILE_NAME, DELIVERY_STATS_FILE_NAME } from '../transport/constants/transport.constants.js';
+import { identityPaths, settleLegacyQueue } from '../transport/queue-partition.js';
 import type { EventTransport } from '../transport/types/transport.types.js';
 import { eventsUrl } from '../config/config.js';
 import { trackTurn } from '../turns/turn-tracker.js';
@@ -255,14 +255,18 @@ async function trackTurnSafely(state: HookPipelineState): Promise<HookPipelineSt
 async function deliver(state: HookPipelineState): Promise<StepOutcome<HookPipelineState>> {
   if (state.dryRun) return stop(state, STOP_DRY_RUN);
 
-  const queue = buildQueue(state);
+  // `globalConfig`, not `config`: roots are stripped from the effective config
+  // once applied, and the question is what the *machine* sends as.
+  await settleLegacyQueue(state.paths.queueDir, state.config.token, servesMultipleIdentities(state.globalConfig));
+
+  const identity = identityPaths(state.paths, state.config.token);
   const delivery = await deliverEvents(
     state.outbound,
     buildTransport(state),
-    queue,
+    buildQueue(state),
     state.config.delivery.drainBatchSize,
-    new BackendCooldown(path.join(state.paths.dataDir, COOLDOWN_FILE_NAME), state.env.now),
-    new DeliveryStats(path.join(state.paths.dataDir, DELIVERY_STATS_FILE_NAME), state.env.now, state.paths.locksDir)
+    new BackendCooldown(identity.cooldownFile, state.env.now),
+    new DeliveryStats(identity.statsFile, state.env.now, state.paths.locksDir)
   );
 
   debugLog(`delivery: sent=${delivery.delivered} queued=${delivery.queued} drained=${delivery.drained} rejected=${delivery.rejected}`);
@@ -315,14 +319,15 @@ async function snapshot(state: HookPipelineState): Promise<StepOutcome<HookPipel
 }
 
 /**
- * The offline queue for this run.
+ * The offline queue for this run, partitioned by the identity it sends as.
+ * `deliver` settles a pre-partition backlog before the first build.
  *
  * @param state - Current flow state.
  * @returns A queue bound to this run's paths and delivery limits.
  */
 function buildQueue(state: HookPipelineState): EventQueue {
   return new EventQueue({
-    queueDir: state.paths.queueDir,
+    queueDir: identityPaths(state.paths, state.config.token).queueDir,
     locksDir: state.paths.locksDir,
     maxEvents: state.config.delivery.maxQueueEvents,
     maxAttempts: state.config.delivery.maxAttempts,

@@ -1,5 +1,4 @@
 import path from 'node:path';
-import fs from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventQueue } from '../src/transport/queue.js';
 import type { DeliveryResult, EventTransport } from '../src/transport/transport.js';
@@ -7,7 +6,8 @@ import type { ProductEvent } from '../src/events/product-event.js';
 import { buildLlmCall } from '../src/events/llm-call.js';
 import { buildTurnSummary } from '../src/turns/turn-summary.js';
 import { deliverEvents } from '../src/transport/delivery.js';
-import { makeTempEnv, writeJson, type TempWorld } from './helpers.js';
+import { makeTempEnv, readQueueEntries, writeJson, type TempWorld } from './helpers.js';
+import { queuePartition } from '../src/transport/queue-partition.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { defaultConfig } from '../src/config/config.js';
 import { runHook } from '../src/cli/hook.js';
@@ -117,8 +117,7 @@ describe('public event offline queue', () => {
     expect(await run({ hook_event_name: 'Stop', session_id: 'sess-q', last_assistant_message: 'ok', cwd: world.home })).toBe(0);
     expect(stdout).toBe(''); // no errors, no output: the agent never notices
 
-    const files = await fs.readdir(paths.queueDir);
-    const queued = await Promise.all(files.map(async (name) => JSON.parse(await fs.readFile(path.join(paths.queueDir, name), 'utf8'))));
+    const queued = await readQueueEntries<any>(paths.queueDir);
     const types = queued.map((entry) => entry.event.event.type);
 
     expect(types).toEqual(['turn.summary']);
@@ -134,7 +133,8 @@ describe('public event offline queue', () => {
       emit: { ...defaultConfig().emit, turnSummaries: false }
     });
     const runtimeQueue = new EventQueue({
-      queueDir: paths.queueDir,
+      // The hook path writes into the identity's partition, not the root.
+      queueDir: queuePartition(paths.queueDir, undefined),
       locksDir: paths.locksDir,
       maxEvents: 100,
       maxAttempts: 3,

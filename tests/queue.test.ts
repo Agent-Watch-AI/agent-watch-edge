@@ -134,7 +134,7 @@ describe('EventQueue', () => {
     await queue.enqueue([makeEvent('evt_presetup')], ANY_DESTINATION);
 
     expect(await queue.pendingFor('https://old.example.com/v1/events')).toBe(1);
-    expect(await queue.retarget('https://new.example.com/v1/events', 'https://old.example.com/v1/events')).toBe(true);
+    expect(await queue.retarget('https://new.example.com/v1/events', 'https://old.example.com/v1/events', path.join(world.home, 'q'))).toBe(true);
 
     const transport = new FakeTransport({ ok: true, retryable: false }, 'https://new.example.com/v1/events');
     const stats = await queue.drain(transport, 10);

@@ -13,6 +13,7 @@ import { findExecutable } from '../core/which.js';
 import { developerIdentity } from '../git/git-context.js';
 import { providers } from '../providers/registry.js';
 import type { AgentProvider, SetupContext } from '../providers/types/provider.types.js';
+import { unattributedCount, unattributedQueue } from '../transport/queue-partition.js';
 import { buildCliContext, buildHookCommand, buildQueue } from './context.js';
 import { installedHookChecks } from './hook-check.js';
 import {
@@ -398,9 +399,8 @@ function configuredDetail(requested: OtelConfig, withheld: readonly OtelSignalNa
  * @returns The check.
  */
 async function queueChecks(context: CliContext): Promise<Check[]> {
-  const queue = buildQueue(context);
-  const pending = await queue.pendingCount();
-  const oldest = await queue.oldestPendingAgeMs();
+  const queue = await buildQueue(context);
+  const [pending, oldest, unattributed] = await Promise.all([queue.pendingCount(), queue.oldestPendingAgeMs(), unattributedCount(context.paths.queueDir)]);
   const stale = pending > 0 && oldest !== undefined && oldest > STALE_QUEUE_AGE_MS;
 
   return [
@@ -408,6 +408,14 @@ async function queueChecks(context: CliContext): Promise<Check[]> {
       name: 'delivery queue',
       level: stale ? 'warn' : 'ok',
       detail: `${pending} pending${oldest !== undefined ? `, oldest ${Math.round(oldest / 60000)} min` : ''}`
+    },
+    {
+      name: 'unattributed queue',
+      level: unattributed > 0 ? 'warn' : 'ok',
+      detail:
+        unattributed > 0
+          ? `${unattributed} event(s) predating per-tenant queues in ${unattributedQueue(context.paths.queueDir)} — move them into a tenant's partition to deliver`
+          : 'none'
     }
   ];
 }

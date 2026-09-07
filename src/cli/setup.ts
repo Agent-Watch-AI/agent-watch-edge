@@ -1,10 +1,12 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import process from 'node:process';
 import readline from 'node:readline/promises';
 import { defaultConfig, enabledSignalNames, eventsUrl, parseOtelSignals } from '../config/config.js';
 import { ensureInstallationId, saveConfig } from '../config/config-store.js';
 import { CONTENT_CAPTURE_KEYS } from '../config/constants/config.constants.js';
 import { asRecord } from '../core/object.js';
-import type { AgentWatchConfig, OtelConfig } from '../config/types/config.types.js';
+import type { AgentWatchConfig, OtelConfig, RootOverride } from '../config/types/config.types.js';
 import { collectGitContext, developerIdentity } from '../git/git-context.js';
 import { ManualEnrollmentProvider } from '../enrollment/manual-enrollment.js';
 import type { EnrollmentResult } from '../enrollment/types/enrollment.types.js';
@@ -13,6 +15,7 @@ import type { AgentProvider, DetectionResult, SetupContext, SetupOutcome } from 
 import { saveInstallState } from '../storage/install-state.js';
 import { readJsonFile } from '../storage/json-file.js';
 import { TOKEN_VAR } from '../storage/constants/storage.constants.js';
+import { identityPaths } from '../transport/queue-partition.js';
 import type { InstallState } from '../storage/types/storage.types.js';
 import { buildCliContext, buildHookCommand, buildQueue } from './context.js';
 import { DEVELOPER_EMAIL_PROMPT, DEVELOPER_IDENTITY_REMEDIES, NO_CONFIG_WRITTEN, NO_DEVELOPER_IDENTITY } from './constants/cli.constants.js';
@@ -79,11 +82,29 @@ export async function runSetup(options: SetupOptions): Promise<number> {
     return 1;
   }
 
+  const resolved = await resolveRoot(options, baseConfig);
+
+  if ('error' in resolved) {
+    println(`${symbols.fail} ${resolved.error}`);
+
+    return 1;
+  }
+
+  const rootPath = resolved.root;
+  // A root inherits nothing from the machine identity; the machine re-enrolls
+  // on top of what it already has.
+  const inherited: RootOverride = rootPath === undefined ? baseConfig : { endpoint: baseConfig.endpoint };
   const ask = interactivePrompt(options);
-  const enrolled = await enroll(options, baseConfig, ask);
+  const enrolled = await enroll(options, inherited, ask);
 
   if ('error' in enrolled) {
     println(`${symbols.fail} ${enrolled.error}`);
+
+    return 1;
+  }
+
+  if (rootPath !== undefined && !enrolled.token) {
+    println(`${symbols.fail} a project root needs its own token: pass --token or $${TOKEN_VAR}, the machine token is not inherited`);
 
     return 1;
   }
@@ -96,20 +117,22 @@ export async function runSetup(options: SetupOptions): Promise<number> {
     return 1;
   }
 
-  const config = ensureInstallationId({
-    ...baseConfig,
-    endpoint: enrolled.endpoint,
-    token: enrolled.token,
-    developerEmail,
-    otel,
-    emit: { ...baseConfig.emit, llmCalls: true }
-  });
+  const identity: RootOverride = { endpoint: enrolled.endpoint, token: enrolled.token, developerEmail };
+  const withIdentity = rootPath === undefined ? { ...baseConfig, ...identity } : { ...baseConfig, roots: { ...baseConfig.roots, [rootPath]: identity } };
+  const config = ensureInstallationId({ ...withIdentity, otel, emit: { ...baseConfig.emit, llmCalls: true } });
 
   await reportContentDowngrade(context, config);
   await saveConfig(context.paths, config);
   await offerBacklogRetarget(context, baseConfig, config, ask);
 
-  println(`${symbols.ok} backend: ${config.endpoint}`);
+  if (rootPath !== undefined) println(`${symbols.ok} project root: ${rootPath}`);
+
+  println(`${symbols.ok} backend: ${identity.endpoint}`);
+
+  if (rootPath !== undefined && identity.endpoint !== baseConfig.endpoint) {
+    println(`${symbols.warn} native OTLP export stays machine-wide at ${baseConfig.endpoint} and sends no bearer under this root; only hook-path events reach ${identity.endpoint}`);
+  }
+
   println(`${symbols.ok} developer: ${developerEmail}`);
   println(`${symbols.ok} otel signals: ${enabledSignalNames(otel).join(', ') || 'none'}`);
   println(dim(`  config: ${context.paths.configFile}`));
@@ -121,6 +144,38 @@ export async function runSetup(options: SetupOptions): Promise<number> {
   println(dim('  run `agentwatch status` anytime, `agentwatch doctor` to diagnose'));
 
   return failures === 0 ? 0 : 1;
+}
+
+/**
+ * The project root this run files an identity under, when `--root` was given.
+ *
+ * A root is a second identity on top of the machine's own, never a substitute
+ * for it: agents export native OTLP to one machine-wide endpoint with one
+ * bearer, so without a machine identity every hook outside the root would send
+ * unauthenticated and the native ledger would belong to nobody. `--otel` is
+ * refused for the same reason — the signal selection reconfigures every agent
+ * on the machine, which is not one tenant's decision to make.
+ *
+ * The path is the real one so it matches the cwd an agent reports, and it has
+ * to exist: a typo here would file a tenant under a directory nothing ever runs
+ * in.
+ *
+ * @param options - Flags and environment.
+ * @param baseConfig - Config the run starts from.
+ * @returns The canonical root (absent without `--root`), or the refusal.
+ */
+async function resolveRoot(options: SetupOptions, baseConfig: AgentWatchConfig): Promise<{ root?: string } | { error: string }> {
+  if (options.root === undefined) return {};
+
+  if (!baseConfig.token) return { error: 'set up the machine identity first (agentwatch setup without --root); a project root is an addition to it' };
+
+  if (options.otel !== undefined) return { error: 'native OTLP signals are machine-wide; run setup without --root to change them' };
+
+  try {
+    return { root: await fs.realpath(path.resolve(options.env.cwd, options.root)) };
+  } catch {
+    return { error: `project root does not exist: ${options.root}` };
+  }
 }
 
 /**
@@ -202,19 +257,19 @@ async function reportDetection(options: SetupOptions): Promise<Detected[]> {
  * Acquire the backend endpoint and token.
  *
  * @param options - Flags and the interactive prompt.
- * @param baseConfig - Config the run starts from.
+ * @param inherited - What this run may fall back to when a flag is absent.
  * @param ask - The prompt, when the run is interactive.
  * @returns The enrollment result, or the message to show.
  */
 async function enroll(
   options: SetupOptions,
-  baseConfig: AgentWatchConfig,
+  inherited: RootOverride,
   ask: ((question: string) => Promise<string>) | undefined
 ): Promise<EnrollmentResult | { error: string }> {
   try {
     return await new ManualEnrollmentProvider().enroll({
       setupUrl: options.setupUrl,
-      endpoint: options.endpoint ?? baseConfig.endpoint,
+      endpoint: options.endpoint ?? inherited.endpoint,
       // Flag, then environment, then what is already stored. An MDM policy runs
       // with no terminal and has to get the token in somehow; `--token` puts it
       // on a command line, where `ps` can read it for the life of the process.
@@ -223,7 +278,7 @@ async function enroll(
       // and enrollment treats a defined token as final — so `??` would write an
       // empty token, skip the prompt, and leave an install that authenticates
       // against nothing while reporting success.
-      token: options.token ?? (options.env.vars[TOKEN_VAR] || baseConfig.token),
+      token: options.token ?? (options.env.vars[TOKEN_VAR] || inherited.token),
       ask
     });
   } catch (error) {
@@ -287,6 +342,13 @@ function reportMissingIdentity(): void {
  * backend is a routing decision only the user can make, because the previous URL
  * may belong to another organization. So: ask, never assume.
  *
+ * The backlog is read from the *previous* identity's queue partition and moved
+ * into the new one, because re-enrolling normally changes the token as well as
+ * the URL; asking about the URL and then re-pinning entries no partition drains
+ * would answer the question and still lose the events. A token change alone
+ * asks the same question: on a shared backend a new bearer may be a new tenant,
+ * and the old partition is otherwise never listed again.
+ *
  * @param context - Resolved CLI context.
  * @param previousConfig - Config before this run.
  * @param config - Config this run just wrote.
@@ -301,24 +363,28 @@ async function offerBacklogRetarget(
   const previousUrl = eventsUrl(previousConfig);
   const configuredUrl = eventsUrl(config);
 
-  if (!previousUrl || !configuredUrl || previousUrl === configuredUrl) return;
+  if (!previousUrl || !configuredUrl) return;
 
-  const queue = buildQueue({ ...context, config });
+  if (previousUrl === configuredUrl && previousConfig.token === config.token) return;
+
+  const queue = await buildQueue({ ...context, config: previousConfig });
   const stranded = await queue.pendingFor(previousUrl);
 
   if (stranded === 0) return;
 
-  const answer = ask
-    ? (await ask(`${stranded} offline event(s) are queued for the previous backend (${previousUrl}). Deliver them to the new backend? [y/N]: `)).trim().toLowerCase()
-    : '';
+  const question =
+    previousUrl === configuredUrl
+      ? `${stranded} offline event(s) are queued under the previous token. Deliver them with the new token? [y/N]: `
+      : `${stranded} offline event(s) are queued for the previous backend (${previousUrl}). Deliver them to the new backend? [y/N]: `;
+  const answer = ask ? (await ask(question)).trim().toLowerCase() : '';
 
   if (answer !== 'y' && answer !== 'yes') {
-    println(`${symbols.warn} keeping ${stranded} offline event(s) pinned to the previous backend; they expire after ${config.delivery.maxEventAgeDays} day(s)`);
+    println(`${symbols.warn} keeping ${stranded} offline event(s) under the previous identity; they expire after ${config.delivery.maxEventAgeDays} day(s)`);
 
     return;
   }
 
-  const retargeted = await queue.retarget(configuredUrl, previousUrl);
+  const retargeted = await queue.retarget(configuredUrl, previousUrl, identityPaths(context.paths, config.token).queueDir);
 
   println(retargeted ? `${symbols.ok} offline backlog re-routed to the new backend` : `${symbols.warn} queue busy; backlog not re-routed — re-run setup to retry`);
 }

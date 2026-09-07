@@ -10,6 +10,7 @@ import { runHook } from '../src/cli/hook.js';
 import { runConfig, runOtelHeaders } from '../src/cli/misc.js';
 import { runStatus } from '../src/cli/status.js';
 import { runDoctor } from '../src/cli/doctor.js';
+import { queuePartition } from '../src/transport/queue-partition.js';
 import { getProvider } from '../src/providers/registry.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { disabledFile, isDisabled } from '../src/storage/disabled.js';
@@ -42,12 +43,16 @@ describe('local off switch', () => {
     const config = await fs.readFile(paths.configFile, 'utf8');
     const hooks = await fs.readFile(path.join(world.home, '.codex/hooks.json'), 'utf8');
 
-    await writeJson(path.join(paths.queueDir, 'kept.json'), { retained: true });
+    // Where the configured identity's entries live; a legacy flat file would be
+    // settled into it on the next command anyway.
+    const kept = path.join(queuePartition(paths.queueDir, 'test-token'), 'kept.json');
+
+    await writeJson(kept, { retained: true });
     expect(await runToggle(world.env, false)).toBe(0);
     expect(await runToggle(world.env, false)).toBe(0);
     expect(await isDisabled(paths)).toBe(true);
     expect(await fs.readFile(paths.configFile, 'utf8')).toBe(config);
-    expect(await readJson(path.join(paths.queueDir, 'kept.json'))).toEqual({ retained: true });
+    expect(await readJson(kept)).toEqual({ retained: true });
     expect(await readJson(path.join(world.home, '.gemini/settings.json'))).toMatchObject({ env: { UNRELATED: 'keep' }, theme: 'dark' });
     expect(JSON.stringify(await readJson(path.join(world.home, '.gemini/settings.json')))).not.toContain('test-token');
     expect(await fs.readFile(path.join(world.home, '.codex/config.toml'), 'utf8')).not.toContain('[otel]');

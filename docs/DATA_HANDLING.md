@@ -166,16 +166,32 @@ The queue contains sanitized product records and their destination, attempts,
 and retry timestamps. Defaults are 2,000 events, 20 attempts, and 7 days.
 Expiration is processed during activity, not by a daemon or scheduled erasure.
 Capacity pressure removes oldest entries. Turn state has a 24-hour stale-state
-cleanup bound, also activity-driven. Backups and other local caches have no
+cleanup bound, and queued records a `maxEventAgeDays` bound (7 by default). Both
+sweeps are activity-driven and run at most hourly, so removal happens within the
+retention window plus that interval rather than on every hook. Backups and other local caches have no
 guaranteed automatic deletion deadline. The package does not delete provider-owned
 transcripts; it can read them locally for usage attribution.
 
-Config, queues, turn state and the off marker use POSIX mode 0600. Codex's managed
-`~/.codex/config.toml` contains a static bearer token and is made 0600 when a token
-is written. Gemini's `~/.gemini/settings.json` likewise contains static
-`OTEL_EXPORTER_OTLP_HEADERS` and is written 0600. Claude uses `otelHeadersHelper`
-to retrieve credentials from AgentWatch at runtime. Cursor and Antigravity have
-no managed native exporter. Backups preserve source permissions and can contain
+Config, queues, turn state and the off marker use POSIX mode 0600.
+
+**Codex and Gemini hold a static bearer token in their own configuration file,
+and this is a property of those agents rather than a choice made here.** Neither
+CLI has a mechanism for fetching a credential at request time, so the only way
+to authenticate their native OTLP exporters is to write the bearer into the file
+they read at startup: `~/.codex/config.toml` for Codex, and
+`OTEL_EXPORTER_OTLP_HEADERS` inside `~/.gemini/settings.json` for Gemini. Claude
+Code does have such a mechanism — `otelHeadersHelper`, which calls
+`agentwatch otel-headers` at runtime — so no Claude configuration file ever
+contains a token. Cursor and Antigravity have no managed native exporter, so the
+question does not arise for them.
+
+Because those two files then contain a credential, AgentWatch sets them to 0600
+when — and only when — the block it writes actually carries the token. The files
+belong to those agents, not to AgentWatch, so the permission bits each one had
+beforehand are recorded in the install state and restored by `uninstall`: a file
+that was 0644 before does not stay 0600 after the token is gone. A file that was
+already private stays private, and nothing is tightened when no credential is
+written. Backups preserve source permissions and can contain
 credentials, including historical copies. Other directories/files use existing
 permissions or process defaults; POSIX modes are not a verified Windows ACL
 guarantee. Local data is not encrypted by this package. Passing a token on the
@@ -188,16 +204,40 @@ Defaults derived from that endpoint are `POST /v1/events`, native OTLP base
 `/v1/otlp` with `/v1/logs`, `/v1/traces`, `/v1/metrics` signal suffixes, and
 `GET /v1/enforcement/decision`. Global `eventsUrl`, `otlpUrl`, and
 `enforcementUrl` may override those routes. Authentication uses a bearer token
-when configured. Use HTTPS in deployments; the schema does not prohibit HTTP.
+when configured. Every URL in the configuration is validated on every *read* of
+the file, not only when `setup` writes it: `https://` anywhere, and `http://`
+only to `localhost`, `127.0.0.1` or `::1`. A configuration naming any other
+scheme — or plain `http://` to a remote host — fails to load and `doctor`
+reports it, rather than sending the bearer and the captured content over the
+network in cleartext.
 Enforcement sends developer and checkout attribution, and the session's
 model when the agent named one, not prompt/tool bodies.
-Doctor can probe connectivity with an empty events batch. Status can drain the
-queue. Both stop network activity while disabled.
+Doctor probes connectivity with an empty events batch carrying the same
+credentials a real delivery uses, so its verdict describes the configured
+install: it distinguishes a backend that accepted the credential, one that
+rejected it (a failure, with a non-zero exit code), one that is unreachable, and
+an install with no backend configured yet. It always performs that probe, even
+while sends are suspended — the diagnostic is a direct question to the backend
+and is never answered from local state. Status can drain the queue. Both stop
+network activity while disabled.
 
 Hook errors return the provider's passive response/exit zero. Unknown inputs,
 missing configuration, parser failures and unexpected exceptions must not crash
 the coding agent. Direct sends have a default 1,500 ms timeout; failed records
-are queued, with bounded retries and eventual loss reported by status. This is
+are queued, with bounded retries and eventual loss reported by status.
+
+A backend that answers 401 or 403 is refusing the credential, not failing
+transiently. The records stay queued — a product record is never discarded on a
+failed send, and that does not change — but automatic sends for that
+(destination, credential) pair are suspended rather than re-presenting a
+rejected bearer on every hook for the whole retention window, which reads to a
+backend's security monitoring as low-rate credential stuffing and to the
+operator as nothing at all. No queued entry spends a retry attempt while the
+refusal stands, so a backlog cannot age out over a rejection that is not its
+fault. `status` reports the refusing status, when the refusals started and how
+many records are held. The suspension is lifted by configuring a different
+credential or endpoint, or by `doctor` proving the credential good again; it
+never expires on a timer. This is
 not a guarantee of lossless delivery. Native exporter retry behavior is owned by
 the provider, not the Edge queue. Sanitization is unconditional for Edge records;
 it redacts known credential patterns/sensitive keys and bounds string/depth sizes.
@@ -261,7 +301,9 @@ hooks/settings are preserved. AgentWatch does not remove the globally installed
 npm package itself.
 
 Codex and Gemini static token storage is a current limitation, not an encrypted
-credential-store integration. Cursor has no native usage exporter/readable usage;
+credential-store integration; see *Identity, local storage, and credentials*
+above for why those two agents differ from Claude Code, and for what `uninstall`
+restores. Cursor has no native usage exporter/readable usage;
 its CLI currently exposes only shell hooks, while IDE hooks cover more lifecycle
 events. Antigravity has neither native token telemetry nor readable transcript
 usage. Their summaries can remain `pending` without cost; no usage is fabricated.

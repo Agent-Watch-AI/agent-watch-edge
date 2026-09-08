@@ -16,6 +16,58 @@ and no root requirement. The items below are **not implemented**.
 | Deferred | Independent penetration testing and remediation. No completed penetration test is claimed. |
 | Deferred | SOC 2 readiness, evidence collection, and independent audit roadmap. No SOC 2 attestation is claimed. |
 
+## What the edge changes outside its own directory
+
+A change-control board asks for this list before a pilot, and it is the same
+list the package's ownership rules are built on. Everything else lives under
+`~/.agentwatch/` and is removed by `uninstall --purge`.
+
+| Path | Change | Reverted by |
+| --- | --- | --- |
+| `~/.claude/settings.json` | AgentWatch hook entries, and `otelHeadersHelper` plus OTel env keys when native telemetry is configured | `uninstall` removes exactly the entries recorded as owned; unrelated hooks and settings are preserved |
+| `~/.codex/config.toml` | A managed `[otel]` block; the file is set to 0600 **only** when that block carries a bearer token | `uninstall` removes the block and restores the permission bits the file had before AgentWatch tightened it |
+| `~/.gemini/settings.json` | AgentWatch hook entries and an `env` block including `OTEL_EXPORTER_OTLP_HEADERS`; 0600 **only** when that block carries a bearer token | as above — owned keys only, and the original mode is restored |
+| Cursor / Antigravity hook configuration | AgentWatch hook entries only; neither has a managed native exporter | `uninstall` removes the entries it recorded |
+| Nothing else | No daemon, no launchd/systemd unit, no PATH change, no shell profile edit, no root requirement, no file outside the paths above | — |
+
+Every write to a file the edge does not own is preceded by a timestamped copy
+into `~/.agentwatch/backups/`, which preserves the source permissions and can
+therefore contain credentials — treat that directory as sensitive and note that
+`uninstall --purge` is what removes it.
+
+## Verifying a rollback
+
+The point of this section is that "we removed it" is checkable rather than
+asserted. On one machine, in this order:
+
+1. `agentwatch uninstall` — reports what it removed per agent. It removes
+   exactly the keys and hook entries the install state recorded as owned, so a
+   setting a developer added themselves is never touched. (The refuse-rather-
+   than-guess check runs at *install* time: a native-telemetry key already set
+   to a foreign value makes `setup` skip that agent's exporter and say so,
+   rather than overwriting it.)
+2. `agentwatch doctor --json` — the `backend connectivity` check reads
+   `no backend configured yet` only after a `--purge`; before that the
+   configuration is intentionally retained. Every `agent … hooks` check must
+   report the hooks as absent.
+3. Inspect each agent file in the table above: no `agentwatch` string should
+   remain, the agent's own settings must be intact, and
+   `stat -f '%Lp' ~/.codex/config.toml` (Linux: `stat -c '%a'`) must show the
+   mode the file had before installation, not `600`.
+4. Confirm the agent still starts and runs a turn. A configuration the edge left
+   unparseable is the failure this step exists to catch. For Codex's TOML,
+   removal is explicitly guarded: a file that parsed before removal and would
+   not parse after it is refused with nothing written. The JSON files are
+   re-serialized from a parsed document and the serialization is parsed again
+   before the write, so an unparseable result is not reachable — but the agent
+   itself starting is the only end-to-end check, which is why it is a step here.
+5. `agentwatch uninstall --purge` — then `~/.agentwatch/` is gone, including
+   queued records and backups. Anything already delivered to the backend is the
+   backend's to delete; the edge cannot recall it.
+
+The npm package itself is never removed by `uninstall`; `npm rm -g
+@agent-watch-ai/edge` is a separate, deliberate step.
+
 ## Release operation
 
 Ordinary pushes and PRs verify and build artifacts; they do not publish. Run
@@ -34,7 +86,23 @@ See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/).
 
 The version must be deliberately selected before triggering publication; this
 change does not bump it. Signing with a real release identity is a later step,
-not a simulated signature. Package verification permits built JS/types and public
+not a simulated signature.
+
+Provenance covers the npm artifact, not the git history it was built from, so
+**release tags must be signed**: `git tag -s vX.Y.Z -m 'vX.Y.Z'` and push the
+tag, with `git tag -v vX.Y.Z` as the check. A maintainer can make that the
+default for this repository with `git config tag.gpgSign true`. This is a
+process requirement rather than something the workflow can enforce, and it is
+recorded here because an unsigned tag is the gap between "the tarball is
+attested" and "the commit it came from is".
+
+The workflow's own supply-chain controls, so a reviewer does not have to read
+the YAML to find them: every action is pinned to a commit SHA rather than a
+mutable tag; `npm ci` runs with `--ignore-scripts`, as pack and publish already
+did, so no dependency lifecycle script executes in the job that builds the
+published tarball; `npm audit --omit=dev --audit-level=high` gates on advisories
+in what actually ships; CodeQL runs on every change and weekly; and Dependabot
+opens grouped weekly updates for both npm and the pinned actions. Package verification permits built JS/types and public
 documentation only, with a 2 MB unpacked review ceiling. Hundreds of small files
 are expected from the existing module layout and declarations; bundling solely
 to reduce the file count is deferred.

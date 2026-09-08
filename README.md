@@ -11,7 +11,7 @@ It connects agent lifecycle hooks and native OpenTelemetry (OTLP) to your observ
 
 ## Quick Start
 
-**Requirements:** Node.js 20+
+**Requirements:** Node.js 20+ (continuous integration runs the full suite on both Node 20 and Node 24, so the floor is verified rather than declared)
 
 ```bash
 # 1. Install globally

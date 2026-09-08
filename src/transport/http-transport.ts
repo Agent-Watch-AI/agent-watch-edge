@@ -6,6 +6,7 @@ import {
   RETRYABLE_STATUSES
 } from './constants/transport.constants.js';
 import { edgeHeaders } from './headers.js';
+import { readCappedJson } from './response-body.js';
 import type { DeliveryResult, EventTransport, HttpTransportOptions } from './types/transport.types.js';
 
 export type { HttpTransportOptions } from './types/transport.types.js';
@@ -58,6 +59,9 @@ export class HttpTransport implements EventTransport {
         method: 'POST',
         headers: this.headers(),
         body: JSON.stringify({ events: payload }),
+        // A redirect would move a batch that carries a bearer to an endpoint
+        // nothing configured; refusing is the only safe answer.
+        redirect: 'error',
         signal: AbortSignal.timeout(this.options.timeoutMs)
       });
 
@@ -91,15 +95,18 @@ export class HttpTransport implements EventTransport {
  *
  * A 202 can still carry per-event rejections, and the batch "succeeding" while
  * events inside it were dropped is exactly the case the caller must see. A
- * backend that returns no JSON body is treated as counter-less, not failed.
+ * backend that returns no JSON body — or one too large to be counters — is
+ * treated as counter-less, not failed.
  *
  * @param response - The backend's response.
  * @returns The counters, or undefined when the body carried none.
  */
 async function readCounters(response: Response): Promise<DeliveryResult['counters']> {
   try {
-    const body = (await response.json()) as Record<string, unknown>;
-    const numeric = (key: string): number => (typeof body[key] === 'number' ? (body[key] as number) : 0);
+    const body = (await readCappedJson(response)) as Record<string, unknown>;
+    // Own properties only: this object came off the network, so a `__proto__`
+    // in the body must not answer for a counter nobody sent.
+    const numeric = (key: string): number => (Object.hasOwn(body, key) && typeof body[key] === 'number' ? (body[key] as number) : 0);
 
     return {
       accepted: numeric('accepted'),
@@ -115,9 +122,10 @@ async function readCounters(response: Response): Promise<DeliveryResult['counter
 /**
  * Whether a failing status is worth retrying.
  *
- * Auth and rate-limit problems are usually transient misconfiguration, so they
- * count as retryable; retries are capped by `delivery.maxAttempts`, so they
- * cannot accumulate forever.
+ * A rate limit or a timeout is transient, so those count as retryable and are
+ * capped by `delivery.maxAttempts`. A refused *credential* is deliberately not
+ * here: see `AUTH_REJECTED_STATUSES` and `BackendAuthBlock` — the records stay
+ * queued, but re-presenting a rejected bearer on every hook does not.
  *
  * @param status - HTTP status.
  * @returns True when the batch should be queued for another attempt.

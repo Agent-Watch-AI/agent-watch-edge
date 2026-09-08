@@ -47,6 +47,13 @@ export const MIN_NODE_MAJOR = 20;
  */
 export const CLAUDE_MIN_VERSION_FOR_PROMPT_ID = '2.1.196';
 
+/**
+ * Name of the one check an administrator's install script greps for: it carries
+ * all four backend states — accepted, credential rejected, unreachable, and not
+ * configured yet — so a rollout can be judged from one line.
+ */
+export const BACKEND_CONNECTIVITY_CHECK = 'backend connectivity';
+
 /** Budgets for the diagnostics that shell out or reach the network. */
 export const BACKEND_PROBE_TIMEOUT_MS = 4_000;
 export const CLAUDE_VERSION_TIMEOUT_MS = 5_000;

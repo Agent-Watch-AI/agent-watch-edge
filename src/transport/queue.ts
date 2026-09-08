@@ -8,8 +8,10 @@ import { writeFileAtomic } from '../storage/atomic-file.js';
 import { acquireLock } from '../storage/lock.js';
 import { SECRET_FILE_MODE } from '../storage/constants/storage.constants.js';
 import type { ReleaseLock } from '../storage/types/storage.types.js';
+import type { BackendAuthBlock } from './auth-block.js';
 import {
   ANY_DESTINATION,
+  AUTH_REJECTED_STATUSES,
   BACKOFF_BASE_MS,
   BACKOFF_JITTER_MIN,
   BACKOFF_JITTER_RANGE,
@@ -116,9 +118,11 @@ export class EventQueue {
    * @param transport - Where to send.
    * @param maxBatch - Ceiling on events sent in one pass.
    * @param statsRecorder - Optional sink for what this pass lost.
+   * @param authBlock - Optional sink for a refused credential, so a rejected
+   *   bearer suspends sending instead of spending the backlog's attempts on it.
    * @returns What the pass sent, failed, dropped and had rejected.
    */
-  async drain(transport: EventTransport, maxBatch: number, statsRecorder?: DrainStatsRecorder): Promise<DrainStats> {
+  async drain(transport: EventTransport, maxBatch: number, statsRecorder?: DrainStatsRecorder, authBlock?: BackendAuthBlock): Promise<DrainStats> {
     const release = await acquireLock(this.options.locksDir, QUEUE_DRAIN_LOCK, this.now);
 
     if (!release) return { sent: 0, failed: 0, dropped: 0, rejected: 0, skipped: true };
@@ -132,7 +136,7 @@ export class EventQueue {
         .slice()
         .sort((a, b) => Date.parse(a.entry.firstQueuedAt) - Date.parse(b.entry.firstQueuedAt))
         .slice(0, maxBatch);
-      const sent = batch.length === 0 ? EMPTY_DELTA : await this.sendBatch(transport, batch, nowMs);
+      const sent = batch.length === 0 ? EMPTY_DELTA : await this.sendBatch(transport, batch, nowMs, authBlock);
       const stats: DrainStats = { ...mergeDeltas(collected.delta, sent), skipped: false };
 
       await report(statsRecorder, stats);
@@ -252,9 +256,10 @@ export class EventQueue {
    * @param transport - Where to send.
    * @param batch - Entries to send.
    * @param nowMs - This pass's clock reading.
+   * @param authBlock - Optional sink for a refused credential.
    * @returns What the send accomplished and cost.
    */
-  private async sendBatch(transport: EventTransport, batch: readonly DueEntry[], nowMs: number): Promise<DrainDelta> {
+  private async sendBatch(transport: EventTransport, batch: readonly DueEntry[], nowMs: number, authBlock?: BackendAuthBlock): Promise<DrainDelta> {
     const result = await transport.send(batch.map(({ entry }) => entry.event as unknown as ProductEvent));
 
     if (result.ok) {
@@ -264,6 +269,16 @@ export class EventQueue {
     }
 
     debugLog('queue drain failed', result.error ?? `status ${result.status}`);
+
+    if (result.status !== undefined && AUTH_REJECTED_STATUSES.has(result.status)) {
+      // The credential was refused, so nothing in this batch is at fault and
+      // nothing about it may change: an attempt spent here would walk the whole
+      // backlog to maxAttempts and delete it, which is the one thing the queue
+      // exists to prevent. Raise the block instead and leave every entry due.
+      if (authBlock && transport.destination) await authBlock.raise(transport.destination, result.status);
+
+      return { ...EMPTY_DELTA, failed: batch.length };
+    }
 
     if (!result.retryable && batch.length > 1) return this.isolateBatch(transport, batch, nowMs);
 

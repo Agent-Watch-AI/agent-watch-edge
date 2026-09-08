@@ -17,19 +17,36 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    strategy:
+      # Both runtimes are reported: a failure on the floor and a failure on the
+      # release runtime need different answers.
+      fail-fast: false
+      matrix:
+        # `engines` and README.md promise Node 20, so Node 20 is tested. The
+        # code uses recent APIs (AbortSignal.timeout, fs.realpathSync.native,
+        # Array.prototype.at); without this the floor is a number nothing
+        # verifies.
+        node: ['20', '24']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: ${{ matrix.node }}
           cache: npm
-      - run: npm ci
+      # No dependency lifecycle scripts: pack and publish already run with
+      # --ignore-scripts, and install is the remaining place a transitive
+      # dependency could execute code in the job that builds the tarball.
+      - run: npm ci --ignore-scripts
       - run: npm test
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
-      - run: npm run release:artifacts
-      - uses: actions/upload-artifact@v4
+      # The published tarball is built once, on the release runtime. Node 20 is
+      # here to prove the floor, not to produce artifacts.
+      - if: matrix.node == '24'
+        run: npm run release:artifacts
+      - if: matrix.node == '24'
+        uses: actions/upload-artifact@v4
         with:
           name: npm-release
           path: artifacts/

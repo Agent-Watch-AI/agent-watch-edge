@@ -77,7 +77,7 @@ export async function trackTurn(options: TrackTurnOptions): Promise<TurnSummaryE
       // Closing failed (corrupt turn state, unreadable transcript, IO error):
       // the turn must still reach the backend rather than silently vanish.
       if (event.event.type === 'generation.completed' && !summary) {
-        summary = fallbackSummary(sessionId, event, options);
+        summary = await fallbackSummary(sessionId, event, options);
       }
     }
   }
@@ -328,14 +328,17 @@ async function closeTurnLocked(
  * @param options - Tracking options.
  * @returns The degraded summary, or undefined when even that failed.
  */
-function fallbackSummary(sessionId: string, stopEvent: AgentWatchEvent, options: TrackTurnOptions): TurnSummaryEvent | undefined {
+async function fallbackSummary(sessionId: string, stopEvent: AgentWatchEvent, options: TrackTurnOptions): Promise<TurnSummaryEvent | undefined> {
   try {
     const summary = buildTurnSummary({
       provider: stopEvent.agent.provider,
       surface: resolveSurface(stopEvent.agent.provider, options.env),
       sessionId,
       turnId: stopEvent.session.turnId,
-      developerId: options.config.developerEmail,
+      // The same resolver the healthy close uses: on a machine that names its
+      // developer through git alone, reading the config verbatim here would
+      // ship a turn attributed to nobody.
+      developerId: await developerIdentity(options.config.developerEmail, options.cwd, { home: options.env.home }),
       installationId: options.config.installationId,
       git: stopEvent.git,
       featureCandidates: stopEvent.feature?.candidates,

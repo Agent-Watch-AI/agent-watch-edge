@@ -99,3 +99,45 @@ describe('otel signal selection', () => {
     expect(parseOtelSignals('logz')).toBeUndefined();
   });
 });
+
+describe('a bearer may only travel over a URL that cannot leak it', () => {
+  let world: TempWorld;
+
+  beforeEach(async () => {
+    world = await makeTempEnv();
+  });
+  afterEach(() => world.cleanup());
+
+  /** Load a hand-edited config file, which is how capture is documented to be enabled. */
+  async function loadWith(overrides: Record<string, unknown>) {
+    await writeJson(resolvePaths(world.env).configFile, { ...defaultConfig(), token: 'aw_edge_secret', ...overrides });
+
+    return loadConfig(resolvePaths(world.env));
+  }
+
+  it('accepts https anywhere and http on loopback', async () => {
+    expect((await loadWith({ endpoint: 'https://backend.example.com' })).state).toBe('ok');
+    expect((await loadWith({ endpoint: 'http://127.0.0.1:4318' })).state).toBe('ok');
+    expect((await loadWith({ endpoint: 'http://localhost:4318' })).state).toBe('ok');
+  });
+
+  it('refuses plain http to anywhere else, so the token cannot cross a network in cleartext', async () => {
+    const result = await loadWith({ endpoint: 'http://backend.example.com' });
+
+    expect(result.state).toBe('invalid');
+    expect(result.state === 'invalid' ? result.error : '').toContain('https');
+  });
+
+  it('refuses the schemes z.string().url() would otherwise wave through', async () => {
+    for (const endpoint of ['file:///etc/passwd', 'javascript:alert(1)', 'data:text/plain,x', 'ftp://backend.example.com']) {
+      expect((await loadWith({ endpoint })).state, endpoint).toBe('invalid');
+    }
+  });
+
+  it('applies the same rule to every URL field, including a per-root override', async () => {
+    expect((await loadWith({ eventsUrl: 'http://backend.example.com/v1/events' })).state).toBe('invalid');
+    expect((await loadWith({ otlpUrl: 'http://backend.example.com' })).state).toBe('invalid');
+    expect((await loadWith({ enforcementUrl: 'http://backend.example.com/v1/decide' })).state).toBe('invalid');
+    expect((await loadWith({ roots: { '/repo': { endpoint: 'http://backend.example.com' } } })).state).toBe('invalid');
+  });
+});

@@ -7,6 +7,7 @@ import { findExecutable } from '../core/which.js';
 import { isDisabled } from '../storage/disabled.js';
 import { loadInstallState } from '../storage/install-state.js';
 import { resolvePaths } from '../storage/paths.js';
+import { BackendAuthBlock } from '../transport/auth-block.js';
 import { DeliveryStats } from '../transport/delivery-stats.js';
 import { HttpTransport } from '../transport/http-transport.js';
 import { EventQueue } from '../transport/queue.js';
@@ -74,6 +75,16 @@ export async function buildQueue(context: CliContext): Promise<EventQueue> {
  */
 export function buildDeliveryStats(context: CliContext): DeliveryStats {
   return new DeliveryStats(identityPaths(context.paths, context.config.token).statsFile, context.env.now, context.paths.locksDir);
+}
+
+/**
+ * The standing credential refusal for this context.
+ *
+ * @param context - Resolved CLI context.
+ * @returns The block.
+ */
+export function buildAuthBlock(context: CliContext): BackendAuthBlock {
+  return new BackendAuthBlock(identityPaths(context.paths, context.config.token).authBlockFile, context.env.now);
 }
 
 /**

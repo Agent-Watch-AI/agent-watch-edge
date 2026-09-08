@@ -70,6 +70,20 @@ export interface DrainStats {
   readonly skipped: boolean;
 }
 
+/**
+ * A standing refusal of this identity's credential by one destination.
+ *
+ * `since` is when the refusals started, not when the last one happened: it is
+ * the number an administrator needs to tell "rotated an hour ago" from
+ * "revoked last week and nobody noticed".
+ */
+export interface AuthBlockState {
+  readonly destination: string;
+  /** The refusing HTTP status, 401 or 403. */
+  readonly status: number;
+  readonly since: string;
+}
+
 export interface DrainStatsRecorder {
   recordRejected(count: number): Promise<void>;
   recordDropped(count: number): Promise<void>;

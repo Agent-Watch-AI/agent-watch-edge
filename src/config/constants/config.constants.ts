@@ -27,6 +27,18 @@ export const OTEL_NONE = 'none';
 
 /** Backend routes derived from the configured base endpoint. */
 export const EVENTS_PATH = '/v1/events';
+
+/**
+ * Hosts a plain-`http:` backend URL is allowed to name.
+ *
+ * A local collector and the test suite are the only legitimate `http:`
+ * destinations; anywhere else the bearer and the captured content would cross a
+ * network in cleartext.
+ */
+export const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+/** Said to whoever wrote the URL, so the remedy is in the message. */
+export const DELIVERABLE_URL_MESSAGE = 'must be an https:// URL (http:// is allowed for localhost only)';
 export const OTLP_BASE_PATH = '/v1/otlp';
 export const ENFORCEMENT_PATH = '/v1/enforcement/decision';
 

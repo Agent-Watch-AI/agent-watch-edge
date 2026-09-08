@@ -69,3 +69,41 @@ describe('sanitizeValue', () => {
     expect(sanitizeValue(input)).toEqual(input);
   });
 });
+
+describe('sanitizeValue on object keys', () => {
+  it('scrubs a secret that sits in a key, not only in a value', () => {
+    const out = sanitizeValue({ 'sk-abcdefghijklmnopqrstuvwx': 'value', note: 'see sk-abcdefghijklmnopqrstuvwx' });
+
+    expect(JSON.stringify(out)).not.toContain('sk-abcdefghijklmnopqrstuvwx');
+    expect(Object.keys(out)).toContain('note');
+  });
+
+  it('scrubs a secret key whose value is not a string', () => {
+    expect(JSON.stringify(sanitizeValue({ 'ghp_abcdefghijklmnopqrstuv123456': 1 }))).not.toContain('ghp_abcdefghijklmnopqrstuv123456');
+  });
+
+  it('keeps both entries when two distinct keys redact to the same string', () => {
+    const out = sanitizeValue({ 'ghp_abcdefghijklmnopqrstuv123456': 1, 'ghp_zyxwvutsrqponmlkjihg654321': 2 });
+    const values = Object.values(out);
+
+    expect(Object.keys(out)).toHaveLength(2);
+    expect(values).toContain(1);
+    expect(values).toContain(2);
+  });
+
+  it('still drops the value under a sensitive key after the key itself is scrubbed', () => {
+    const out = sanitizeValue({ 'authorization-ghp_abcdefghijklmnopqrstuv123456': 'Bearer topsecrettoken' });
+
+    expect(Object.values(out)).toEqual([REDACTED]);
+    expect(JSON.stringify(out)).not.toContain('ghp_abcdefghijklmnopqrstuv123456');
+  });
+
+  it('keeps a __proto__ own key instead of silently dropping it, and does not retarget the copy', () => {
+    const input = JSON.parse('{"__proto__":{"polluted":1},"a":2}') as Record<string, unknown>;
+    const out = sanitizeValue(input) as Record<string, unknown> & { polluted?: unknown };
+
+    expect(Object.keys(out)).toEqual(['__proto__', 'a']);
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype);
+    expect(out.polluted).toBeUndefined();
+  });
+});

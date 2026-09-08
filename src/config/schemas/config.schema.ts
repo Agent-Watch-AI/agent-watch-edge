@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import type { CONTENT_CAPTURE_KEYS } from '../constants/config.constants.js';
 import {
+  DELIVERABLE_URL_MESSAGE,
+  LOOPBACK_HOSTS,
   DEFAULT_DRAIN_BATCH_SIZE,
   DEFAULT_ENFORCEMENT_CACHE_TTL_MS,
   DEFAULT_ENFORCEMENT_TIMEOUT_MS,
@@ -120,6 +122,54 @@ export const emitSchema = z
   .strip();
 
 /**
+ * A URL the edge may send a bearer and captured content to.
+ *
+ * `z.string().url()` alone accepts `file:`, `javascript:`, `data:`, `ftp:` and
+ * plain `http:` to anywhere. Hand-editing `~/.agentwatch/config.json` is the
+ * documented way to enable content capture, so one slipped character or one
+ * templating bug in an MDM payload would otherwise ship
+ * `Authorization: Bearer <token>` plus every captured prompt in cleartext, with
+ * nothing in `setup`, `status` or `doctor` saying so.
+ *
+ * The check lives in the schema because the schema is what governs every
+ * subsequent *load* of the file, not just the interactive path that wrote it.
+ * `http:` survives for loopback only, which is what the tests and a local
+ * collector need and is not a network hop anything can intercept.
+ *
+ * @param value - The URL as written in the file.
+ * @returns True when the edge may talk to it.
+ */
+export function isDeliverableUrl(value: string): boolean {
+  const url = parseUrl(value);
+
+  if (!url) return false;
+
+  if (url.protocol === 'https:') return true;
+
+  return url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname);
+}
+
+/**
+ * Parse a URL without throwing.
+ *
+ * @param value - Candidate URL.
+ * @returns The parsed URL, or undefined when it is not one.
+ */
+function parseUrl(value: string): URL | undefined {
+  try {
+    return new URL(value);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Every backend URL in the file, validated the same way. One definition, so a
+ * fifth URL field cannot be added without the rule.
+ */
+const deliverableUrl = z.string().url().refine(isDeliverableUrl, { message: DELIVERABLE_URL_MESSAGE });
+
+/**
  * One project root's identity. Only the fields that decide *who* the events
  * belong to and *where* they go: capture and emission stay machine-wide, so a
  * second tenant cannot quietly widen what is collected under it.
@@ -129,9 +179,9 @@ export const emitSchema = z
  */
 export const rootOverrideSchema = z
   .object({
-    endpoint: z.string().url().optional(),
-    eventsUrl: z.string().url().optional(),
-    otlpUrl: z.string().url().optional(),
+    endpoint: deliverableUrl.optional(),
+    eventsUrl: deliverableUrl.optional(),
+    otlpUrl: deliverableUrl.optional(),
     token: z.string().optional(),
     installationId: z.string().optional(),
     developerEmail: z.string().optional()
@@ -143,11 +193,11 @@ export const configSchema = z
   .object({
     schemaVersion: z.literal(1).default(1),
     /** Backend base URL, e.g. https://backend.example.com */
-    endpoint: z.string().url().optional(),
+    endpoint: deliverableUrl.optional(),
     /** Overrides; derived from endpoint when absent. */
-    eventsUrl: z.string().url().optional(),
-    otlpUrl: z.string().url().optional(),
-    enforcementUrl: z.string().url().optional(),
+    eventsUrl: deliverableUrl.optional(),
+    otlpUrl: deliverableUrl.optional(),
+    enforcementUrl: deliverableUrl.optional(),
     token: z.string().optional(),
     installationId: z.string().optional(),
     /** Developer identity attached to turn summaries; falls back to `git config user.email`. */

@@ -14,6 +14,7 @@ import { developerIdentity, runGit } from '../git/git-context.js';
 import { runSnapshotPipeline } from '../snapshot/snapshot-pipeline.js';
 import { SnapshotStateStore } from '../snapshot/snapshot-state.js';
 import { SNAPSHOT_BUDGET_MS } from '../snapshot/constants/snapshot.constants.js';
+import { BackendAuthBlock } from '../transport/auth-block.js';
 import { BackendCooldown } from '../transport/cooldown.js';
 import { DeliveryStats } from '../transport/delivery-stats.js';
 import { deliverEvents } from '../transport/delivery.js';
@@ -307,7 +308,8 @@ async function deliver(state: HookPipelineState): Promise<StepOutcome<HookPipeli
     buildQueue(state),
     state.config.delivery.drainBatchSize,
     new BackendCooldown(identity.cooldownFile, state.env.now),
-    new DeliveryStats(identity.statsFile, state.env.now, state.paths.locksDir)
+    new DeliveryStats(identity.statsFile, state.env.now, state.paths.locksDir),
+    new BackendAuthBlock(identity.authBlockFile, state.env.now)
   );
 
   debugLog(`delivery: sent=${delivery.delivered} queued=${delivery.queued} drained=${delivery.drained} rejected=${delivery.rejected}`);

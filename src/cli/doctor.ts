@@ -14,9 +14,12 @@ import { developerIdentity } from '../git/git-context.js';
 import { providers } from '../providers/registry.js';
 import type { AgentProvider, SetupContext } from '../providers/types/provider.types.js';
 import { unattributedCount, unattributedQueue } from '../transport/queue-partition.js';
-import { buildCliContext, buildHookCommand, buildQueue } from './context.js';
+import { AUTH_REJECTED_STATUSES, CONTENT_TYPE_HEADER, JSON_CONTENT_TYPE } from '../transport/constants/transport.constants.js';
+import { edgeHeaders } from '../transport/headers.js';
+import { buildAuthBlock, buildCliContext, buildHookCommand, buildQueue } from './context.js';
 import { installedHookChecks } from './hook-check.js';
 import {
+  BACKEND_CONNECTIVITY_CHECK,
   BACKEND_PROBE_TIMEOUT_MS,
   CLAUDE_MIN_VERSION_FOR_PROMPT_ID,
   CLAUDE_VERSION_TIMEOUT_MS,
@@ -207,7 +210,7 @@ async function connectivityChecks(context: CliContext): Promise<Check[]> {
   const checks: Check[] = [];
   const url = eventsUrl(context.config);
 
-  if (url) checks.push(await probeBackend(url));
+  checks.push(url ? await probeBackend(url, context) : { name: BACKEND_CONNECTIVITY_CHECK, level: 'warn', detail: 'no backend configured yet — run `agentwatch setup`' });
 
   const otlp = otlpBaseUrl(context.config);
 
@@ -217,23 +220,47 @@ async function connectivityChecks(context: CliContext): Promise<Check[]> {
 }
 
 /**
- * Post an empty batch and report what came back.
+ * Post an empty batch as the configured install, and say what came back.
+ *
+ * Authenticated on purpose: an anonymous probe answers a question nobody asked.
+ * It made a healthy install whose backend requires auth *warn* on 401, and made
+ * the single most common misconfiguration — a wrong, expired or revoked token —
+ * indistinguishable from success. Sending the same headers a real delivery
+ * sends is what makes the verdict a statement about *this* install.
+ *
+ * It runs whatever the local state says, block or no block: the diagnostic is
+ * the operator asking the backend a direct question, and must never be answered
+ * from a cache. A 2xx is therefore also the proof that lifts a standing block.
  *
  * @param url - The events URL.
+ * @param context - Resolved CLI context, for the credential and the block.
  * @returns The check.
  */
-async function probeBackend(url: string): Promise<Check> {
+async function probeBackend(url: string, context: CliContext): Promise<Check> {
+  const name = BACKEND_CONNECTIVITY_CHECK;
+
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { [CONTENT_TYPE_HEADER]: JSON_CONTENT_TYPE, ...edgeHeaders(context.config.token, context.config.installationId) },
       body: JSON.stringify({ events: [] }),
+      redirect: 'error',
       signal: AbortSignal.timeout(BACKEND_PROBE_TIMEOUT_MS)
     });
 
-    return { name: 'backend connectivity', level: response.ok ? 'ok' : 'warn', detail: `${url} -> HTTP ${response.status}` };
+    if (response.ok) {
+      await buildAuthBlock(context).clear();
+
+      return { name, level: 'ok', detail: `${url} -> HTTP ${response.status}` };
+    }
+
+    if (AUTH_REJECTED_STATUSES.has(response.status)) {
+      return { name, level: 'fail', detail: `${url} -> HTTP ${response.status}: credential rejected — the configured token is wrong, expired or revoked` };
+    }
+
+    return { name, level: 'warn', detail: `${url} -> HTTP ${response.status}` };
   } catch (error) {
-    return { name: 'backend connectivity', level: 'fail', detail: `${url} unreachable (${(error as Error).name})` };
+    return { name, level: 'fail', detail: `${url} unreachable (${(error as Error).name})` };
   }
 }
 

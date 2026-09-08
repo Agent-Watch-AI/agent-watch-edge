@@ -1,5 +1,7 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import process from 'node:process';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { CONTENT_CAPTURE_ON, makeTempEnv, queueEntryFiles, writeJson, type TempWorld } from './helpers.js';
 import { readTurnUsage } from '../src/turns/claude-transcript.js';
@@ -864,5 +866,60 @@ describe('the session model memo is written on the session hook alone', () => {
     // The session's own hook is the one that writes it, for every agent.
     await track(codexSessionStart);
     expect(await store.readModel(codexStop.session_id)).toBe('gpt-5.2-codex');
+  });
+});
+
+describe('a degraded turn summary names the same developer as a healthy one', () => {
+  let world: TempWorld;
+  let repoDir: string;
+
+  beforeEach(async () => {
+    world = await makeTempEnv();
+    repoDir = path.join(world.home, 'repo');
+    await fs.mkdir(repoDir, { recursive: true });
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: repoDir, stdio: 'pipe', env: { ...process.env, HOME: world.home } });
+
+    git('init');
+    git('config', 'user.email', 'git-only@company.com');
+    git('config', 'user.name', 'Git Only');
+  });
+  afterEach(() => world.cleanup());
+
+  /** No `developerEmail`: this machine can only be named by git. */
+  function track(payload: unknown) {
+    const config = configSchema.parse({ ...defaultConfig(), developerEmail: undefined });
+    const paths = resolvePaths(world.env);
+
+    return trackTurn({
+      agentId: 'codex',
+      rawPayload: payload,
+      events: parseCodexHookEvent(payload, { env: world.env, config }),
+      config,
+      turnsDir: paths.turnsDir,
+      locksDir: paths.locksDir,
+      env: world.env,
+      cwd: repoDir
+    });
+  }
+
+  it('resolves the git identity on the degraded close, not only on the healthy one', async () => {
+    await track({ ...codexUserPromptSubmit, cwd: repoDir });
+
+    const healthy = await track({ ...codexStop, cwd: repoDir });
+
+    expect(healthy).toBeDefined();
+    expect(healthy!.developer_id).toBe('git-only@company.com');
+
+    // Sabotage turn state so the close throws and the degraded path runs.
+    const paths = resolvePaths(world.env);
+
+    await fs.mkdir(path.dirname(paths.turnsDir), { recursive: true });
+    await fs.rm(paths.turnsDir, { recursive: true, force: true });
+    await fs.writeFile(paths.turnsDir, 'not a directory');
+
+    const degraded = await track({ ...codexStop, session_id: 'sess-degraded', cwd: repoDir });
+
+    expect(degraded).toBeDefined();
+    expect(degraded!.developer_id).toBe('git-only@company.com');
   });
 });

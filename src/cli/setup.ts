@@ -8,7 +8,7 @@ import { CONTENT_CAPTURE_KEYS } from '../config/constants/config.constants.js';
 import { asRecord } from '../core/object.js';
 import type { AgentWatchConfig, OtelConfig, RootOverride } from '../config/types/config.types.js';
 import { collectGitContext, developerIdentity } from '../git/git-context.js';
-import { ManualEnrollmentProvider } from '../enrollment/manual-enrollment.js';
+import { resolveEnrollment } from '../enrollment/enrollment.js';
 import type { EnrollmentResult } from '../enrollment/types/enrollment.types.js';
 import { providers } from '../providers/registry.js';
 import type { AgentProvider, DetectionResult, SetupContext, SetupOutcome } from '../providers/types/provider.types.js';
@@ -267,7 +267,7 @@ async function enroll(
   ask: ((question: string) => Promise<string>) | undefined
 ): Promise<EnrollmentResult | { error: string }> {
   try {
-    return await new ManualEnrollmentProvider().enroll({
+    return await resolveEnrollment({
       setupUrl: options.setupUrl,
       endpoint: options.endpoint ?? inherited.endpoint,
       // Flag, then environment, then what is already stored. An MDM policy runs

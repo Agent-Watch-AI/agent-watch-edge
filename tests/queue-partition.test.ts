@@ -168,9 +168,13 @@ describe('two tenants on one machine, through the hook path', () => {
     });
 
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+    server.keepAliveTimeout = 1;
   });
 
   afterEach(async () => {
+    server.closeAllConnections();
+
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await world.cleanup();
   });

@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -101,15 +102,32 @@ describe('claude transcript usage', () => {
       { type: 'assistant', timestamp: '2026-08-06T18:01:00.000Z', message: { id: 'early', model: 'claude-sonnet-4', usage: { input_tokens: 10, output_tokens: 5 } } }
     ]);
     const lateEntry = { type: 'assistant', timestamp: '2026-08-06T18:02:00.000Z', message: { id: 'late', model: 'claude-sonnet-4', usage: { input_tokens: 20, output_tokens: 7 } } };
-    const appended = new Promise<void>((resolve) => {
-      setTimeout(() => fs.appendFile(file, '\n' + JSON.stringify(lateEntry)).then(resolve, resolve), 50);
-    });
 
-    const usage = await readTurnUsage(file, since, { attempts: 6, delayMs: 150 });
+    // The flush is triggered by the *second* read rather than by a timer. Two
+    // passes that agree end the loop, and with `minSettleMs` unset they agree
+    // as early as the second pass — so a timed append that a loaded machine
+    // delays past the first delay window makes this assert 10, which is what it
+    // did on the Node 24 runner. Appended synchronously, and with `node:fs`
+    // rather than the patched promises API, so nothing re-enters this hook.
+    let reads = 0;
+    const realReadFile = fs.readFile;
 
-    await appended;
-    expect(usage!.inputTokens).toBe(30);
-    expect(usage!.outputTokens).toBe(12);
+    (fs as { readFile: typeof fs.readFile }).readFile = ((target: Parameters<typeof fs.readFile>[0], ...rest: unknown[]) => {
+      reads += 1;
+
+      if (reads === 2 && target === file) fsSync.appendFileSync(file, '\n' + JSON.stringify(lateEntry));
+
+      return (realReadFile as (...args: unknown[]) => unknown)(target, ...rest);
+    }) as typeof fs.readFile;
+
+    try {
+      const usage = await readTurnUsage(file, since, { attempts: 6, delayMs: 10 });
+
+      expect(usage!.inputTokens).toBe(30);
+      expect(usage!.outputTokens).toBe(12);
+    } finally {
+      (fs as { readFile: typeof fs.readFile }).readFile = realReadFile;
+    }
   });
 
   it('waits out the settle window before trusting an early stable snapshot', async () => {

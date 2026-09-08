@@ -37,7 +37,10 @@ jobs:
       # --ignore-scripts, and install is the remaining place a transitive
       # dependency could execute code in the job that builds the tarball.
       - run: npm ci --ignore-scripts
-      - run: npm test
+      # Coverage, not just a green suite: the per-directory floors in
+      # vitest.config.ts are what makes "the privacy path is tested" a number
+      # a reviewer can read rather than a claim.
+      - run: npm run coverage
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build

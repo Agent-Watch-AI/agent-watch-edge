@@ -15,7 +15,7 @@ When writing, refactoring, or generating code in `@agent-watch-ai/edge`, strictl
 - **Types**: `src/<module>/types/<name>.types.ts`. `readonly` by default.
 - **Constants**: `src/<module>/constants/<name>.constants.ts` — magic strings, static arrays, lookup tables, pre-compiled regex.
 - **Schemas**: `src/<module>/schemas/<name>.schema.ts` — zod validators. Dependency direction is `schemas → types → logic`, never back.
-- **Public surface**: every module has an `index.ts` with explicit exports and a comment saying what the module is for.
+- **Public surface**: every module has an `index.ts` with explicit exports and a comment saying what the module is for. Nothing in `src/`, `tests/` or `example/` imports one — internal code imports concrete files, and `package.json` `exports` publishes five specific files, none of them a barrel. This is a convention on the maintainer's judgement, not a rule anything enforces: keep the barrels and accept keeping them in step with every rename, or drop them and this bullet together.
 - **Imports**: prefer type-only imports (`import type { ... }`).
 
 ## 3. High Performance Guidelines

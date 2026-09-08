@@ -324,7 +324,10 @@ export class EventQueue {
    */
   private async rememberScan(name: string): Promise<void> {
     try {
-      await fs.writeFile(this.cursorFile(), name, { mode: SECRET_FILE_MODE });
+      // The same write as every other file in the partition, for the same
+      // reason: it renames a 0600 temp file over the target, so a cursor
+      // somebody pre-created as a symlink is replaced rather than followed.
+      await writeFileAtomic(this.cursorFile(), name, SECRET_FILE_MODE);
     } catch {
       // Same rule as the sweep marker: the drain runs on the hook path, and
       // failing to remember a position must never fail the agent's turn.

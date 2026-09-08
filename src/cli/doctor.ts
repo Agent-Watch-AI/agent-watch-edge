@@ -13,6 +13,7 @@ import { findExecutable } from '../core/which.js';
 import { developerIdentity } from '../git/git-context.js';
 import { providers } from '../providers/registry.js';
 import type { AgentProvider, SetupContext } from '../providers/types/provider.types.js';
+import { SECRET_FILE_MODE } from '../storage/constants/storage.constants.js';
 import { unattributedCount, unattributedQueue } from '../transport/queue-partition.js';
 import { AUTH_REJECTED_STATUSES, CONTENT_TYPE_HEADER, JSON_CONTENT_TYPE } from '../transport/constants/transport.constants.js';
 import { edgeHeaders } from '../transport/headers.js';
@@ -504,7 +505,12 @@ async function writableCheck(name: string, dir: string): Promise<Check> {
 
     const probe = path.join(dir, `.probe-${process.pid}`);
 
-    await fs.writeFile(probe, 'ok');
+    // `rm` then an exclusive create: `rm` unlinks a symlink rather than
+    // following it, and `wx` refuses to write through one that appears in
+    // between. The data root can be a shared directory — `AGENTWATCH_DATA_DIR`
+    // decides — and this is the one write the diagnostic makes.
+    await fs.rm(probe, { force: true });
+    await fs.writeFile(probe, 'ok', { flag: 'wx', mode: SECRET_FILE_MODE });
     await fs.rm(probe, { force: true });
 
     return { name, level: 'ok', detail: dir };

@@ -1,4 +1,6 @@
 import fs from 'node:fs/promises';
+import { writeFileAtomic } from './atomic-file.js';
+import { SECRET_FILE_MODE } from './constants/storage.constants.js';
 
 /**
  * Whether a periodic cleanup is due, claiming it when it is.
@@ -24,7 +26,12 @@ export async function claimSweep(marker: string, intervalMs: number, nowMs: numb
   if (last !== undefined && nowMs - last < intervalMs) return false;
 
   try {
-    await fs.writeFile(marker, '');
+    // Through the same write every other file in the state directory uses: it
+    // renames a 0600 temp file over the target, so a marker somebody
+    // pre-created as a symlink is replaced rather than followed, and the state
+    // root — which `AGENTWATCH_DATA_DIR` can point at a shared temp directory —
+    // never holds a default-mode file this package created.
+    await writeFileAtomic(marker, '', SECRET_FILE_MODE);
 
     return true;
   } catch {

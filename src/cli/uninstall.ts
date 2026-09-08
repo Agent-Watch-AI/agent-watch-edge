@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import { getProvider, providerIds, providers } from '../providers/registry.js';
+import { providerIds, providers } from '../providers/registry.js';
 import type { AgentProvider, SetupContext, SetupOutcome } from '../providers/types/provider.types.js';
 import { saveInstallState } from '../storage/install-state.js';
 import type { InstallState } from '../storage/types/storage.types.js';
@@ -87,7 +87,9 @@ export async function runUninstall(options: UninstallOptions): Promise<number> {
 function resolveTargets(agent: string | undefined): readonly AgentProvider[] | undefined {
   if (!agent) return providers;
 
-  const provider = getProvider(agent);
+  // This command already holds the eager list, so it names the one it wants
+  // rather than loading a sixth copy of it.
+  const provider = providers.find((candidate) => candidate.id === agent);
 
   return provider ? [provider] : undefined;
 }

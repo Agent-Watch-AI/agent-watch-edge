@@ -78,7 +78,7 @@ export function runHookPipeline(input: HookPipelineInput): Promise<FlowResult<Ho
   const initial: HookPipelineState = {
     ...input,
     cwd: resolvePayloadCwd(input),
-    config: input.globalConfig,
+    config: input.globalConfig.config,
     events: [],
     outbound: []
   };
@@ -100,7 +100,7 @@ export function runHookPipeline(input: HookPipelineInput): Promise<FlowResult<Ho
  * @returns The state with its effective config resolved.
  */
 async function resolveContext(state: HookPipelineState): Promise<StepOutcome<HookPipelineState>> {
-  const effective = await loadEffectiveConfig(state.paths, state.cwd);
+  const effective = await loadEffectiveConfig(state.paths, state.cwd, state.globalConfig);
 
   return next({ ...state, config: effective.config });
 }
@@ -299,7 +299,7 @@ async function deliver(state: HookPipelineState): Promise<StepOutcome<HookPipeli
 
   // `globalConfig`, not `config`: roots are stripped from the effective config
   // once applied, and the question is what the *machine* sends as.
-  await settleLegacyQueue(state.paths.queueDir, state.config.token, servesMultipleIdentities(state.globalConfig));
+  await settleLegacyQueue(state.paths.queueDir, state.config.token, servesMultipleIdentities(state.globalConfig.config));
 
   const identity = identityPaths(state.paths, state.config.token);
   const delivery = await deliverEvents(

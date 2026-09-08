@@ -156,7 +156,11 @@ async function readTailBytes(transcriptPath: string, size: number): Promise<stri
   const handle = await fs.open(transcriptPath, 'r');
 
   try {
-    const buffer = Buffer.alloc(TRANSCRIPT_TAIL_BYTES);
+    // Unzeroed: `read` fills [0, bytesRead) and only that slice is ever decoded,
+    // so no uninitialized byte can escape — and the settle loop runs this up to
+    // USAGE_RETRY.attempts times per Stop, each of which was zero-filling a
+    // whole tail buffer before overwriting it.
+    const buffer = Buffer.allocUnsafe(TRANSCRIPT_TAIL_BYTES);
     const { bytesRead } = await handle.read(buffer, 0, TRANSCRIPT_TAIL_BYTES, size - TRANSCRIPT_TAIL_BYTES);
     const raw = buffer.subarray(0, bytesRead).toString('utf8');
 

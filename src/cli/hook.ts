@@ -3,7 +3,7 @@ import { loadConfig } from '../config/config-store.js';
 import { debugLog, warnLog } from '../core/logger.js';
 import { runHookPipeline } from '../pipeline/hook-pipeline.js';
 import type { HookPipelineState } from '../pipeline/types/pipeline.types.js';
-import { getProvider } from '../providers/registry.js';
+import { loadProvider } from '../providers/loaders.js';
 import type { AgentProvider, ProviderHookResponse } from '../providers/types/provider.types.js';
 import { isDisabled } from '../storage/disabled.js';
 import { resolvePaths } from '../storage/paths.js';
@@ -30,7 +30,7 @@ export type { HookRunOptions } from './types/cli.types.js';
  * @returns The process exit code; always one the agent tolerates.
  */
 export async function runHook(agentId: string, options: HookRunOptions): Promise<number> {
-  const provider = getProvider(agentId);
+  const provider = await loadProvider(agentId);
 
   if (!provider) {
     warnLog(`unknown agent "${agentId}"; passing through`);
@@ -143,7 +143,7 @@ async function processPayload(provider: AgentProvider, payload: unknown, options
     provider,
     env: options.env,
     paths,
-    globalConfig: loaded.config,
+    globalConfig: loaded,
     payload,
     dryRun: options.dryRun === true
   });

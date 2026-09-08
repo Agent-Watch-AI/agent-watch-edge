@@ -64,7 +64,16 @@ function decisionUrl(request: DecisionRequest): string {
 
   // Only when there is one. A collector that never learned its model asks the
   // question it asked before this parameter existed, byte for byte.
-  if (request.model) url.searchParams.set(MODEL_PARAM, request.model);
+  if (request.model) {
+    url.searchParams.set(MODEL_PARAM, request.model);
+    // Named in the debug log because a cap is defined against the spelling the
+    // platform sees in reported usage, and a model stated under a different
+    // spelling matches no cap — which is indistinguishable, from the answer
+    // alone, from a model nobody capped. This line is what makes the difference
+    // visible. A model id is not content; nothing else about the request is
+    // logged.
+    debugLog('enforcement: asking about model', request.model);
+  }
 
   return url.toString();
 }

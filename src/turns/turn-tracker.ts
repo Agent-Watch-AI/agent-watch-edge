@@ -160,12 +160,15 @@ async function rememberModelSafely(
 ): Promise<void> {
   const model = event.ai?.model;
 
-  if (!model) return;
-
   try {
-    await store.rememberModel(sessionId, model);
+    // A start that names no model actively forgets, rather than leaving whatever
+    // a previous session under the same id left behind: a SessionEnd cleanup can
+    // fail, `--resume` reuses the id, and Claude does not name a model on every
+    // start. Inheriting one would make the gate state a model this session is
+    // not on.
+    await (model ? store.rememberModel(sessionId, model) : store.forgetModel(sessionId));
   } catch (error) {
-    debugLog('could not remember the session model:', error);
+    debugLog('could not record the session model:', error);
   }
 }
 

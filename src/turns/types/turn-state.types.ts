@@ -33,7 +33,7 @@ export interface ResponseRecord {
 }
 
 /**
- * What model a session is on, and when the agent last said so.
+ * What model a session is on, as the agent named it.
  *
  * Not a `TurnRecord`: it belongs to the session rather than to a turn, is never
  * collected into a summary, and outlives every record until the session ends.

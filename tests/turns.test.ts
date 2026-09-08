@@ -828,6 +828,25 @@ describe('the session model memo is written on the session hook alone', () => {
     });
   }
 
+  it('a start naming no model forgets one left under that id', async () => {
+    // `clear()` at SessionEnd swallows only ENOENT, so a cleanup that failed on
+    // anything else leaves the memo behind — and `--resume` reuses the session
+    // id. Inherited, the gate would state the previous session's model: not "no
+    // model", but a confident wrong answer on a path whose contract is that
+    // anything short of certainty allows the turn.
+    const store = new TurnStateStore(resolvePaths(world.env).turnsDir);
+
+    await store.rememberModel(codexSessionStart.session_id, 'gpt-5.2-codex');
+    expect(await store.readModel(codexSessionStart.session_id)).toBe('gpt-5.2-codex');
+
+    const { model, ...startWithoutModel } = codexSessionStart;
+
+    expect(model).toBeDefined();
+    await track(startWithoutModel);
+
+    expect(await store.readModel(codexSessionStart.session_id)).toBeUndefined();
+  });
+
   it('skips the hooks that must not be pre-empted', async () => {
     // Codex, Cursor, Gemini and Antigravity name the model on every hook, so
     // without narrowing this the memo would be rewritten on the turn-closing

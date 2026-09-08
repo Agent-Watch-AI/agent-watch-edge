@@ -210,9 +210,9 @@ cache. Antigravity has no verified blocking response. This is not a local signed
 enforcement policy or tamper-resistant control.
 
 The request may also carry the model the session is on, so a budget can be set
-on one model. Codex, Cursor and Gemini name their model on every hook, and
-Antigravity on the first event of an execution, so for those the payload the
-gate already holds names it. Claude Code names it only when a session starts, so
+on one model. Codex, Cursor, Gemini and Antigravity all name their
+model on every hook they send, so for those the payload the gate already holds
+names it. Claude Code names it only when a session starts, so
 that one event writes it to `session.json` in that session's own `turns/`
 directory (mode 0600, beside that session's turn records) to be read back at the
 gate.

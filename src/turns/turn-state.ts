@@ -166,6 +166,23 @@ export class TurnStateStore {
   }
 
   /**
+   * Forget which model a session was on.
+   *
+   * Called when a session starts naming no model, which is the one moment this
+   * store knows the memo must not be inherited. `clear` at SessionEnd swallows
+   * only ENOENT, so a cleanup that failed on anything else — EACCES, EBUSY, a
+   * full disk — leaves the memo behind; a session id that is then reused, as
+   * `--resume` does, would have its gate state the *previous* session's model.
+   * That is worse than stating none: it is a confident wrong answer on a path
+   * whose whole contract is that anything short of certainty allows the turn.
+   *
+   * @param sessionId - Provider session id.
+   */
+  async forgetModel(sessionId: string): Promise<void> {
+    await fs.rm(path.join(this.sessionDir(sessionId), SESSION_MODEL_FILE), { force: true });
+  }
+
+  /**
    * The model last remembered for a session.
    *
    * Read on the gate path, where an answer is worth more than completeness: a

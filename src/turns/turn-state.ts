@@ -8,11 +8,12 @@ import { SECRET_FILE_MODE } from '../storage/constants/storage.constants.js';
 import {
   RE_UNSAFE_NAME_CHARS,
   SESSION_DIR_HASH_LENGTH,
+  SESSION_MODEL_FILE,
   USAGE_CLAIM_PREFIX
 } from './constants/turns.constants.js';
-import type { TurnRecord, TurnStateEntry } from './types/turn-state.types.js';
+import type { SessionModelRecord, TurnRecord, TurnStateEntry } from './types/turn-state.types.js';
 
-export type { PromptRecord, ResponseRecord, ToolRecord, TurnRecord, TurnStateEntry } from './types/turn-state.types.js';
+export type { PromptRecord, ResponseRecord, SessionModelRecord, ToolRecord, TurnRecord, TurnStateEntry } from './types/turn-state.types.js';
 
 /**
  * Per-session accumulator for turn summaries.
@@ -74,7 +75,7 @@ export class TurnStateStore {
     const entries: TurnStateEntry[] = [];
 
     for (const name of names) {
-      if (!name.endsWith('.json') || name.startsWith(USAGE_CLAIM_PREFIX)) continue;
+      if (!name.endsWith('.json') || name.startsWith(USAGE_CLAIM_PREFIX) || name === SESSION_MODEL_FILE) continue;
 
       const file = path.join(dir, name);
       const read = await readJsonFile(file);
@@ -143,6 +144,67 @@ export class TurnStateStore {
   }
 
   /**
+   * Remember what model this session is on.
+   *
+   * Claude Code names its model on SessionStart alone, so the hook that gates a
+   * later prompt has no way to learn it from its own payload; the agents that do
+   * name it on every hook simply rewrite the same file. One file per session,
+   * beside the records, cleared with them.
+   *
+   * No timestamp: the sweep ages a session by its files' mtimes, and nothing
+   * else has a use for when the agent said it.
+   *
+   * @param sessionId - Provider session id.
+   * @param model - Model exactly as the collector spells it in reported usage.
+   */
+  async rememberModel(sessionId: string, model: string): Promise<void> {
+    const file = path.join(this.sessionDir(sessionId), SESSION_MODEL_FILE);
+    const record: SessionModelRecord = { model };
+
+    // 0600 like every other file here: what a tenant runs is theirs to know.
+    await writeFileAtomic(file, JSON.stringify(record), SECRET_FILE_MODE);
+  }
+
+  /**
+   * Forget which model a session was on.
+   *
+   * Called when a session starts naming no model, which is the one moment this
+   * store knows the memo must not be inherited. `clear` at SessionEnd swallows
+   * only ENOENT, so a cleanup that failed on anything else — EACCES, EBUSY, a
+   * full disk — leaves the memo behind; a session id that is then reused, as
+   * `--resume` does, would have its gate state the *previous* session's model.
+   * That is worse than stating none: it is a confident wrong answer on a path
+   * whose whole contract is that anything short of certainty allows the turn.
+   *
+   * @param sessionId - Provider session id.
+   */
+  async forgetModel(sessionId: string): Promise<void> {
+    await fs.rm(path.join(this.sessionDir(sessionId), SESSION_MODEL_FILE), { force: true });
+  }
+
+  /**
+   * The model last remembered for a session.
+   *
+   * Read on the gate path, where an answer is worth more than completeness: a
+   * file that is missing, unreadable or no longer the shape this code knows
+   * means the gate states no model, never that it waits or throws.
+   *
+   * @param sessionId - Provider session id.
+   * @returns The model, or undefined when none was usably remembered.
+   */
+  async readModel(sessionId: string): Promise<string | undefined> {
+    const read = await readJsonFile(path.join(this.sessionDir(sessionId), SESSION_MODEL_FILE));
+
+    if (read.state !== 'ok') return undefined;
+
+    const model = asRecord(read.value)?.['model'];
+
+    if (typeof model !== 'string' || model === '') return undefined;
+
+    return model;
+  }
+
+  /**
    * Drop all state for a session, at SessionEnd.
    *
    * @param sessionId - Provider session id.
@@ -156,6 +218,11 @@ export class TurnStateStore {
    *
    * Crashed or abandoned sessions never see a Stop or SessionEnd, and their
    * raw prompt text must not sit on disk indefinitely.
+   *
+   * The session's model memo is one more file in that directory, and the age is
+   * the newest mtime in it, so remembering a model can only ever make a session
+   * look younger than its records — never older, and never sweepable while it is
+   * still being written to.
    *
    * @param maxAgeMs - Age past which a session is considered abandoned.
    */

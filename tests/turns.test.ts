@@ -3,6 +3,11 @@ import path from 'node:path';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { CONTENT_CAPTURE_ON, makeTempEnv, queueEntryFiles, writeJson, type TempWorld } from './helpers.js';
 import { readTurnUsage } from '../src/turns/claude-transcript.js';
+import { SESSION_MODEL_FILE } from '../src/turns/constants/turns.constants.js';
+import { parseCodexHookEvent } from '../src/providers/codex/codex.adapter.js';
+import { codexSessionStart, codexStop, codexUserPromptSubmit } from './fixtures/codex.js';
+import { configSchema } from '../src/config/schemas/config.schema.js';
+import { trackTurn } from '../src/turns/turn-tracker.js';
 import { TurnStateStore } from '../src/turns/turn-state.js';
 import { buildTurnSummary } from '../src/turns/turn-summary.js';
 import { runHook } from '../src/cli/hook.js';
@@ -202,6 +207,47 @@ describe('turn state store', () => {
     expect(await store.collect('sess-fresh')).toHaveLength(1);
   });
 
+  it('remembers the session model, overwrites it and keeps it out of the records', async () => {
+    // Claude Code names its model on SessionStart alone, so the gate of a later
+    // hook can only state it if this file survives between hook processes.
+    const store = new TurnStateStore(path.join(world.home, 'turns'));
+
+    await store.rememberModel('sess-model', 'claude-sonnet-5');
+    expect(await store.readModel('sess-model')).toBe('claude-sonnet-5');
+
+    await store.append('sess-model', 'r1', { kind: 'prompt', at: '2026-08-06T18:00:00.000Z', text: 'hello' });
+    // The memo is not a turn record: it must never reach a summary.
+    expect(await store.collect('sess-model')).toHaveLength(1);
+
+    await store.rememberModel('sess-model', 'claude-opus-5');
+    expect(await store.readModel('sess-model')).toBe('claude-opus-5');
+
+    // 0600: what a tenant runs is theirs to know.
+    const dirs = await fs.readdir(path.join(world.home, 'turns'));
+    const stats = await Promise.all(dirs.map((dir) => fs.stat(path.join(world.home, 'turns', dir, SESSION_MODEL_FILE))));
+
+    expect(stats.map((stat) => stat.mode & 0o777)).toEqual([0o600]);
+
+    await store.clear('sess-model');
+    expect(await store.readModel('sess-model')).toBeUndefined();
+  });
+
+  it('states no model when the memo is missing, garbage or the wrong shape', async () => {
+    const store = new TurnStateStore(path.join(world.home, 'turns'));
+
+    expect(await store.readModel('sess-never')).toBeUndefined();
+
+    await store.rememberModel('sess-broken', 'claude-sonnet-5');
+
+    const [dir] = await fs.readdir(path.join(world.home, 'turns'));
+    const memo = path.join(world.home, 'turns', dir!, SESSION_MODEL_FILE);
+
+    for (const contents of ['not json at all', '{}', '{"model":42}', '{"model":""}', '[]']) {
+      await fs.writeFile(memo, contents);
+      expect(await store.readModel('sess-broken')).toBeUndefined();
+    }
+  });
+
   it('appends, collects in order and clears per session', async () => {
     const store = new TurnStateStore(path.join(world.home, 'turns'));
 
@@ -347,6 +393,22 @@ describe('turn tracking through the hook pipeline', () => {
 
     return { events };
   }
+
+  it('writes the session model on SessionStart and drops it with the session', async () => {
+    // Claude Code names its model on this hook and on no other, so this write is
+    // the only reason a later prompt's gate can state which model it is about.
+    await configure();
+    await hookDryRun({ hook_event_name: 'SessionStart', session_id: 'sess-model', source: 'startup', model: 'claude-sonnet-5', cwd: world.home });
+
+    const turnsDir = resolvePaths(world.env).turnsDir;
+    const store = new TurnStateStore(turnsDir);
+
+    expect(await store.readModel('sess-model')).toBe('claude-sonnet-5');
+
+    await hookDryRun({ hook_event_name: 'SessionEnd', session_id: 'sess-model', reason: 'clear', cwd: world.home });
+    expect(await store.readModel('sess-model')).toBeUndefined();
+    expect(await fs.readdir(turnsDir).catch(() => [])).toEqual([]);
+  });
 
   it('emits only a turn.summary on Stop with provisional transcript usage', async () => {
     await configure();
@@ -735,5 +797,72 @@ describe('turn tracking through the hook pipeline', () => {
     const store = new TurnStateStore(path.join(paths.dataDir, 'turns'));
 
     expect(await store.collect('sess-c')).toEqual([]);
+  });
+});
+
+describe('the session model memo is written on the session hook alone', () => {
+  let world: TempWorld;
+
+  beforeEach(async () => {
+    world = await makeTempEnv();
+  });
+  afterEach(() => world.cleanup());
+
+  /** Codex puts its model on the base event of every hook, Stop included. */
+  function track(payload: unknown) {
+    const events = parseCodexHookEvent(payload, {
+      env: world.env,
+      config: configSchema.parse(defaultConfig())
+    });
+    const paths = resolvePaths(world.env);
+
+    return trackTurn({
+      agentId: 'codex',
+      rawPayload: payload,
+      events,
+      config: configSchema.parse(defaultConfig()),
+      turnsDir: paths.turnsDir,
+      locksDir: paths.locksDir,
+      env: world.env,
+      cwd: world.home
+    });
+  }
+
+  it('a start naming no model forgets one left under that id', async () => {
+    // `clear()` at SessionEnd swallows only ENOENT, so a cleanup that failed on
+    // anything else leaves the memo behind — and `--resume` reuses the session
+    // id. Inherited, the gate would state the previous session's model: not "no
+    // model", but a confident wrong answer on a path whose contract is that
+    // anything short of certainty allows the turn.
+    const store = new TurnStateStore(resolvePaths(world.env).turnsDir);
+
+    await store.rememberModel(codexSessionStart.session_id, 'gpt-5.2-codex');
+    expect(await store.readModel(codexSessionStart.session_id)).toBe('gpt-5.2-codex');
+
+    const { model, ...startWithoutModel } = codexSessionStart;
+
+    expect(model).toBeDefined();
+    await track(startWithoutModel);
+
+    expect(await store.readModel(codexSessionStart.session_id)).toBeUndefined();
+  });
+
+  it('skips the hooks that must not be pre-empted', async () => {
+    // Codex, Cursor, Gemini and Antigravity name the model on every hook, so
+    // without narrowing this the memo would be rewritten on the turn-closing
+    // hook and at SessionEnd. A failed write there is not a lost memo: the catch
+    // in `trackTurn` turns the close into a fallback summary, and at SessionEnd
+    // it leaves the session's raw prompt text undeleted.
+    const store = new TurnStateStore(resolvePaths(world.env).turnsDir);
+
+    await track(codexStop);
+    expect(await store.readModel(codexStop.session_id)).toBeUndefined();
+
+    await track(codexUserPromptSubmit);
+    expect(await store.readModel(codexStop.session_id)).toBeUndefined();
+
+    // The session's own hook is the one that writes it, for every agent.
+    await track(codexSessionStart);
+    expect(await store.readModel(codexStop.session_id)).toBe('gpt-5.2-codex');
   });
 });

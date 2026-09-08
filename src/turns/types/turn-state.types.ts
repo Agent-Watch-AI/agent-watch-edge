@@ -32,6 +32,16 @@ export interface ResponseRecord {
   readonly evidence?: ContentEvidence;
 }
 
+/**
+ * What model a session is on, as the agent named it.
+ *
+ * Not a `TurnRecord`: it belongs to the session rather than to a turn, is never
+ * collected into a summary, and outlives every record until the session ends.
+ */
+export interface SessionModelRecord {
+  readonly model: string;
+}
+
 /** Anything the accumulator persists between hook invocations. */
 export type TurnRecord = PromptRecord | ToolRecord | ResponseRecord;
 

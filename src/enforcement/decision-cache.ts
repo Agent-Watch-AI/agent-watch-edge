@@ -119,13 +119,15 @@ export class DecisionCache {
  * @param checkout - Where the turn is happening, when the caller could say.
  * @param checkout.repository - Canonical remote of that checkout.
  * @param checkout.branch - Its checked-out branch.
+ * @param model - The model stated on the question, when one was stated.
  * @returns The key.
  */
 export function decisionKey(
   url: string,
   token: string,
   developerId: string,
-  checkout?: { repository: string; branch: string }
+  checkout?: { repository: string; branch: string },
+  model?: string
 ): string {
   // The checkout is part of the question, so it is part of the key. Left out, an
   // answer earned on one branch is served on another for as long as the entry
@@ -133,12 +135,36 @@ export function decisionKey(
   // every tenant without a feature cap and every platform predating the field.
   // A cache whose correctness depends on the server remembering to disable it is
   // not correct.
-  const scope = checkout ? `${checkout.repository}|${checkout.branch}` : '';
+  const scope = checkout ? `${separable(checkout.repository)}|${separable(checkout.branch)}` : '';
+  // The same argument for the model: an answer is about one model, so a prompt on
+  // another must not be served it. Appended only when there is one, so a
+  // collector that states no model keeps the key it had before this field —
+  // including the entries an earlier version of it wrote.
+  const stated = model ? `|${separable(model)}` : '';
 
   return crypto
     .createHash('sha256')
-    .update(`${url}|${token}|${developerId}|${scope}`)
+    .update(`${url}|${token}|${developerId}|${scope}${stated}`)
     .digest('hex');
+}
+
+/**
+ * One component of the key, unable to look like two.
+ *
+ * `|` is legal in a git ref name, so joined raw a branch called `main|opus`
+ * stating no model composes exactly what branch `main` stating model `opus`
+ * composes — and one question's cached answer is served for the other, which is
+ * the failure the join exists to prevent.
+ *
+ * Only the separator is escaped, and only where it appears. Every ordinary
+ * repository, branch and model contains none, so their keys are byte-identical
+ * to the ones already on disk: closing this costs no collector a cold cache.
+ *
+ * @param value - A component about to be joined.
+ * @returns The component with any separator made unambiguous.
+ */
+function separable(value: string): string {
+  return value.replaceAll('|', '%7C');
 }
 
 /**

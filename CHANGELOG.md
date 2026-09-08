@@ -74,6 +74,17 @@
 - A refused prompt records no turn state — it never reached a model — while the offline queue still
   drains on that hook. `agentwatch status` reports whether enforcement is on, and the example
   backend gained the route (`BLOCK=1 npm run example` refuses everything).
+- The gate now also states the session's model (`&model=…`), so a budget can be set on one model.
+  Codex, Cursor, Gemini and Antigravity name their model on every hook they send; Claude Code
+  names it only when a session starts, so that one event remembers it in a `session.json` beside
+  that session's turn records (mode 0600, in a directory named by a hash of the session id, never
+  by the id itself) and it is cleared with the rest of the session at SessionEnd, or by the
+  24-hour sweep for a session that crashed. A session that starts naming no model forgets any
+  model remembered under that id rather than inheriting it. It is spelled as the agent names it,
+  which for every agent but Claude Code is the same event the reported usage comes from. The model is part of the local cache key, so an answer about one model
+  is never reused for a prompt on another. The added cost is that one file read: no subprocess, no
+  extra request, and an unreadable memo states no model rather than waiting. A collector that never
+  learns a model asks exactly what it asks today and is answered exactly as today.
 
 ## 0.2.0
 

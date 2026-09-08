@@ -1,9 +1,10 @@
+import type * as ChildProcess from 'node:child_process';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeTempEnv, readJson, type TempWorld } from './helpers.js';
-import { claudePreToolUseBash, claudeUserPromptSubmit } from './fixtures/claude.js';
+import { claudePreToolUseBash, claudeSessionStart, claudeUserPromptSubmit } from './fixtures/claude.js';
 import { codexUserPromptSubmit } from './fixtures/codex.js';
 import { cursorBeforeSubmitPrompt } from './fixtures/cursor.js';
 import { antigravityPreTool } from './fixtures/antigravity.js';
@@ -14,7 +15,31 @@ import type { AgentWatchConfig } from '../src/config/types/config.types.js';
 import { resolveEnforcement } from '../src/enforcement/enforcement.js';
 import { DecisionCache, decisionKey } from '../src/enforcement/decision-cache.js';
 import { ENFORCEMENT_CACHE_FILE_NAME } from '../src/enforcement/constants/enforcement.constants.js';
+import { SESSION_MODEL_FILE } from '../src/turns/constants/turns.constants.js';
 import { resolvePaths } from '../src/storage/paths.js';
+import { TurnStateStore } from '../src/turns/turn-state.js';
+
+/**
+ * Every child process the hook path starts, wherever it starts it from.
+ *
+ * The gate's cost is a product requirement, and the expensive way to learn a
+ * session's model would have been to shell out for it; this is how the test
+ * holds the promise that it does not.
+ */
+const spawned = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof ChildProcess>();
+
+  return {
+    ...actual,
+    execFile: (...args: unknown[]) => {
+      spawned.count += 1;
+
+      return (actual.execFile as unknown as (...rest: unknown[]) => unknown)(...args);
+    }
+  };
+});
 
 const DEVELOPER = 'ivan@acme.test';
 const MESSAGE = 'Ivan Petrov passed his $500 hard limit and has now spent $612 this month.';
@@ -305,15 +330,21 @@ describe('enforcement through the hook', () => {
   let endpoint: string;
   let answer: { status: number; body: unknown };
   let decisionRequests: number;
+  let decisionUrls: string[];
+  let spawnsAtDecision: number[];
 
   beforeEach(async () => {
     world = await makeTempEnv();
     answer = { status: 200, body: { decision: 'block', message: MESSAGE } };
     decisionRequests = 0;
+    decisionUrls = [];
+    spawnsAtDecision = [];
 
     server = http.createServer((request, response) => {
       if ((request.url ?? '').startsWith('/v1/enforcement/decision')) {
         decisionRequests += 1;
+        decisionUrls.push(request.url ?? '');
+        spawnsAtDecision.push(spawned.count);
         response.writeHead(answer.status, { 'content-type': 'application/json' });
         response.end(JSON.stringify(answer.body));
 
@@ -442,6 +473,72 @@ describe('enforcement through the hook', () => {
     expect(JSON.parse(result.stdout).events).toEqual([]);
   });
 
+  it('states the model the session named when it started', async () => {
+    // Claude Code names its model on SessionStart and on no other hook, so this
+    // is the whole point of remembering it: the prompt's own payload is silent.
+    answer = { status: 200, body: { decision: 'allow' } };
+
+    await hook('claude', claudeSessionStart);
+    await hook('claude', claudeUserPromptSubmit);
+
+    expect(decisionUrls).toHaveLength(1);
+    expect(new URL(decisionUrls[0]!, endpoint).searchParams.get('model')).toBe('claude-sonnet-5');
+  });
+
+  it('asks what it asked before this parameter existed when nothing named a model', async () => {
+    // No SessionStart, so nothing was ever learned. A collector that states no
+    // model must remain a fully supported caller, byte for byte.
+    answer = { status: 200, body: { decision: 'allow' } };
+
+    await hook('claude', claudeUserPromptSubmit);
+
+    const asked = new URL(decisionUrls[0]!, endpoint);
+
+    expect(asked.searchParams.has('model')).toBe(false);
+    expect([...asked.searchParams.keys()]).toEqual(['developer_id']);
+  });
+
+  it('pays for the model with one file read, no second request and no child process', async () => {
+    // What FR-019 can be held to in CI. The expensive ways to learn a session's
+    // model — shell out for it, or ask the platform — are the two things this
+    // counts, and the cheap way is one small file beside the turn records.
+    answer = { status: 200, body: { decision: 'allow' } };
+
+    await hook('claude', claudeSessionStart);
+
+    const reads: string[] = [];
+    const realReadFile = fs.readFile;
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation((async (file: Parameters<typeof fs.readFile>[0], ...rest: unknown[]) => {
+      reads.push(String(file));
+
+      return (realReadFile as (...args: unknown[]) => unknown)(file, ...rest);
+    }) as typeof fs.readFile);
+    const spawnsBeforeTheGate = spawned.count;
+
+    await hook('claude', claudeUserPromptSubmit);
+    spy.mockRestore();
+
+    expect(decisionRequests).toBe(1);
+    // Counted when the request landed, so it is the cost of *asking*, not of the
+    // enrichment that follows the answer.
+    expect(spawnsAtDecision).toEqual([spawnsBeforeTheGate]);
+    expect(reads.filter((file) => file.endsWith(SESSION_MODEL_FILE))).toHaveLength(1);
+  });
+
+  it('asks anyway, stating no model, when the memo cannot be read', async () => {
+    answer = { status: 200, body: { decision: 'allow' } };
+
+    await hook('claude', claudeSessionStart);
+
+    const spy = vi.spyOn(TurnStateStore.prototype, 'readModel').mockRejectedValue(new Error('EIO'));
+
+    await hook('claude', claudeUserPromptSubmit);
+    spy.mockRestore();
+
+    expect(decisionUrls).toHaveLength(1);
+    expect(new URL(decisionUrls[0]!, endpoint).searchParams.has('model')).toBe(false);
+  });
+
   it('asks once per TTL across hook processes', async () => {
     await hook('claude', claudeUserPromptSubmit);
     await hook('claude', { ...claudeUserPromptSubmit, prompt_id: 'prompt-second' });
@@ -508,6 +605,66 @@ describe('the checkout the question is asked about', () => {
 
     expect(server.calls()).toBe(2);
     expect(await readJson(path.join(resolvePaths(world.env).dataDir, 'enforcement-cache.json')).catch(() => undefined)).toBeUndefined();
+  });
+});
+
+describe('the model the question is about', () => {
+  let world: TempWorld;
+
+  beforeEach(async () => {
+    world = await makeTempEnv();
+  });
+  afterEach(() => world.cleanup());
+
+  const DECISION_URL = `${ENDPOINT}/v1/enforcement/decision`;
+
+  /** Server first, subject second, so the "states no model" case reads plainly. */
+  function askAbout(server: { fetchFn: typeof fetch; urls: string[] }, model?: string) {
+    return resolveEnforcement({
+      config: configSchema.parse({ ...defaultConfig(), endpoint: ENDPOINT, token: 'aw_edge_test' }),
+      paths: resolvePaths(world.env),
+      developerId: DEVELOPER,
+      model,
+      now: world.env.now,
+      fetchFn: server.fetchFn
+    });
+  }
+
+  it('travels on the request when the collector knows it', async () => {
+    const stated = answering({ decision: 'allow' });
+
+    await askAbout(stated, 'claude-sonnet-5');
+
+    expect(new URL(stated.urls[0]!).searchParams.get('model')).toBe('claude-sonnet-5');
+  });
+
+  it('is absent — and keys the answer exactly as before — when it knows none', async () => {
+    const silent = answering({ decision: 'allow' });
+
+    await askAbout(silent);
+
+    expect(new URL(silent.urls[0]!).searchParams.has('model')).toBe(false);
+    // The entry sits under the key this cache used before the model existed, so
+    // an upgrade neither cools the cache nor changes what it answers.
+    const cached = await readJson(path.join(resolvePaths(world.env).dataDir, ENFORCEMENT_CACHE_FILE_NAME));
+
+    expect(Object.keys(cached as Record<string, unknown>)).toEqual([decisionKey(DECISION_URL, 'aw_edge_test', DEVELOPER)]);
+  });
+
+  it('is never reused across models, even when the platform allows reuse', async () => {
+    // The platform sends `cache_ttl_ms: 0` only for a feature cap, so a model
+    // cap's answers are cacheable — and an answer is about one model.
+    const server = answering({ decision: 'allow' });
+
+    await askAbout(server, 'claude-sonnet-5');
+    await askAbout(server, 'claude-opus-5');
+
+    expect(server.calls()).toBe(2);
+
+    // The same model again is still one question.
+    await askAbout(server, 'claude-sonnet-5');
+
+    expect(server.calls()).toBe(2);
   });
 });
 

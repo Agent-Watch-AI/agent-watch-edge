@@ -37,6 +37,12 @@ export const TRANSCRIPT_PATH_KEY = 'transcript_path';
 /** Prefix distinguishing usage-claim files from turn records in a session dir. */
 export const USAGE_CLAIM_PREFIX = 'usage-claim--';
 
+/**
+ * The one file in a session dir that is not a turn record: what model the
+ * session is on, so a later hook's gate can state it.
+ */
+export const SESSION_MODEL_FILE = 'session.json';
+
 /** Public provider labels; the internal id is an implementation detail. */
 export const PROVIDER_LABELS: Readonly<Record<string, string>> = {
   claude: 'claude-code',

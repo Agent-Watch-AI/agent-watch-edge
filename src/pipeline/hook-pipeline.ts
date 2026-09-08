@@ -8,6 +8,7 @@ import { servesMultipleIdentities } from '../config/root-config.js';
 import { DECISION_BLOCK } from '../enforcement/constants/enforcement.constants.js';
 import { enforcementWouldAsk, resolveEnforcement } from '../enforcement/enforcement.js';
 import { enrichEvents } from '../events/enrich.js';
+import type { AgentWatchEvent } from '../events/types/events.types.js';
 import { readGateCheckout } from '../git/gate-checkout.js';
 import { developerIdentity, runGit } from '../git/git-context.js';
 import { runSnapshotPipeline } from '../snapshot/snapshot-pipeline.js';
@@ -21,6 +22,7 @@ import { EventQueue } from '../transport/queue.js';
 import { identityPaths, settleLegacyQueue } from '../transport/queue-partition.js';
 import type { EventTransport } from '../transport/types/transport.types.js';
 import { eventsUrl } from '../config/config.js';
+import { TurnStateStore } from '../turns/turn-state.js';
 import { trackTurn } from '../turns/turn-tracker.js';
 import {
   PAYLOAD_CWD_KEY,
@@ -132,7 +134,11 @@ async function parseEvents(state: HookPipelineState): Promise<StepOutcome<HookPi
  * @returns The state, carrying the refusal when there is one.
  */
 async function enforce(state: HookPipelineState): Promise<StepOutcome<HookPipelineState>> {
-  if (state.dryRun || !state.provider.getBlockResponse || !isTurnGate(state)) return next(state);
+  if (state.dryRun || !state.provider.getBlockResponse) return next(state);
+
+  const prompt = turnGateEvent(state);
+
+  if (!prompt) return next(state);
 
   // Nothing below is paid for on a machine that would not ask. Working out which
   // checkout this is costs a walk of the working copy and, once per checkout, a
@@ -144,14 +150,16 @@ async function enforce(state: HookPipelineState): Promise<StepOutcome<HookPipeli
   // a slow machine pays both before the agent's first token. Resolving the
   // identity first would save a checkout lookup only on a machine that has no
   // identity at all — a rare and stable condition — at the price of doubling the
-  // worst case for everyone else.
-  const [developerId, checkout] = await Promise.all([
+  // worst case for everyone else. The session's model joins them for the same
+  // reason: it is one small file, and it is still a file.
+  const [developerId, checkout, model] = await Promise.all([
     developerIdentity(state.config.developerEmail, state.cwd, { home: state.env.home }),
     readGateCheckout({
       cwd: state.cwd,
       checkoutsDir: state.paths.checkoutsDir,
       now: state.env.now
-    })
+    }),
+    statedModel(state, prompt)
   ]);
 
   const decision = await resolveEnforcement({
@@ -159,6 +167,7 @@ async function enforce(state: HookPipelineState): Promise<StepOutcome<HookPipeli
     paths: state.paths,
     developerId,
     checkout,
+    model,
     now: state.env.now
   });
 
@@ -168,17 +177,49 @@ async function enforce(state: HookPipelineState): Promise<StepOutcome<HookPipeli
 }
 
 /**
- * Whether this payload is the moment before the turn's first LLM call.
+ * The event that makes this payload the moment before the turn's first LLM
+ * call, if it is one.
  *
  * @param state - Current flow state.
- * @returns True when the provider reported a submitted prompt.
+ * @returns The submitted prompt, or undefined when this hook is not a gate.
  */
-function isTurnGate(state: HookPipelineState): boolean {
+function turnGateEvent(state: HookPipelineState): AgentWatchEvent | undefined {
   for (const event of state.events) {
-    if (event.event.type === PROMPT_SUBMITTED_TYPE) return true;
+    if (event.event.type === PROMPT_SUBMITTED_TYPE) return event;
   }
 
-  return false;
+  return undefined;
+}
+
+/**
+ * The model to state on the gate request.
+ *
+ * Codex, Cursor, Gemini and Antigravity name their model on the prompt hook
+ * itself. Claude Code names it only when the session starts, so the tracker
+ * wrote it down and this reads it back — one small file, inside the same
+ * `Promise.all` as identity and checkout, so it adds no serial wait to the gate.
+ *
+ * Anything that goes wrong states nothing: the model narrows the question, and a
+ * question asked without it is still answered.
+ *
+ * @param state - Current flow state.
+ * @param prompt - The prompt event being gated.
+ * @returns The model, or undefined when none is known.
+ */
+async function statedModel(state: HookPipelineState, prompt: AgentWatchEvent): Promise<string | undefined> {
+  if (prompt.ai?.model) return prompt.ai.model;
+
+  const sessionId = prompt.session.id;
+
+  if (!sessionId) return undefined;
+
+  try {
+    return await new TurnStateStore(state.paths.turnsDir).readModel(sessionId);
+  } catch (error) {
+    debugLog('enforcement: session model unreadable; stating none:', error);
+
+    return undefined;
+  }
 }
 
 /**

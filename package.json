@@ -1,7 +1,7 @@
 {
   "name": "@agent-watch-ai/edge",
-  "version": "0.2.5",
-  "description": "Connect Claude Code, Codex and Cursor telemetry to your backend with turn, Git and ticket-key attribution.",
+  "version": "0.3.0",
+  "description": "Usage and cost telemetry for Claude Code, Codex, Cursor, Gemini CLI and Antigravity. No daemon, no proxy.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -67,6 +67,9 @@
     "opentelemetry",
     "claude-code",
     "codex",
+    "cursor",
+    "gemini-cli",
+    "antigravity",
     "ai-coding-agents",
     "ai-cost",
     "cost-attribution",

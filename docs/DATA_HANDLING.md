@@ -1,8 +1,10 @@
 # Data handling contract
 
-This document describes this repository revision, not every previously published
-package. npm `0.2.5` enabled content capture by default. Review the installed
-version and run `agentwatch config` and `agentwatch doctor` during deployment.
+This document describes `0.3.0`, not every previously published package. **Every
+release up to and including npm `0.2.5` enabled content capture by default**;
+`0.3.0` is the release that turns it off and puts it behind explicit consent.
+Check the installed version — `agentwatch --version` — and run `agentwatch config`
+and `agentwatch doctor` during deployment.
 AgentWatch is a user-level, hook-only Node.js program. It does not install a daemon,
 require root, proxy model requests, or enforce an administrator-proof policy.
 

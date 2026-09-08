@@ -3,117 +3,95 @@
 [![npm](https://img.shields.io/npm/v/@agent-watch-ai/edge)](https://www.npmjs.com/package/@agent-watch-ai/edge)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A lightweight, zero-daemon telemetry edge for AI coding agents (**Claude Code**, **OpenAI Codex**, **Cursor**, **Gemini CLI**, and **Google Antigravity**).
+**See what your AI coding agents cost — per developer, repository and ticket.**
 
-It connects agent lifecycle hooks and native OpenTelemetry (OTLP) to your observability backend to attribute LLM usage, costs, tool calls, Git branches, and ticket keys (e.g., `PAY-142`) — without model proxies, MITM intercepts, or background daemons.
+It reads the agents' own hooks and their native OpenTelemetry export, and sends usage, cost and Git
+context to your backend. Nothing sits in front of the model: no proxy, no MITM certificate, no
+daemon, no root.
+
+Supports **Claude Code**, **OpenAI Codex**, **Cursor**, **Gemini CLI** and **Google Antigravity**.
 
 ---
 
 ## Quick Start
 
-**Requirements:** Node.js 20+ (continuous integration runs the full suite on both Node 20 and Node 24, so the floor is verified rather than declared)
+**Requirements:** Node.js 20+ — CI runs the whole suite on Node 20 and Node 24, so the floor is verified rather than declared.
 
 ```bash
-# 1. Install globally
 npm install -g @agent-watch-ai/edge
-
-# 2. Configure with your backend
 agentwatch setup --endpoint https://backend.example.com --token YOUR_TOKEN
-
-# 3. Verify status & diagnostics
-agentwatch status
-agentwatch doctor
+agentwatch doctor    # is this machine actually reporting?
 ```
 
+Restart any running agent afterwards: hooks and exporters are read at startup.
+
 ---
 
-## Supported Agents & Limitations
+## Supported Agents
 
-| Agent | Hook Configuration | Native OTel Signals | Status |
+| Agent | Hooks configured in | Native OTel signals | Token usage |
 |---|---|---|---|
-| **Claude Code** | `~/.claude/settings.json` | Logs, Traces, Metrics | Full support |
-| **OpenAI Codex** | `~/.codex/hooks.json` | Logs, Traces (`~/.codex/config.toml`) | Full support |
-| **Gemini CLI** | `~/.gemini/settings.json` | Logs, Traces, Metrics | Full support |
-| **Cursor** | `~/.cursor/hooks.json` | None | Partial support |
-| **Google Antigravity** | `~/.gemini/config/hooks.json` | None | Partial support |
+| **Claude Code** | `~/.claude/settings.json` | Logs, Traces, Metrics | Yes |
+| **OpenAI Codex** | `~/.codex/hooks.json` | Logs, Traces (`~/.codex/config.toml`) | Yes |
+| **Gemini CLI** | `~/.gemini/settings.json` | Logs, Traces, Metrics | Yes |
+| **Cursor** | `~/.cursor/hooks.json` | None | **No** |
+| **Google Antigravity** | `~/.gemini/config/hooks.json` | None | **No** |
 
-### Agent Limitations & Notes
+Cursor and Antigravity expose no token usage in hooks or transcripts, so their `turn.summary`
+events stay `usage_status: "pending"` and carry no cost. Everything else — turns, tools, files,
+branches, ticket keys — is reported for all five.
 
-* **Claude Code**:
-  * Running sessions must be restarted after `agentwatch setup` to apply telemetry environment variables.
-* **OpenAI Codex**:
-  * Requires trusting new hooks: launch `codex`, type `/hooks`, and approve AgentWatch entries.
-* **Gemini CLI**:
-  * Running sessions must be restarted after setup to load new hooks and OpenTelemetry configuration.
-  * Telemetry is enabled through `GEMINI_TELEMETRY_ENABLED` with `GEMINI_TELEMETRY_TARGET=local`, and the ingest token travels in `OTEL_EXPORTER_OTLP_HEADERS`. Gemini CLI does not support Claude Code's `otelHeadersHelper`.
-* **Google Antigravity**:
-  * **No native token usage**: Antigravity exposes no OpenTelemetry exporter configuration and no readable transcript usage, so `turn.summary` events remain `usage_status: "pending"` and carry no cost.
-  * **Turns, not model calls**: a turn is one *execution*. `PreInvocation`/`PostInvocation` bracket the individual model calls inside an execution, and only the `Stop` hook closes a turn.
-  * The prompt is read from `common.lastUserInput` — Antigravity has no user-prompt hook of its own.
-  * Running sessions must be restarted after `agentwatch setup` to load new hooks.
-* **Cursor**:
-  * **No native token usage**: Cursor exposes no token usage in hooks or transcripts, so `turn.summary` events remain `usage_status: "pending"`.
-  * **Cursor CLI**: Currently emits only shell hook events. Full hook lifecycle is available only in Cursor IDE sessions.
-  * **Cloud VMs**: Cloud agents do not have access to the local user hook or binary by default; they require an explicit committed `.cursor/hooks.json` and package installation in the cloud environment.
-  * **Tab suggestions**: AgentWatch monitors accepted edits (`afterTabFileEdit`) and intentionally ignores high-frequency `beforeTabFileRead` events.
+Per-agent notes:
+
+* **OpenAI Codex** — new hooks must be trusted once: launch `codex`, type `/hooks`, approve the AgentWatch entries.
+* **Gemini CLI** — telemetry runs through `GEMINI_TELEMETRY_ENABLED` with `GEMINI_TELEMETRY_TARGET=local`, and the ingest token travels in `OTEL_EXPORTER_OTLP_HEADERS`; Gemini has no `otelHeadersHelper`.
+* **Google Antigravity** — a turn is one *execution*: `PreInvocation`/`PostInvocation` bracket the model calls inside it and only `Stop` closes it. The prompt comes from `common.lastUserInput`; there is no user-prompt hook.
+* **Cursor** — the CLI emits shell hooks only; the full lifecycle exists in IDE sessions. Cloud agents need a committed `.cursor/hooks.json` and the package installed in the cloud environment. Accepted tab edits (`afterTabFileEdit`) are monitored; high-frequency `beforeTabFileRead` is ignored.
 
 ---
 
-## CLI Commands
+## CLI
 
 ```bash
-# Setup & Configuration
-agentwatch setup --endpoint https://backend.example.com    # Interactive / automated setup
-agentwatch config                                         # Print active configuration (secrets redacted)
-agentwatch agents                                         # List detected agents & status
+agentwatch setup --endpoint https://backend.example.com   # install hooks and exporters
+agentwatch status                                         # backend, queue and agent health
+agentwatch doctor                                         # environment checks (--json for CI)
+agentwatch config                                         # active configuration, secrets redacted
+agentwatch agents                                         # detected agents and their state
 
-# Diagnostics & Status
-agentwatch status                                         # Backend, queue, and agent health
-agentwatch doctor                                         # Run environment checks (use --json for CI)
+agentwatch off                                            # stop hooks, remove managed exporters
+agentwatch on                                             # put them back
+agentwatch uninstall [--purge]                            # remove hooks; --purge also deletes ~/.agentwatch
 
-# Hook Execution (invoked automatically by agents)
-agentwatch hook --agent claude                            # Process stdin payload from agent
-agentwatch hook --agent codex --dry-run                   # Test hook output without sending
-
-# Telemetry & Teardown
-agentwatch off                                           # Stop hooks; remove managed native exporters
-agentwatch on                                            # Restore operation (restart running agents)
-agentwatch otel-headers                                   # Output formatted OTel headers
-agentwatch uninstall                                      # Remove hooks and restore backups
-agentwatch uninstall --purge                              # Also delete ~/.agentwatch and queues
+agentwatch hook --agent claude [--dry-run]                # invoked by the agents themselves
+agentwatch otel-headers                                   # print OTel headers for an agent
 ```
 
----
-
-## Parameters & Flags
-
-| Flag | Description | Default |
+| Flag | Meaning | Default |
 |---|---|---|
-| `--endpoint <url>` | Backend base URL for event ingestion | — |
-| `--token <token>` | Bearer token for backend authentication | — |
-| `--developer-email <email>` | Identity attached to turn summaries and keyed on by per-developer enforcement. Setup refuses to write a config when neither this flag nor git names a developer | `git config user.email` |
-| `--root <path>` | File a second identity under a project root (needs its own `--token`; the machine identity must already be set up), so one machine can report to two tenants | — |
-| `--otel <signals>` | OTLP signals exported by agents: `logs`, `traces`, `metrics`, `all`, or `none` | `logs` |
-| `--agent <id>` | Limit command to a single agent (`claude`, `codex`, `cursor`, `gemini`, `antigravity`) | All detected |
-| `--yes`, `--non-interactive` | Non-interactive mode (fail instead of prompting on missing args) | `false` |
-| `--purge` | Used with `uninstall`: removes `~/.agentwatch` and local queues | `false` |
-| `--dry-run` | Used with `hook`: prints canonical events to stdout instead of sending | `false` |
-| `--json` | Used with `doctor`: output machine-readable JSON | `false` |
-| `--verbose` | Print verbose diagnostic logs to stderr | `false` |
-| `--version` | Display edge version | — |
+| `--endpoint <url>` | Backend base URL. `https:`, or `http:` to loopback | — |
+| `--token <token>` | Bearer token for the backend | — |
+| `--developer-email <email>` | Identity on turn summaries, and what per-developer budgets key on. Setup refuses to write a config when neither this flag nor git names a developer | `git config user.email` |
+| `--root <path>` | File a second identity under a project root, so one machine can report to two tenants (needs its own `--token`) | — |
+| `--otel <signals>` | Signals the agents export: `logs`, `traces`, `metrics`, `all`, `none` | `logs` |
+| `--agent <id>` | Limit the command to one agent (`claude`, `codex`, `cursor`, `gemini`, `antigravity`) | all detected |
+| `--yes`, `--non-interactive` | Fail instead of prompting | `false` |
+| `--dry-run` | With `hook`: print the events instead of sending them | `false` |
+| `--json` | With `doctor`: machine-readable output | `false` |
+| `--verbose` | Diagnostic logs on stderr | `false` |
+| `--version` | Print the version | — |
 
 ---
 
 ## Configuration
 
-* **Global configuration**: `~/.agentwatch/config.json` (managed via `agentwatch setup`).
+One global file: `~/.agentwatch/config.json`, written by `agentwatch setup`.
 
-### Content capture
+### Content capture is off by default
 
-Content capture is **off by default**. Prompts, agent responses, tool inputs and tool outputs stay
-on the machine unless you turn them on in `~/.agentwatch/config.json` — which takes two things: the
-global `contentCaptureConsent` marker *and* the individual flag. The marker on its own enables
-nothing, and a flag on its own collects nothing.
+Prompts, responses, tool inputs and tool outputs stay on the machine. Turning one on takes **two**
+things — the global `contentCaptureConsent` marker *and* the individual flag. The marker alone
+enables nothing; a flag alone collects nothing.
 
 ```json
 {
@@ -129,63 +107,46 @@ nothing, and a flag on its own collects nothing.
 }
 ```
 
-`git` and `files` are on by default because they carry metadata, not content: the repo remote,
-branch and SHA, and the *path* of a file the agent touched. That is what feature and project
-attribution is built from. A prompt is still recorded as a length and a SHA-256 either way — never
-the text — so turn counts and cost attribution work with capture fully off.
+`git` and `files` are on because they carry metadata, not content: remote, branch, SHA, and the
+*path* of a file the agent touched — which is what feature and project attribution is built from.
+A prompt is always recorded as a length and a SHA-256, never as text, so turn counts and cost
+attribution work with capture fully off.
 
-*Upgrading?* An existing config is **not** trusted to keep capturing. A machine installed on an
-earlier release has all six flags written into `~/.agentwatch/config.json`, but without
-`contentCaptureConsent` those four content flags read as `false` — an upgrade that replaces the CLI
-cannot silently carry an old decision forward. Your flags are kept as written, by loading and by
-`agentwatch setup` alike, so adding the marker later turns them back on rather than starting over;
-setup says which ones are set but inert. `agentwatch doctor` reports the effective posture for the
-directory you are in.
+**Upgrading from an earlier release?** Its config has all six flags written into it, but without the
+consent marker the four content flags read as `false` — replacing the CLI cannot carry an old
+decision forward silently. Your flags are kept as written, so adding the marker later turns them
+back on rather than starting over; `setup` names the ones that are set but inert. `agentwatch doctor`
+reports the effective posture for the directory you are in.
 
-*Native exporters are separate.* Codex and Gemini usage logs can carry tool arguments and results
-with no per-field filter, so setup configures them only when consent covers both `toolInput` and
-`toolOutput` — which can leave `llm.call` usage unavailable for those two in metadata-only mode.
-Claude's own content-logging switches are forced off either way. None of this takes effect in an
-agent that is already running: rerun `agentwatch setup` after upgrading, then restart your agents.
+**Native exporters are gated separately.** Codex and Gemini usage logs can carry tool arguments and
+results with no per-field filter, so setup configures them only when consent covers both
+`toolInput` and `toolOutput` — which can leave `llm.call` usage unavailable for those two in
+metadata-only mode. Claude's own content-logging switches are forced off either way.
 
-### Fleet deployment
+### Repository overrides
 
-[`examples/mdm/`](https://github.com/agent-watch-ai/agent-watch-edge/tree/main/examples/mdm) has a Jamf/Kandji script, an Intune
-script, and a Claude Code `managed-settings.json` policy file — plus a straight
-per-agent answer about what an administrator can and cannot lock, which for
-every agent but Claude Code is currently "the developer can remove the hooks".
-
-### Stopping collection without uninstalling
-
-`agentwatch off` stops hooks, withholds the OTLP bearer token, and removes the native exporters
-AgentWatch installed — keeping your config, queued events and everything else in place.
-`agentwatch on` puts them back. Restart running agents either way: an already-started agent holds
-its exporters and headers in memory. See [docs/DATA_HANDLING.md](docs/DATA_HANDLING.md) for what
-the off switch does and does not reach.
-
-* **Repository overrides**: Place a `.agentwatch.json` in any repository root to turn capture
-  **down** for that repository:
+A `.agentwatch.json` in a repository root can only turn capture **down** for that repository:
 
 ```json
-{
-  "capture": { "prompts": false, "toolOutput": false }
-}
+{ "capture": { "prompts": false, "toolOutput": false } }
 ```
 
-*Note: a repository file may only ever narrow capture. A committed `.agentwatch.json` that sets a
-capture flag the machine has off is ignored, with a warning — `agentwatch doctor` and
-`agentwatch config` both show it — so checking a repository out can never start collecting content
-on someone else's machine. Infrastructure settings (`endpoint`, `token`, `developerEmail`,
-`enforcementUrl`), the `roots` block, and the `delivery`, `otel` and `enforcement` blocks are global-only too: a
-committed repo file cannot redirect delivery or switch off a budget cap for everyone who clones the
-repository.*
+A committed file that asks for *more* than the machine allows is ignored with a warning, so
+checking a repository out can never start collecting content on someone else's machine. `endpoint`,
+`token`, `developerEmail`, `enforcementUrl`, `roots` and the `delivery` / `otel` / `enforcement`
+blocks are global-only: a repository file cannot redirect delivery or switch off a budget cap.
 
-* **Per-project identity (two tenants, one machine)**: `roots` in the global config maps an absolute project root to the identity used beneath it. Work outside every root keeps the machine's own. Set the machine identity up first, then add a root with `agentwatch setup --root ~/dev/tripPlanner --token <token>` — the root needs its own token, the machine's is never inherited — or by hand:
+### Two tenants on one machine
+
+`roots` maps an absolute project root to the identity used beneath it; work outside every root keeps
+the machine's own. Set the machine up first, then
+`agentwatch setup --root ~/dev/acme --token <tenant token>` — a root never inherits the machine's
+token — or by hand:
 
 ```json
 {
   "endpoint": "https://backend.example.com",
-  "token": "<the machine default>",
+  "token": "<machine default>",
   "roots": {
     "/Users/me/dev/tripPlanner": { "token": "<tenant A>" },
     "/Users/me/dev/acme": { "token": "<tenant B>", "developerEmail": "me@acme.com" }
@@ -193,54 +154,75 @@ repository.*
 }
 ```
 
-Longest match wins, so a checkout nested inside a workspace overrides the workspace. Point a root at the directory your agent actually opens: a session started one level above a root does not match it. Only identity varies per root — what is captured and which OTLP signals are exported stay machine-wide, so `--otel` is refused together with `--root`, and `roots` is global-only like the fields it carries.
+Longest match wins. Point a root at the directory the agent actually opens: a session started one
+level above it does not match. Only identity varies per root — capture and OTel signals stay
+machine-wide, so `--otel` is refused together with `--root`.
 
-*Caveat: agents export native OTLP to one machine-wide endpoint, so roots on different backends split the hook path but not that export: under such a root `otel-headers` sends no bearer rather than one tenant's token to the other's collector, and that tenant's `llm.call` ledger gets hook-path events only. Roots on the same backend — the usual case — differ only in bearer, which `otel-headers` resolves per directory.*
+The offline queue is partitioned to match (`<data>/queue/<digest-of-token>/`), as are the backend
+cooldown and the loss tally, so a drain only ever sends the backlog belonging to the token it signs
+with. Agents export native OTLP to one machine-wide endpoint, so under a root pointing at a
+*different* backend `otel-headers` sends no bearer rather than the wrong tenant's — that tenant then
+gets hook-path events only. Roots on the same backend, the usual case, differ only in bearer.
 
-The offline queue is partitioned to match: `<data>/queue/<digest-of-token>/`, one directory per identity, so a drain only ever sends the backlog belonging to the token it is signing with; the backend cooldown and loss tally are per identity too. An idle tenant's backlog waits for that tenant's next hook rather than leaving under someone else's bearer. Upgrading from a version without partitions adopts the existing backlog automatically when the machine has a single identity; when it already has several, those entries name no tenant, so they are moved to `<data>/queue/unattributed/` and delivered to nobody — `agentwatch status` and `agentwatch doctor` say how many and where. Move them into a tenant's partition to deliver them, or delete the directory to discard them.
+Upgrading from a version without partitions adopts an existing backlog when the machine has one
+identity; when it already has several, those entries name no tenant and are moved to
+`<data>/queue/unattributed/`, where `status` and `doctor` report them. Move them into a partition to
+deliver them, or delete the directory to discard them.
 
-### Budget enforcement (pre-turn check)
+### Stopping collection without uninstalling
 
-When a backend budget policy is set to **block** and the developer has breached it, the Edge stops
-the turn before the agent's first LLM call: the prompt is refused in the agent's own protocol
-(Claude Code, Codex, Cursor, Gemini CLI) with the backend's explanation shown to the developer.
+`agentwatch off` stops the hooks before they read stdin, withholds the OTLP bearer, and removes the
+exporters AgentWatch installed — keeping config and queued events. `agentwatch on` restores it.
+Restart running agents either way. See [docs/DATA_HANDLING.md](docs/DATA_HANDLING.md) for what the
+off switch does and does not reach.
+
+### Fleet deployment
+
+[`examples/mdm/`](https://github.com/agent-watch-ai/agent-watch-edge/tree/main/examples/mdm) has a
+Jamf/Kandji script, an Intune script, a Claude Code `managed-settings.json` policy file, and a
+per-agent answer about what an administrator can lock — which for every agent but Claude Code is
+currently "the developer can remove the hooks".
+
+### Budget enforcement
+
+When a backend budget is set to **block** and the developer has breached it, the turn is refused
+before the agent's first LLM call, in the agent's own protocol (Claude Code, Codex, Cursor, Gemini
+CLI), with the backend's explanation shown to the developer.
 
 ```json
-{
-  "enforcement": { "enabled": true, "timeoutMs": 300, "cacheTtlMs": 60000 }
-}
+{ "enforcement": { "enabled": true, "timeoutMs": 300, "cacheTtlMs": 60000 } }
 ```
 
-The check **fails open, always**. A turn stops only on an explicit `{"decision":"block","message":"…"}`
-from `GET <backend>/v1/enforcement/decision`; an unreachable backend, a timeout, any other status and
-any body the Edge cannot read all let the turn proceed silently. Set `enabled: false` to opt out.
+The check **fails open, always.** A turn stops only on an explicit
+`{"decision":"block","message":"…"}` from `GET <backend>/v1/enforcement/decision`; an unreachable
+backend, a timeout, any other status and any unreadable body let the turn proceed silently — so an
+outage un-enforces budgets rather than stopping anyone. Set `enabled: false` to opt out.
 
-Decisions are cached locally for `cacheTtlMs`, so a flat cap costs at most one bounded request per
-turn. A *feature-scoped* cap costs one per gated prompt: the platform answers `cache_ttl_ms: 0`
-because a reuse key cannot tell one checkout from another, and the Edge honours that by not storing
-the answer. Either way the request is on the hook path, which means an outage un-enforces budgets
-rather than stopping anyone — see [docs/DATA_HANDLING.md](docs/DATA_HANDLING.md).
+Decisions are cached for `cacheTtlMs`, so a flat cap costs at most one bounded request per turn. A
+feature-scoped cap costs one per gated prompt: the backend answers `cache_ttl_ms: 0` and the edge
+honours that by not storing the answer. Antigravity is not gated — its pre-invocation hook carries
+no decision field — but its usage is still reported and still raises alerts.
 
-Antigravity is not gated: its pre-invocation hook carries no decision field, so there is no
-prompt-level refusal to send. Its usage is still reported and still raises alerts.
-
-To try it locally: `BLOCK=1 npm run example` answers every check with a refusal.
+To try it locally: `BLOCK=1 npm run example` refuses every check.
 
 ---
 
-## Data Flow & Backend Integration
+## What reaches the backend
 
-1. **`turn.summary`**: Generated via agent hooks (`POST <backend>/v1/events`). Includes prompt/response length and hash metadata, tool counts, file paths, Git branch, and ticket keys. Raw prompt and response text require explicit global consent and enabled capture flags.
-2. **`llm.call`**: Emitted via native OTLP (`POST <backend>/v1/otlp/v1/logs`). Contains token usage, cost, and latency per model request.
-3. The backend joins `llm.call` to `turn.summary` records using conversation/turn IDs.
-4. **`repo.snapshot`**: Reports changed branch/commit metadata, including commit subjects, when Git capture is enabled.
+| Record | How | Contents |
+|---|---|---|
+| `turn.summary` | Edge hooks → `POST <backend>/v1/events` | One completed turn: prompt/response length and hash, tool counts, file paths, Git branch, ticket keys. Raw text only with consent *and* the flag. |
+| `llm.call` | The agent's own OTLP → `POST <backend>/v1/otlp/v1/logs` | Token usage, cost and latency per model request. The edge does not proxy this. |
+| `repo.snapshot` | Edge hooks, after a closed turn | Changed branch/commit metadata, including commit subjects, when Git capture is on. |
 
-Read the [data handling contract](docs/DATA_HANDLING.md) for the exact fields,
-privacy migration, local retention, native-exporter limitations, and off-switch
-behavior. See [enterprise deployment](docs/ENTERPRISE_DEPLOYMENT.md) for release
-artifacts and explicitly deferred enterprise features.
+The backend joins `llm.call` to `turn.summary` on conversation and turn ids.
 
-### Backend SDK Helpers
+Exact fields, local retention, privacy migration and off-switch behaviour:
+[docs/DATA_HANDLING.md](docs/DATA_HANDLING.md). Release artifacts, rollback verification and the
+explicitly deferred enterprise work (Windows, native binaries, signing, SOC 2):
+[docs/ENTERPRISE_DEPLOYMENT.md](docs/ENTERPRISE_DEPLOYMENT.md).
+
+### Backend SDK helpers
 
 ```ts
 import type { ProductEvent } from '@agent-watch-ai/edge/events';

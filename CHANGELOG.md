@@ -1,6 +1,75 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+Production-installation readiness. Everything below either changes what an
+operator sees or what the package does on the hook path; read the first two
+items before upgrading a fleet.
+
+- **A refused credential now suspends sending instead of retrying.** After a 401
+  or 403 from the events endpoint, a block is persisted per (destination,
+  credential fingerprint) — the fingerprint is the token digest the queue
+  already uses to name its partition, never the token — and automatic sends for
+  that pair stop. **No queued record is lost or aged out by it**: what stops is
+  the retrying, not the queueing, and no attempt is spent against an entry for a
+  refusal that is not its fault. The block never expires on a timer. It is
+  lifted by configuring a different token, or by `agentwatch doctor` proving the
+  current one good. `agentwatch status` reports the refusing status and when the
+  refusals started.
+- **`agentwatch doctor` diagnoses the install, not an anonymous request.** The
+  backend probe now sends the same credentials a real delivery sends, and
+  distinguishes four states in its verdict and its exit code: healthy, credential
+  rejected (a **failure**, not a warning, naming a wrong, expired or revoked
+  token), unreachable, and no backend configured yet. A healthy install whose
+  backend requires authentication no longer warns. The probe always asks the
+  backend, whatever local state says, so it is also what lifts a standing block.
+- **A delivery pass costs the same whatever the backlog holds.** One pass reads
+  at most `delivery.drainBatchSize` queue entries instead of reading and
+  validating all of them — up to 2000 file reads on every hook during a backend
+  outage. The scan resumes where the previous one stopped and wraps around, so
+  every entry is still examined within one rotation and none is deferred
+  forever. Expiry is no longer enforced only inside a pass: a throttled sweep
+  removes aged-out entries hourly, including during an outage, when a pass is
+  skipped for the whole cooldown window and nothing used to age out at all.
+- **A hook loads one agent, and reads its configuration once.** Providers are
+  imported lazily, so a hook pays for the agent it was invoked for rather than
+  all five; the global configuration file is read once per invocation; the
+  credential scrub and capture gate are applied once to a record this invocation
+  produced (a record coming out of the backlog is still re-gated against current
+  settings before it is sent); the session-state sweep is throttled; and the
+  transcript settle loop stops re-zeroing its read buffer on every attempt.
+- **The hook's answer is flushed before the process exits.** A budget refusal
+  travels as a JSON document on stdout, and a write to a pipe is asynchronous:
+  `process.exit` could drop it, which for Antigravity reads as "no decision".
+- **Secrets in object keys are scrubbed.** The sanitizer pattern-scrubbed values
+  only, so a credential used as a *key* in a captured map was transmitted
+  verbatim. Two keys that scrub to the same string keep distinct spellings
+  rather than silently merging into one entry.
+- **A backend URL is validated on every load, not only when setup writes it.**
+  Every URL in the configuration must be `https:`, or `http:` to loopback, so a
+  hand-edited or MDM-templated config cannot send a bearer and captured content
+  in cleartext. Response bodies the hook decodes are capped, and neither the
+  batch send nor the enforcement check follows a redirect — both carry a bearer.
+- **A degraded turn summary is attributed to the same developer as a healthy
+  one.** On a machine that takes its identity from git rather than from
+  configuration, a summary emitted after turn assembly failed carried no
+  developer at all: counted in organization totals, in nobody's budget.
+- **Agent config files are no longer permanently tightened.** `0600` is set only
+  when the block being written actually carries a bearer token, and `uninstall`
+  restores the mode the file had before AgentWatch touched it.
+- **Supply chain.** Actions pinned by commit SHA, `npm ci --ignore-scripts` in
+  the job that builds the published tarball, `npm audit --omit=dev
+  --audit-level=high`, CodeQL on every change and weekly, grouped weekly
+  Dependabot updates, and a CI matrix over Node 20 and Node 24 so the declared
+  floor is verified rather than declared. Coverage is measured with enforced
+  per-directory thresholds for the privacy, enforcement, transport and turn
+  paths.
+- **Fewer moving parts.** Dead exports deleted and the compiler set to reject
+  unused locals and parameters; enrollment collapsed from four files and an
+  interface to one function; one definition each of the content-capture flag
+  list, the product-record guard and the hook-command quoting patterns.
+
+### Earlier changes, never published, shipping in 0.3.0
 
 - **Content capture is now off by default.** `capture.prompts`, `capture.responses`,
   `capture.toolInput` and `capture.toolOutput` default to `false`: a fresh install collects

@@ -52,7 +52,7 @@ export interface DecisionRequest {
 
 /** Everything the check needs to answer without touching ambient state. */
 /** Where the turn is happening, when the working copy could say. */
-export interface EnforcementCheckout {
+interface EnforcementCheckout {
   readonly repository: string;
   readonly branch: string;
 }

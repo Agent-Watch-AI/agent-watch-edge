@@ -15,10 +15,10 @@ import {
 import type { ReadTurnUsageRetry, TranscriptUsageEntry, TurnUsage } from './types/transcript.types.js';
 
 /** One read pass over a transcript. */
-export type TranscriptPass = () => Promise<TurnUsage | undefined>;
+type TranscriptPass = () => Promise<TurnUsage | undefined>;
 
 /** How the settle loop should treat a transcript that reports no usage at all. */
-export interface SettleOptions {
+interface SettleOptions {
   /**
    * Stop immediately when the very first pass finds nothing.
    *

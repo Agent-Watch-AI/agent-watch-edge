@@ -55,7 +55,7 @@ const CONTENT_LOG_OFF: Record<string, string> = {
  * @returns The desired variables, or undefined when telemetry is off or no
  *   backend is configured.
  */
-export function desiredGeminiOtelEnv(context: SetupContext): Record<string, string> | undefined {
+function desiredGeminiOtelEnv(context: SetupContext): Record<string, string> | undefined {
   const otlpBase = otlpBaseUrl(context.config);
   const signals = safeGeminiSignals(context.config);
 

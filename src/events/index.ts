@@ -33,7 +33,7 @@ export {
   TURN_CLOSING_EVENT_TYPE
 } from './constants/events.constants.js';
 
-export { deriveEventId, providerEventId, sha256Hex } from './event-id.js';
+export { deriveEventId, sha256Hex } from './event-id.js';
 export { buildLlmCall } from './llm-call.js';
 export { isProductEvent } from './product-event.js';
 export { enrichEvents } from './enrich.js';

@@ -9,9 +9,6 @@ export const VALUE_FLAGS: ReadonlySet<string> = new Set(['agent', 'endpoint', 't
 
 export const FLAG_PREFIX = '--';
 
-/** Commands the CLI dispatches. */
-export const COMMANDS = ['hook', 'setup', 'status', 'doctor', 'uninstall', 'agents', 'config', 'otel-headers'] as const;
-
 /** What setup asks for when nothing on the machine names the developer. */
 export const DEVELOPER_EMAIL_PROMPT = 'Developer email: ';
 

@@ -77,7 +77,7 @@ export function withPatch(event: AgentWatchEvent, patch: EventPatch): AgentWatch
  * @param extra - Metadata from the patch.
  * @returns The merged bag, or undefined when both were empty.
  */
-export function mergeMetadata(base: AgentWatchEvent['metadata'], extra: AgentWatchEvent['metadata']): AgentWatchEvent['metadata'] {
+function mergeMetadata(base: AgentWatchEvent['metadata'], extra: AgentWatchEvent['metadata']): AgentWatchEvent['metadata'] {
   if (!extra) return base;
 
   if (!base) return compact(extra as UnknownRecord);

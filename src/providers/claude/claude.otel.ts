@@ -47,7 +47,7 @@ const CONTENT_LOG_OFF: Record<string, string> = {
  * @returns The desired variables, or undefined when telemetry is off or no
  *   backend is configured.
  */
-export function desiredClaudeOtelEnv(context: SetupContext): Record<string, string> | undefined {
+function desiredClaudeOtelEnv(context: SetupContext): Record<string, string> | undefined {
   const otlpBase = otlpBaseUrl(context.config);
 
   if (!otlpBase || !otelEnabled(context.config)) return undefined;
@@ -78,7 +78,7 @@ export function desiredClaudeOtelEnv(context: SetupContext): Record<string, stri
  * @param hookCommand - The generated `<bin> hook --agent claude` command.
  * @returns The helper command reusing the same binary path.
  */
-export function headersHelperCommand(hookCommand: string): string {
+function headersHelperCommand(hookCommand: string): string {
   return `${hookCommand.replace(RE_HOOK_SUFFIX, '')} otel-headers`;
 }
 

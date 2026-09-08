@@ -20,7 +20,7 @@ import {
  * @param env - Environment supplying HOME.
  * @returns Absolute path of the config root.
  */
-export function antigravityRoot(env: Env): string {
+function antigravityRoot(env: Env): string {
   return path.join(env.home, ...ANTIGRAVITY_ROOT_SEGMENTS);
 }
 

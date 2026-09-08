@@ -14,7 +14,7 @@ import type { AgentProvider } from './types/provider.types.js';
  * The literal is the single source of the supported agent ids: `registry.ts`
  * builds its eager list from these keys, so a sixth agent is one entry here.
  */
-export const PROVIDER_LOADERS: Readonly<Record<string, () => Promise<AgentProvider>>> = {
+const PROVIDER_LOADERS: Readonly<Record<string, () => Promise<AgentProvider>>> = {
   claude: async () => (await import('./claude/claude.provider.js')).claudeProvider,
   codex: async () => (await import('./codex/codex.provider.js')).codexProvider,
   cursor: async () => (await import('./cursor/cursor.provider.js')).cursorProvider,

@@ -112,7 +112,4 @@ export const MERGE_BLOCKS = [CAPTURE_KEY, 'emit'] as const;
 /** Ceiling on the upward walk looking for a repo config. */
 export const MAX_WALK_DEPTH = 32;
 
-/** Capture flags that mean raw content leaves the machine. */
-export const CONTENT_CAPTURE_FLAGS = ['prompts', 'responses', 'toolInput', 'toolOutput'] as const;
-
 export const RE_TRAILING_SLASHES = /\/+$/;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveEventId, providerEventId, sha256Hex } from '../src/events/event-id.js';
+import { deriveEventId, sha256Hex } from '../src/events/event-id.js';
 import { featureCandidatesFromBranch } from '../src/feature/ticket-candidates.js';
 
 describe('event ids', () => {
@@ -24,10 +24,6 @@ describe('event ids', () => {
     const id = deriveEventId({ provider: 'claude', providerEventType: 'UserPromptSubmit', payloadFingerprint: sha256Hex(secret) });
 
     expect(id).not.toContain(secret);
-  });
-
-  it('preserves provider ids', () => {
-    expect(providerEventId('claude', 'abc')).toBe('evt_claude_abc');
   });
 });
 

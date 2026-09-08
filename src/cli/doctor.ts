@@ -5,7 +5,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { enabledSignalNames, eventsUrl, otlpBaseUrl } from '../config/config.js';
 import { loadEffectiveConfig } from '../config/repo-config.js';
-import { CONTENT_CAPTURE_FLAGS } from '../config/constants/config.constants.js';
+import { CONTENT_CAPTURE_KEYS } from '../config/constants/config.constants.js';
 import type { AgentWatchConfig, CaptureConfig, OtelConfig, OtelSignalName } from '../config/types/config.types.js';
 import type { Env } from '../core/types/core.types.js';
 import { meetsMinVersion, parseVersion } from '../core/version.js';
@@ -477,7 +477,7 @@ async function repositoryChecks(env: Env, context: CliContext): Promise<Check[]>
     // Repo overrides are best-effort; their absence is not a finding.
   }
 
-  const enabled = CONTENT_CAPTURE_FLAGS.filter((flag) => capture[flag]);
+  const enabled = CONTENT_CAPTURE_KEYS.filter((flag) => capture[flag]);
 
   checks.push({
     name: 'privacy',

@@ -2,7 +2,7 @@ import { omitKeys } from '../../core/object.js';
 import type { AgentInstallState, InstallState } from '../../storage/types/storage.types.js';
 
 /** What one hook installation recorded about itself. */
-export interface HookInstallRecord {
+interface HookInstallRecord {
   readonly hookConfigPath: string;
   readonly hookEvents: readonly string[];
   readonly hookCommand: string;
@@ -82,7 +82,7 @@ export function withoutAgent(state: InstallState, agentId: string): InstallState
 }
 
 /** What one native-telemetry configuration recorded about itself. */
-export interface OtelInstallRecord {
+interface OtelInstallRecord {
   readonly configPath: string;
   /** Config keys AgentWatch now owns, and may therefore remove later. */
   readonly ownedKeys: readonly string[];

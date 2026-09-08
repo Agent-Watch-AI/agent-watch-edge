@@ -180,17 +180,17 @@ describe('Gemini provider', () => {
       const configured = await new GeminiOtelConfigurator().configure(context);
 
       expect((await fs.stat(geminiSettingsPath(world.env))).mode & 0o777).toBe(0o600);
-      expect(configured.installState.agents.gemini?.otelPriorMode).toBe(0o644);
+      expect(configured.installState?.agents.gemini?.otelPriorMode).toBe(0o644);
 
       // `writeFileAtomic` preserves the target's mode by design, so without the
       // recorded original the file would keep 0600 forever after the token was
       // gone — the one place the package broke its own "only AgentWatch-owned
       // entries are ever touched" invariant, applied to file metadata.
-      const removed = await new GeminiOtelConfigurator().uninstall({ ...context, installState: configured.installState });
+      const removed = await new GeminiOtelConfigurator().uninstall({ ...context, installState: configured.installState ?? context.installState });
 
       expect(removed.ok).toBe(true);
       expect((await fs.stat(geminiSettingsPath(world.env))).mode & 0o777).toBe(0o644);
-      expect(removed.installState.agents.gemini?.otelPriorMode).toBeUndefined();
+      expect(removed.installState?.agents.gemini?.otelPriorMode).toBeUndefined();
       expect((await readJson(geminiSettingsPath(world.env))).theme).toBe('dark');
     });
 

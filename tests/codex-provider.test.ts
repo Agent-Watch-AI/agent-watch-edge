@@ -311,16 +311,16 @@ describe('Codex provider', () => {
       const configured = await new CodexOtelConfigurator().configure(context);
 
       expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
-      expect(configured.installState.agents.codex?.otelPriorMode).toBe(0o644);
+      expect(configured.installState?.agents.codex?.otelPriorMode).toBe(0o644);
 
       // This file is Codex's, and `writeFileAtomic` preserves the target's
       // mode, so without the recorded original it would keep 0600 forever
       // after the token was gone.
-      const removed = await new CodexOtelConfigurator().uninstall({ ...context, installState: configured.installState });
+      const removed = await new CodexOtelConfigurator().uninstall({ ...context, installState: configured.installState ?? context.installState });
 
       expect(removed.ok).toBe(true);
       expect((await fs.stat(configPath)).mode & 0o777).toBe(0o644);
-      expect(removed.installState.agents.codex?.otelPriorMode).toBeUndefined();
+      expect(removed.installState?.agents.codex?.otelPriorMode).toBeUndefined();
     });
 
     it('uninstall removes exactly the managed block', async () => {

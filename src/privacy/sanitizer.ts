@@ -51,6 +51,12 @@ function walk(value: unknown, depth: number): unknown {
 
   if (Array.isArray(value)) return value.map((item) => walk(item, depth + 1));
 
+  // A Date is an object to `isRecord`, so rebuilding it as a record turned it
+  // into `{}` — the record on the wire lost a timestamp that `JSON.stringify`
+  // would have written as an ISO string. It carries no secret and has nothing
+  // to descend into, so it passes through and serializes as it always would.
+  if (value instanceof Date) return value;
+
   if (!isRecord(value)) return value;
 
   const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;

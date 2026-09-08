@@ -20,6 +20,7 @@ import {
   MS_PER_DAY,
   QUEUE_DRAIN_LOCK,
   QUEUE_FILE_SUFFIX,
+  QUEUE_SCAN_CURSOR_FILE,
   QUEUE_SWEEP_INTERVAL_MS,
   RETARGET_LOCK_POLL_MS,
   RETARGET_LOCK_WAIT_MS,
@@ -223,29 +224,40 @@ export class EventQueue {
   /**
    * Entries due for this transport, dropping the ones that can never be sent.
    *
-   * Stops as soon as it has a full batch. Reading and zod-parsing the whole
-   * partition to find the few entries a pass may send is what made an outage
-   * cost the developer up to `maxQueueEvents` file reads on every hook, which
-   * AGENTS.md §3 forbids outright.
+   * Reads at most `maxBatch` entries, whatever the backlog holds and whatever it
+   * finds in them. Reading and zod-parsing the whole partition to find the few
+   * entries a pass may send is what made an outage cost the developer up to
+   * `maxQueueEvents` file reads on every hook, which AGENTS.md §3 forbids
+   * outright. The bound is on entries *read*, not on entries found due: a
+   * backlog where nothing is due — every entry in backoff, or every entry
+   * pinned to a destination this identity no longer sends to, which is what a
+   * changed endpoint leaves behind for a week — is exactly the case that would
+   * otherwise walk all of it and send nothing.
+   *
+   * A hard read bound needs the scan to move, or the head of the sorted list
+   * would be re-read on every pass and the tail never reached. So the scan
+   * starts where the last one stopped and wraps around: every entry is examined
+   * within `ceil(backlog / maxBatch)` passes, which is what FR-009 asks for —
+   * no entry deferred forever. Losing the cursor costs one pass starting at the
+   * head again.
    *
    * The batch is therefore the oldest of what this pass *scanned*, not of the
-   * whole backlog. That keeps the property the ordering exists for — a large
-   * backlog must not defer the same entries forever — because a sent entry is
-   * deleted and a refused one takes a backoff, so the scan moves past both.
-   * Global oldest-first would need a due-time index, which is separate work.
+   * whole backlog. Global oldest-first would need a due-time index, which is
+   * separate work.
    *
    * @param transport - Where the pass will send.
    * @param nowMs - This pass's clock reading.
-   * @param maxBatch - Entries this pass may send; the scan stops there.
+   * @param maxBatch - Entries this pass may read; also its ceiling on sends.
    * @returns The due entries and what collecting them dropped.
    */
   private async collectDue(transport: EventTransport, nowMs: number, maxBatch: number): Promise<CollectedEntries> {
+    const names = await this.listFiles();
+    const start = await this.scanStart(names);
+    const scan = [...names.slice(start), ...names.slice(0, start)].slice(0, maxBatch);
     const due: DueEntry[] = [];
     let dropped = 0;
 
-    for (const name of await this.listFiles()) {
-      if (due.length >= maxBatch) break;
-
+    for (const name of scan) {
       const file = path.join(this.options.queueDir, name);
       const entry = await this.readEntry(file);
 
@@ -264,7 +276,70 @@ export class EventQueue {
       if (Date.parse(entry.nextAttemptAt) <= nowMs) due.push({ file, entry });
     }
 
+    const last = scan.at(-1);
+
+    if (last !== undefined) await this.rememberScan(last);
+
     return { due, delta: { ...EMPTY_DELTA, dropped } };
+  }
+
+  /**
+   * Index the next bounded scan starts at.
+   *
+   * The first name *after* the one last scanned, so an entry that was sent and
+   * deleted in the meantime does not send the scan back to the head.
+   *
+   * @param names - This pass's sorted entry names.
+   * @returns The starting index; zero when there is no cursor to resume from.
+   */
+  private async scanStart(names: readonly string[]): Promise<number> {
+    const last = await this.lastScanned();
+
+    if (last === undefined) return 0;
+
+    const next = names.findIndex((name) => name > last);
+
+    return next === -1 ? 0 : next;
+  }
+
+  /**
+   * The entry name the previous pass stopped on.
+   *
+   * @returns The name, or undefined when nothing has scanned yet.
+   */
+  private async lastScanned(): Promise<string | undefined> {
+    try {
+      return (await fs.readFile(this.cursorFile(), 'utf8')) || undefined;
+    } catch {
+      // No cursor, or one we cannot read: start at the head. This is a hint for
+      // fairness, not state anything depends on.
+      return undefined;
+    }
+  }
+
+  /**
+   * Record where this pass stopped.
+   *
+   * @param name - The last entry name it read.
+   */
+  private async rememberScan(name: string): Promise<void> {
+    try {
+      await fs.writeFile(this.cursorFile(), name, { mode: SECRET_FILE_MODE });
+    } catch {
+      // Same rule as the sweep marker: the drain runs on the hook path, and
+      // failing to remember a position must never fail the agent's turn.
+    }
+  }
+
+  /**
+   * Where the scan cursor lives.
+   *
+   * Not a `.json` name, so the entry listing never sees it.
+   *
+   * @returns Absolute path to the cursor file.
+   */
+  private cursorFile(): string {
+    return path.join(this.options.queueDir, QUEUE_SCAN_CURSOR_FILE);
   }
 
   /**

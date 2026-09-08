@@ -157,6 +157,55 @@ describe('queue fairness', () => {
     expect(opened).toBeLessThanOrEqual(5);
     await fs.rm(base, { recursive: true, force: true });
   });
+
+  it('reads no more than the batch size when nothing in the backlog is due', async () => {
+    // The bound is on entries read, not on entries found sendable. A backlog
+    // pinned to a destination this identity no longer sends to — what a changed
+    // endpoint leaves behind until it expires — must not be walked in full on
+    // every hook to conclude that none of it can go.
+    const { base, queueDir, locksDir } = dirs();
+    const queue = new EventQueue({ queueDir, locksDir, maxEvents: 500, maxAttempts: 20, maxEventAgeDays: 7 });
+    const transport = { async send() { return { ok: true, retryable: false } as const; }, destination: 'https://new.example.com/v1/events' };
+
+    await queue.enqueue(Array.from({ length: 200 }, (_, index) => summary(`evt_${index}`)), 'https://old.example.com/v1/events');
+
+    // The first pass claims the sweep, which walks the whole partition by
+    // design; the bound under test is the one on the pass after it.
+    await queue.drain(transport as never, 5);
+
+    const opened = await countOpenedEntries(queueDir, () => queue.drain(transport as never, 5));
+
+    expect(opened).toBeGreaterThan(0);
+    expect(opened).toBeLessThanOrEqual(5);
+    expect(await queue.pendingCount()).toBe(200);
+    await fs.rm(base, { recursive: true, force: true });
+  });
+
+  it('reaches an entry behind a backlog of unsendable ones within one rotation', async () => {
+    // The read bound means a pass sees a window, so the window has to move: the
+    // one sendable entry sits behind twelve that never match, and must still go
+    // out within ceil(13 / 2) passes.
+    const { base, queueDir, locksDir } = dirs();
+    const queue = new EventQueue({ queueDir, locksDir, maxEvents: 50, maxAttempts: 20, maxEventAgeDays: 7 });
+    const sent: string[] = [];
+    const transport = {
+      async send(events: { id: string }[]) {
+        sent.push(...events.map((event) => event.id));
+
+        return { ok: true, retryable: false } as const;
+      },
+      destination: 'https://mine.example.com/v1/events'
+    };
+
+    await queue.enqueue(Array.from({ length: 12 }, (_, index) => summary(`evt_stranded_${index}`)), 'https://other.example.com/v1/events');
+    await queue.enqueue([summary('evt_mine')], 'https://mine.example.com/v1/events');
+
+    for (let pass = 0; pass < 7 && sent.length === 0; pass += 1) await queue.drain(transport as never, 2);
+
+    expect(sent).toEqual(['evt_mine']);
+    expect(await queue.pendingCount()).toBe(12);
+    await fs.rm(base, { recursive: true, force: true });
+  });
 });
 
 /**

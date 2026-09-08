@@ -240,6 +240,11 @@ export class TurnStateStore {
     const cutoff = Date.now() - maxAgeMs;
 
     for (const name of sessionDirs) {
+      // The marker lives in this directory too, and it is not a session: without
+      // this it is handed to `removeIfStale`, which fails with ENOTDIR into a
+      // catch that reports it as concurrent hook activity.
+      if (name === SWEEP_MARKER_FILE) continue;
+
       const dir = path.join(this.turnsDir, name);
 
       await removeIfStale(dir, cutoff);

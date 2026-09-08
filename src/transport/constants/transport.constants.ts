@@ -85,6 +85,13 @@ export const RE_UNSAFE_QUEUE_NAME = /[^A-Za-z0-9_-]/g;
 export const QUEUE_FILE_SUFFIX = '.json';
 
 /**
+ * Where a bounded scan stopped, so the next one resumes instead of re-reading
+ * the same head. Deliberately not a `.json` name: the entry listing filters on
+ * that suffix, so the cursor is invisible to every count and every sweep.
+ */
+export const QUEUE_SCAN_CURSOR_FILE = '.scan';
+
+/**
  * How often a drain may walk the whole partition to enforce the retention
  * bound, rather than only the batch-sized head of it.
  */

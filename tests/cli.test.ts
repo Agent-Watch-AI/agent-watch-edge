@@ -11,8 +11,8 @@ import { resolvePaths } from '../src/storage/paths.js';
 import { EventQueue } from '../src/transport/queue.js';
 import { saveConfig } from '../src/config/config-store.js';
 import { defaultConfig } from '../src/config/config.js';
-import { CONTENT_CAPTURE_ON, captureStdout, makeTempEnv, queueEntryFiles, readJson, readQueueEntries, writeJson, type TempWorld } from './helpers.js';
 import { queuePartition } from '../src/transport/queue-partition.js';
+import { CONTENT_CAPTURE_ON, captureStdout, makeTempEnv, queueEntryFiles, readJson, readQueueEntries, writeJson, type TempWorld } from './helpers.js';
 import { claudePostToolUseEdit, claudeUserPromptSubmit } from './fixtures/claude.js';
 
 describe('CLI commands', () => {

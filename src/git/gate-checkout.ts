@@ -214,8 +214,8 @@ async function readMemo(file: string, now: number): Promise<RememberedRemote | u
 
   if (!known || typeof entry.at !== 'number') return undefined;
 
-  const ttlMs =
-    entry.repository === null ? GATE_REMOTE_ABSENT_TTL_MS : GATE_REMOTE_MEMO_TTL_MS;
+  const ttlMs
+    = entry.repository === null ? GATE_REMOTE_ABSENT_TTL_MS : GATE_REMOTE_MEMO_TTL_MS;
 
   if (now - entry.at > ttlMs) return undefined;
 

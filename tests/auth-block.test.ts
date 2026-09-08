@@ -21,6 +21,7 @@ class FakeTransport implements EventTransport {
     private readonly result: DeliveryResult,
     readonly destination = BACKEND
   ) {}
+
   async send(): Promise<DeliveryResult> {
     this.calls += 1;
 

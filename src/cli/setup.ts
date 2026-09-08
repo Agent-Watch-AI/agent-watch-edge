@@ -372,8 +372,8 @@ async function offerBacklogRetarget(
 
   if (stranded === 0) return;
 
-  const question =
-    previousUrl === configuredUrl
+  const question
+    = previousUrl === configuredUrl
       ? `${stranded} offline event(s) are queued under the previous token. Deliver them with the new token? [y/N]: `
       : `${stranded} offline event(s) are queued for the previous backend (${previousUrl}). Deliver them to the new backend? [y/N]: `;
   const answer = ask ? (await ask(question)).trim().toLowerCase() : '';

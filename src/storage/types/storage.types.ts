@@ -25,10 +25,10 @@ export interface AgentWatchPaths {
  * Outcome of a tolerant JSON read. `missing` and `invalid` are distinct on
  * purpose: a file we cannot parse must never be overwritten.
  */
-export type JsonReadResult =
-  | { readonly state: 'missing' }
-  | { readonly state: 'invalid'; readonly error: string }
-  | { readonly state: 'ok'; readonly value: unknown };
+export type JsonReadResult
+  = | { readonly state: 'missing' }
+    | { readonly state: 'invalid'; readonly error: string }
+    | { readonly state: 'ok'; readonly value: unknown };
 
 /** Releases a held advisory lock. */
 export type ReleaseLock = () => Promise<void>;

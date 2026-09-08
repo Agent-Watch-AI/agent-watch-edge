@@ -36,7 +36,10 @@ describe('local off switch', () => {
     });
     expect(await runSetup({ env: world.env, endpoint: 'https://example.com', token: 'test-token', developerEmail: 'dev@example.com', yes: true, hookCommandFor: (id) => `agentwatch hook --agent ${id}` })).toBe(0);
   });
-  afterEach(async () => { await world.cleanup(); vi.restoreAllMocks(); });
+  afterEach(async () => {
+    await world.cleanup();
+    vi.restoreAllMocks();
+  });
 
   it('repeated off/on preserves hooks, config, queue and unrelated settings', async () => {
     const paths = resolvePaths(world.env);

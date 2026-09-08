@@ -1,10 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { makeTempEnv, writeJson, type TempWorld } from './helpers.js';
 import { loadConfig } from '../src/config/config-store.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { defaultConfig, parseOtelSignals } from '../src/config/config.js';
+import { makeTempEnv, writeJson, type TempWorld } from './helpers.js';
 
 describe('config load fallback', () => {
   let world: TempWorld;

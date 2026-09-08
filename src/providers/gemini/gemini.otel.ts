@@ -325,8 +325,8 @@ function ownedKeysOf(context: SetupContext): readonly string[] {
  * @returns Configured, unless our own leftovers are still in place.
  */
 function inspectDisabled(settings: UnknownRecord, envBlock: UnknownRecord, ownedKeys: readonly string[]): NativeTelemetryStatus {
-  const leftover =
-    ownedKeys.some((key) => (key === LEGACY_HELPER_KEY ? settings[key] !== undefined : envBlock[key] !== undefined)) || hasOurLegacyHelper(settings);
+  const leftover
+    = ownedKeys.some((key) => (key === LEGACY_HELPER_KEY ? settings[key] !== undefined : envBlock[key] !== undefined)) || hasOurLegacyHelper(settings);
 
   if (!leftover) return { supported: true, configured: true, detail: 'disabled by config or content consent' };
 

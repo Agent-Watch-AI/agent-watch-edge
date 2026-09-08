@@ -1,11 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { makeTempEnv, writeJson, type TempWorld } from './helpers.js';
 import { applyRootOverride, selectRoot, servesMultipleIdentities } from '../src/config/root-config.js';
 import { loadEffectiveConfig } from '../src/config/repo-config.js';
 import { defaultConfig } from '../src/config/config.js';
 import { resolvePaths } from '../src/storage/paths.js';
+import { makeTempEnv, writeJson, type TempWorld } from './helpers.js';
 
 const TRIP = '/Users/dev/tripPlanner';
 const WATCH = '/Users/dev/agent watch';

@@ -23,8 +23,8 @@ export const DEVELOPER_IDENTITY_CHECK = 'developer identity';
  * the whole fix rather than a hint to go looking for it.
  */
 export const NO_DEVELOPER_IDENTITY = 'no developer identity: `git config user.email` is unset here and --developer-email was not given';
-export const DEVELOPER_IDENTITY_REMEDIES =
-  'set one with `git config --global user.email you@company.com`, or re-run setup with `--developer-email you@company.com`';
+export const DEVELOPER_IDENTITY_REMEDIES
+  = 'set one with `git config --global user.email you@company.com`, or re-run setup with `--developer-email you@company.com`';
 
 /** Said on the failure path, because a half-written config is worse than none. */
 export const NO_CONFIG_WRITTEN = 'no configuration was written; re-run setup once the identity resolves';
@@ -80,4 +80,3 @@ export const RE_QUOTE_ESCAPE = /(["\\$`])/g;
 
 /** Redaction placeholder in the `config` command's output. */
 export const REDACTED_TOKEN = '<redacted>';
-

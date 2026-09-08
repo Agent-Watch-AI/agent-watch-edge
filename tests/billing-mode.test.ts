@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { makeTempEnv, writeJson, type TempWorld } from './helpers.js';
 import { detectBillingMode } from '../src/billing/billing-mode.js';
+import { makeTempEnv, writeJson, type TempWorld } from './helpers.js';
 
 describe('billing mode detection', () => {
   let world: TempWorld;

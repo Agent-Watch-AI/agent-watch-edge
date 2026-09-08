@@ -20,6 +20,7 @@ class FakeTransport implements EventTransport {
     private readonly result: DeliveryResult,
     readonly destination?: string
   ) {}
+
   async send(events: ProductEvent[]): Promise<DeliveryResult> {
     this.calls.push(events);
 

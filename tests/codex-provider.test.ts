@@ -1,13 +1,13 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { parse as parseToml } from 'smol-toml';
 import { detectCodex, codexHooksJsonPath, codexConfigTomlPath } from '../src/providers/codex/codex.detect.js';
 import { installCodexHooks, uninstallCodexHooks, CODEX_HOOK_EVENTS } from '../src/providers/codex/codex.hooks.js';
 import { CodexOtelConfigurator } from '../src/providers/codex/codex.otel.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { defaultConfig } from '../src/config/config.js';
 import type { SetupContext } from '../src/providers/provider.js';
-import { parse as parseToml } from 'smol-toml';
 import { CONTENT_CAPTURE_ON, makeTempEnv, readJson, writeJson, type TempWorld } from './helpers.js';
 
 const HOOK_CMD = 'agentwatch hook --agent codex';

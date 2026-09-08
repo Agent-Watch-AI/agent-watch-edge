@@ -36,4 +36,3 @@ export const RE_SHELL_CONTROL = /[|&;<>\r\n]/;
 export const RE_DOUBLE_QUOTE_ESCAPABLE = /["\\$`]/;
 
 export const RE_WHITESPACE = /\s/;
-

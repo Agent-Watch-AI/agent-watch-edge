@@ -1,7 +1,7 @@
+import type { TurnSummaryEvent } from '../turns/types/turn-summary.types.js';
 import { PRODUCT_EVENT_TYPE_SET } from './constants/events.constants.js';
 import type { LlmCallEvent } from './types/llm-call.types.js';
 import type { RepoSnapshotEvent } from './types/repo-snapshot.types.js';
-import type { TurnSummaryEvent } from '../turns/types/turn-summary.types.js';
 
 export { PRODUCT_EVENT_TYPES } from './constants/events.constants.js';
 export type { ProductEventType } from './types/events.types.js';

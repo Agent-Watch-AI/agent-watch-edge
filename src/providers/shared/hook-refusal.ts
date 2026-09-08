@@ -1,7 +1,7 @@
 import { asRecord } from '../../core/object.js';
 import type { UnknownRecord } from '../../core/types/core.types.js';
-import { PAYLOAD_HOOK_EVENT_KEY } from './constants/hook-refusal.constants.js';
 import type { ProviderHookResponse } from '../types/provider.types.js';
+import { PAYLOAD_HOOK_EVENT_KEY } from './constants/hook-refusal.constants.js';
 
 /**
  * A refusal for the hooks an agent lets a hook refuse, and nothing for the rest.

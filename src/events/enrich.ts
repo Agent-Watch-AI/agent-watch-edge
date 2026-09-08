@@ -125,8 +125,8 @@ function enrichMetadata(metadata: AgentWatchEvent['metadata'], context: EnrichCo
   if (!metadata) return undefined;
 
   const filePath = metadata[FILE_PATH_METADATA_KEY];
-  const withSafePath =
-    typeof filePath === 'string'
+  const withSafePath
+    = typeof filePath === 'string'
       ? { ...metadata, [FILE_PATH_METADATA_KEY]: toSafePath(filePath, context.git.repositoryRoot) }
       : metadata;
 

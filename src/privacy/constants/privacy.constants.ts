@@ -17,8 +17,8 @@ export const MAX_DEPTH = 12;
 export const MAX_STRING_LENGTH = 8192;
 
 /** Key names whose values are always redacted regardless of content. */
-export const SENSITIVE_KEY_PATTERN =
-  /(^|[_.-])(authorization|auth|token|secret|password|passwd|pwd|credential|credentials|api[_-]?key|apikey|access[_-]?key|private[_-]?key|session[_-]?key|cookie|bearer)([_.-]|$)/i;
+export const SENSITIVE_KEY_PATTERN
+  = /(^|[_.-])(authorization|auth|token|secret|password|passwd|pwd|credential|credentials|api[_-]?key|apikey|access[_-]?key|private[_-]?key|session[_-]?key|cookie|bearer)([_.-]|$)/i;
 
 /**
  * Content patterns for common credentials, applied to every outgoing string.

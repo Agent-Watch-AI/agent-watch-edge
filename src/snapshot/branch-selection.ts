@@ -1,5 +1,5 @@
-import { SNAPSHOT_REFRESH_MS } from './constants/snapshot.constants.js';
 import type { BranchRef } from '../git/types/snapshot.types.js';
+import { SNAPSHOT_REFRESH_MS } from './constants/snapshot.constants.js';
 import type { SelectionInput, SnapshotState } from './types/snapshot.types.js';
 
 /**

@@ -79,11 +79,11 @@ describe('sanitizeValue on object keys', () => {
   });
 
   it('scrubs a secret key whose value is not a string', () => {
-    expect(JSON.stringify(sanitizeValue({ 'ghp_abcdefghijklmnopqrstuv123456': 1 }))).not.toContain('ghp_abcdefghijklmnopqrstuv123456');
+    expect(JSON.stringify(sanitizeValue({ ghp_abcdefghijklmnopqrstuv123456: 1 }))).not.toContain('ghp_abcdefghijklmnopqrstuv123456');
   });
 
   it('keeps both entries when two distinct keys redact to the same string', () => {
-    const out = sanitizeValue({ 'ghp_abcdefghijklmnopqrstuv123456': 1, 'ghp_zyxwvutsrqponmlkjihg654321': 2 });
+    const out = sanitizeValue({ ghp_abcdefghijklmnopqrstuv123456: 1, ghp_zyxwvutsrqponmlkjihg654321: 2 });
     const values = Object.values(out);
 
     expect(Object.keys(out)).toHaveLength(2);

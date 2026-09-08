@@ -2,7 +2,6 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { makeTempEnv, queueEntryFiles, writeJson, type TempWorld } from './helpers.js';
 import { queuePartition, settleLegacyQueue, unattributedCount, unattributedQueue } from '../src/transport/queue-partition.js';
 import { EventQueue } from '../src/transport/queue.js';
 import type { DeliveryResult, EventTransport } from '../src/transport/transport.js';
@@ -11,6 +10,7 @@ import { buildTurnSummary } from '../src/turns/turn-summary.js';
 import { runHook } from '../src/cli/hook.js';
 import { defaultConfig } from '../src/config/config.js';
 import { resolvePaths } from '../src/storage/paths.js';
+import { makeTempEnv, queueEntryFiles, writeJson, type TempWorld } from './helpers.js';
 
 const TRIP_TOKEN = 'aw_edge_trip';
 const WATCH_TOKEN = 'aw_edge_watch';

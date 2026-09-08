@@ -13,6 +13,16 @@ export const TOOL_COMPLETION_TYPES: ReadonlySet<string> = new Set([
 /** Orphaned turn state (a crash without Stop/SessionEnd) is deleted after this. */
 export const TURN_STATE_TTL_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * How often the expiry sweep may actually walk the state root.
+ *
+ * It used to run after every closing turn and every session end — a `readdir`
+ * plus a `stat` per file of every recent session, on the hook path, almost
+ * always to find that nothing was 24 h old yet. Hourly keeps removal well
+ * inside the TTL's own tolerance and costs one `stat` on the common path.
+ */
+export const TURN_STATE_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+
 /** Overlapping Stop hooks serialize only transcript usage allocation. */
 export const USAGE_LOCK_WAIT_MS = 5_000;
 export const USAGE_LOCK_POLL_MS = 25;

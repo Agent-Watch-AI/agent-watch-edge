@@ -6,6 +6,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { CONTENT_CAPTURE_ON, makeTempEnv, queueEntryFiles, writeJson, type TempWorld } from './helpers.js';
 import { readTurnUsage } from '../src/turns/claude-transcript.js';
 import { SESSION_MODEL_FILE } from '../src/turns/constants/turns.constants.js';
+import { SWEEP_MARKER_FILE } from '../src/storage/constants/storage.constants.js';
 import { parseCodexHookEvent } from '../src/providers/codex/codex.adapter.js';
 import { codexSessionStart, codexStop, codexUserPromptSubmit } from './fixtures/codex.js';
 import { configSchema } from '../src/config/schemas/config.schema.js';
@@ -409,7 +410,9 @@ describe('turn tracking through the hook pipeline', () => {
 
     await hookDryRun({ hook_event_name: 'SessionEnd', session_id: 'sess-model', reason: 'clear', cwd: world.home });
     expect(await store.readModel('sess-model')).toBeUndefined();
-    expect(await fs.readdir(turnsDir).catch(() => [])).toEqual([]);
+    // No session state left behind. The sweep marker is not session state: it
+    // holds no session id and no content, only the time of the last sweep.
+    expect((await fs.readdir(turnsDir).catch(() => [])).filter((name) => name !== SWEEP_MARKER_FILE)).toEqual([]);
   });
 
   it('emits only a turn.summary on Stop with provisional transcript usage', async () => {

@@ -102,8 +102,8 @@ by the backlog size.
    delivery pass, **Then** the number of backlog entries read and validated is
    bounded by the drain batch size and does not grow with the backlog.
 2. **Given** a backlog at the ceiling, **When** the backend recovers, **Then**
-   the backlog drains oldest-first, exactly as it does today, and no entry is
-   lost or sent twice.
+   the whole backlog drains, no entry is lost, sent twice, or deferred forever,
+   and each pass sends the oldest of the entries it scanned.
 3. **Given** any backlog, **When** the status and diagnostic commands report on
    it, **Then** the counts they report are the same ones they report today.
 
@@ -250,16 +250,32 @@ code deleted, and no import breaks.
 - **FR-008**: One delivery pass MUST read and validate a number of backlog
   entries bounded by the configured drain batch size, independent of how large
   the backlog is.
-- **FR-009**: The backlog MUST continue to drain oldest-first, MUST remain
-  idempotent against duplicate enqueue, and MUST NOT lose an entry to a crash at
-  any point in a pass.
+- **FR-009**: The backlog MUST remain idempotent against duplicate enqueue, MUST
+  NOT lose an entry to a crash at any point in a pass, and MUST NOT starve an
+  entry: every queued record must eventually be attempted, however large the
+  backlog and whatever order the filenames sort in.
+
+  *(Rewritten. The v1 form said "MUST continue to drain oldest-first", which
+  cannot hold together with FR-008: the age a pass sorts on lives inside the
+  entry, so ordering the whole backlog means reading and parsing all of it on
+  every hook — the cost FR-008 exists to remove. What oldest-first was
+  introduced for is stated here directly instead: no entry may be deferred
+  forever. A pass sends the oldest of the entries it scanned; a sent entry is
+  deleted and a refused one takes a backoff, so the scan always moves on.
+  Strict global age order needs a due-time index, which `review.md` §P2 places
+  outside this work.)*
 - **FR-010**: A hook invocation MUST load only the agent it was invoked for.
 - **FR-011**: A hook invocation MUST read the global configuration file once.
 - **FR-012**: The credential scrub and capture gate MUST be applied once to a
   record the current invocation produced, and MUST still be re-applied to a
   record taken out of the local backlog before it is sent.
-- **FR-013**: Expired per-session state MUST still be deleted within its
-  retention window, without a full scan of session state on every closing turn.
+- **FR-013**: Expired per-session state and expired queue entries MUST still be
+  deleted within their retention window plus the sweep interval, without a full
+  scan on every closing turn or every delivery pass. For queue entries this is
+  stricter than the behaviour it replaces, not looser: expiry used to be
+  enforced only inside a delivery pass, and a pass is skipped for the whole
+  backend cooldown window — so during the multi-day outage the retention bound
+  exists for, nothing aged out at all.
 - **FR-014**: Repeated reads of a growing transcript within one turn MUST NOT
   re-allocate and re-decode bytes already read in that turn.
 - **FR-015**: The process MUST NOT exit before the hook's answer has been handed

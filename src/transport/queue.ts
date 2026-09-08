@@ -2,11 +2,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pollUntil } from '../core/async.js';
 import { debugLog } from '../core/logger.js';
-import { PRODUCT_EVENT_TYPE_SET } from '../events/constants/events.constants.js';
-import type { ProductEvent } from '../events/product-event.js';
+import { isProductEvent, type EventTypeCarrier, type ProductEvent } from '../events/product-event.js';
 import { writeFileAtomic } from '../storage/atomic-file.js';
 import { acquireLock } from '../storage/lock.js';
-import { SECRET_FILE_MODE } from '../storage/constants/storage.constants.js';
+import { claimSweep } from '../storage/sweep-marker.js';
+import { SECRET_FILE_MODE, SWEEP_MARKER_FILE } from '../storage/constants/storage.constants.js';
 import type { ReleaseLock } from '../storage/types/storage.types.js';
 import type { BackendAuthBlock } from './auth-block.js';
 import {
@@ -20,6 +20,7 @@ import {
   MS_PER_DAY,
   QUEUE_DRAIN_LOCK,
   QUEUE_FILE_SUFFIX,
+  QUEUE_SWEEP_INTERVAL_MS,
   RETARGET_LOCK_POLL_MS,
   RETARGET_LOCK_WAIT_MS,
   RE_UNSAFE_QUEUE_NAME
@@ -129,15 +130,16 @@ export class EventQueue {
 
     try {
       const nowMs = this.now().getTime();
-      const collected = await this.collectDue(transport, nowMs);
-      // Oldest first: hash-ordered filenames would otherwise let a large
-      // backlog defer the same late-sorting entries on every drain.
+      const swept = await this.sweepUnsendable(nowMs);
+      const collected = await this.collectDue(transport, nowMs, maxBatch);
+      // Oldest first among what was scanned: hash-ordered filenames would
+      // otherwise let a large backlog defer the same late-sorting entries.
       const batch = collected.due
         .slice()
         .sort((a, b) => Date.parse(a.entry.firstQueuedAt) - Date.parse(b.entry.firstQueuedAt))
         .slice(0, maxBatch);
       const sent = batch.length === 0 ? EMPTY_DELTA : await this.sendBatch(transport, batch, nowMs, authBlock);
-      const stats: DrainStats = { ...mergeDeltas(collected.delta, sent), skipped: false };
+      const stats: DrainStats = { ...mergeDeltas(mergeDeltas(swept, collected.delta), sent), skipped: false };
 
       await report(statsRecorder, stats);
 
@@ -221,22 +223,37 @@ export class EventQueue {
   /**
    * Entries due for this transport, dropping the ones that can never be sent.
    *
+   * Stops as soon as it has a full batch. Reading and zod-parsing the whole
+   * partition to find the few entries a pass may send is what made an outage
+   * cost the developer up to `maxQueueEvents` file reads on every hook, which
+   * AGENTS.md §3 forbids outright.
+   *
+   * The batch is therefore the oldest of what this pass *scanned*, not of the
+   * whole backlog. That keeps the property the ordering exists for — a large
+   * backlog must not defer the same entries forever — because a sent entry is
+   * deleted and a refused one takes a backoff, so the scan moves past both.
+   * Global oldest-first would need a due-time index, which is separate work.
+   *
    * @param transport - Where the pass will send.
    * @param nowMs - This pass's clock reading.
+   * @param maxBatch - Entries this pass may send; the scan stops there.
    * @returns The due entries and what collecting them dropped.
    */
-  private async collectDue(transport: EventTransport, nowMs: number): Promise<CollectedEntries> {
+  private async collectDue(transport: EventTransport, nowMs: number, maxBatch: number): Promise<CollectedEntries> {
     const due: DueEntry[] = [];
     let dropped = 0;
 
     for (const name of await this.listFiles()) {
+      if (due.length >= maxBatch) break;
+
       const file = path.join(this.options.queueDir, name);
       const entry = await this.readEntry(file);
 
-      if (!entry || this.isExpired(entry, nowMs) || !isProductEntry(entry)) {
+      if (!entry || this.isExpired(entry, nowMs) || !isProductEvent(entry.event as EventTypeCarrier)) {
         // Unreadable, aged out, or — for a backlog written by a pre-product
         // release — an internal lifecycle event the backend does not accept.
-        // Draining one of those would poison every batch it rides in.
+        // Draining one of those would poison every batch it rides in. Entries
+        // past the scan are the throttled sweep's business, not this pass's.
         await fs.rm(file, { force: true });
         dropped += 1;
         continue;
@@ -248,6 +265,37 @@ export class EventQueue {
     }
 
     return { due, delta: { ...EMPTY_DELTA, dropped } };
+  }
+
+  /**
+   * Remove everything that can never be sent, wherever it sits in the partition.
+   *
+   * The bounded scan only ever sees the head of the backlog, so the retention
+   * bound needs a pass that sees all of it. Throttled by a marker, because that
+   * pass is the expensive one — and it is an improvement on what it replaces:
+   * expiry used to be enforced only inside a drain, and a drain is skipped for
+   * the whole cooldown window, so during a backend outage nothing aged out at
+   * all. That was precisely the week-long case the bound exists for.
+   *
+   * @param nowMs - This pass's clock reading.
+   * @returns What the sweep dropped, or nothing when it was not due.
+   */
+  private async sweepUnsendable(nowMs: number): Promise<DrainDelta> {
+    if (!(await claimSweep(path.join(this.options.queueDir, SWEEP_MARKER_FILE), QUEUE_SWEEP_INTERVAL_MS, nowMs))) return EMPTY_DELTA;
+
+    let dropped = 0;
+
+    for (const name of await this.listFiles()) {
+      const file = path.join(this.options.queueDir, name);
+      const entry = await this.readEntry(file);
+
+      if (entry && !this.isExpired(entry, nowMs) && isProductEvent(entry.event as EventTypeCarrier)) continue;
+
+      await fs.rm(file, { force: true });
+      dropped += 1;
+    }
+
+    return { ...EMPTY_DELTA, dropped };
   }
 
   /**
@@ -549,12 +597,6 @@ function matchesDestination(entry: string | undefined, transport: string | undef
  * @param entry - The entry.
  * @returns True for an llm.call or turn.summary.
  */
-function isProductEntry(entry: QueueEntry): boolean {
-  const type = (entry.event as { event?: { type?: unknown } }).event?.type;
-
-  return typeof type === 'string' && PRODUCT_EVENT_TYPE_SET.has(type);
-}
-
 /**
  * Backoff for the nth attempt, with jitter.
  *

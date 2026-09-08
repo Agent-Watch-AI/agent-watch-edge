@@ -57,3 +57,6 @@ export const LOCK_ACQUIRE_ATTEMPTS = 2;
 
 /** Characters that are unsafe in a timestamped backup filename. */
 export const RE_UNSAFE_STAMP_CHARS = /[:.]/g;
+
+/** Marker whose mtime records the last sweep, written inside the swept directory. */
+export const SWEEP_MARKER_FILE = '.sweep';

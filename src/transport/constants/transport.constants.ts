@@ -85,6 +85,12 @@ export const RE_UNSAFE_QUEUE_NAME = /[^A-Za-z0-9_-]/g;
 export const QUEUE_FILE_SUFFIX = '.json';
 
 /**
+ * How often a drain may walk the whole partition to enforce the retention
+ * bound, rather than only the batch-sized head of it.
+ */
+export const QUEUE_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+
+/**
  * Queue partition used before setup writes a token. Entries land here pinned to
  * ANY_DESTINATION, and the first identity setup configures adopts them — which
  * is the same promise ANY_DESTINATION already makes.

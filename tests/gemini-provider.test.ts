@@ -155,6 +155,45 @@ describe('Gemini provider', () => {
       expect(settings.env.GEMINI_TELEMETRY_OTLP_ENDPOINT).toBe('https://backend.example.com/v1/otlp');
     });
 
+    it('leaves the permissions of a file it does not own alone when no credential is written', async () => {
+      // No token, so the block carries no bearer and there is nothing to
+      // protect. This file is Gemini's; tightening it anyway changed another
+      // tool's permissions on a shared workstation for no reason.
+      await writeJson(geminiSettingsPath(world.env), { theme: 'dark' });
+      await fs.chmod(geminiSettingsPath(world.env), 0o644);
+
+      const context = setupContext();
+
+      await new GeminiOtelConfigurator().configure(context);
+
+      expect((await fs.stat(geminiSettingsPath(world.env))).mode & 0o777).toBe(0o644);
+    });
+
+    it('tightens the file only for a credential, and gives its mode back on uninstall', async () => {
+      await writeJson(geminiSettingsPath(world.env), { theme: 'dark' });
+      await fs.chmod(geminiSettingsPath(world.env), 0o644);
+
+      const context = setupContext();
+
+      context.config.token = 'token-123';
+
+      const configured = await new GeminiOtelConfigurator().configure(context);
+
+      expect((await fs.stat(geminiSettingsPath(world.env))).mode & 0o777).toBe(0o600);
+      expect(configured.installState.agents.gemini?.otelPriorMode).toBe(0o644);
+
+      // `writeFileAtomic` preserves the target's mode by design, so without the
+      // recorded original the file would keep 0600 forever after the token was
+      // gone — the one place the package broke its own "only AgentWatch-owned
+      // entries are ever touched" invariant, applied to file metadata.
+      const removed = await new GeminiOtelConfigurator().uninstall({ ...context, installState: configured.installState });
+
+      expect(removed.ok).toBe(true);
+      expect((await fs.stat(geminiSettingsPath(world.env))).mode & 0o777).toBe(0o644);
+      expect(removed.installState.agents.gemini?.otelPriorMode).toBeUndefined();
+      expect((await readJson(geminiSettingsPath(world.env))).theme).toBe('dark');
+    });
+
     it('sends the ingest token in OTEL_EXPORTER_OTLP_HEADERS, not via a helper', async () => {
       const configurator = new GeminiOtelConfigurator();
       const context = setupContext();

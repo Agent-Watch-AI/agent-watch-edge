@@ -4,7 +4,7 @@ import { asRecord } from '../../core/object.js';
 import type { Env, UnknownRecord } from '../../core/types/core.types.js';
 import { joinUrl, otlpBaseUrl, toolContentConsented } from '../../config/config.js';
 import type { AgentWatchConfig, OtelConfig, OtelSignalName } from '../../config/types/config.types.js';
-import { backupFile, writeFileAtomic } from '../../storage/atomic-file.js';
+import { backupFile, currentMode, writeFileAtomic } from '../../storage/atomic-file.js';
 import { SECRET_FILE_MODE } from '../../storage/constants/storage.constants.js';
 import { withOtelInstall, withoutOtelInstall } from '../shared/install-record.js';
 import type { NativeTelemetryConfigurator, NativeTelemetryStatus, SetupContext, SetupOutcome } from '../types/provider.types.js';
@@ -109,7 +109,11 @@ export class CodexOtelConfigurator implements NativeTelemetryConfigurator {
     }
 
     await backupFile(configPath, context.paths.backupsDir, context.env.now());
-    // The managed block may carry the bearer token, so the file becomes private.
+    // The managed block may carry the bearer token, so the file becomes private
+    // — but this file is Codex's, not ours, so the mode it had first is
+    // recorded and uninstall puts it back.
+    const priorMode = context.config.token ? await currentMode(configPath) : undefined;
+
     await writeFileAtomic(configPath, next, context.config.token ? SECRET_FILE_MODE : undefined);
 
     return {
@@ -119,7 +123,8 @@ export class CodexOtelConfigurator implements NativeTelemetryConfigurator {
       installState: withOtelInstall(context.installState, CODEX_PROVIDER_ID, {
         configPath,
         ownedKeys: [OTEL_TABLE_KEY],
-        configuredAt: context.env.now()
+        configuredAt: context.env.now(),
+        ...(priorMode !== undefined && priorMode !== SECRET_FILE_MODE ? { priorMode } : {})
       })
     };
   }
@@ -156,7 +161,10 @@ export class CodexOtelConfigurator implements NativeTelemetryConfigurator {
     }
 
     await backupFile(configPath, context.paths.backupsDir, context.env.now());
-    await writeFileAtomic(configPath, next);
+    // Restore the mode the file carried before AgentWatch tightened it:
+    // `writeFileAtomic` with no mode preserves the target's current one, which
+    // is our 0600 on a file that no longer holds a token.
+    await writeFileAtomic(configPath, next, context.installState.agents[CODEX_PROVIDER_ID]?.otelPriorMode);
 
     return {
       ok: true,

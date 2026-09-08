@@ -297,6 +297,32 @@ describe('Codex provider', () => {
       expect(mode).toBe(0o600);
     });
 
+    it('gives config.toml its own permissions back on uninstall', async () => {
+      const configPath = codexConfigTomlPath(world.env);
+
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, 'model = "gpt-5.2-codex"\n');
+      await fs.chmod(configPath, 0o644);
+
+      const context = setupContext();
+
+      context.config.token = 'tok-abc';
+
+      const configured = await new CodexOtelConfigurator().configure(context);
+
+      expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
+      expect(configured.installState.agents.codex?.otelPriorMode).toBe(0o644);
+
+      // This file is Codex's, and `writeFileAtomic` preserves the target's
+      // mode, so without the recorded original it would keep 0600 forever
+      // after the token was gone.
+      const removed = await new CodexOtelConfigurator().uninstall({ ...context, installState: configured.installState });
+
+      expect(removed.ok).toBe(true);
+      expect((await fs.stat(configPath)).mode & 0o777).toBe(0o644);
+      expect(removed.installState.agents.codex?.otelPriorMode).toBeUndefined();
+    });
+
     it('uninstall removes exactly the managed block', async () => {
       const configPath = codexConfigTomlPath(world.env);
 

@@ -75,7 +75,7 @@ export async function backupFile(filePath: string, backupsDir: string, now: Date
  * @param filePath - File to inspect.
  * @returns Its mode, or undefined when the file does not exist.
  */
-async function currentMode(filePath: string): Promise<number | undefined> {
+export async function currentMode(filePath: string): Promise<number | undefined> {
   try {
     return (await fs.stat(filePath)).mode & PERMISSION_MASK;
   } catch {

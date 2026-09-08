@@ -2,7 +2,7 @@ import { asRecord, omitKeys } from '../../core/object.js';
 import type { Env, UnknownRecord } from '../../core/types/core.types.js';
 import { enabledSignalNames, otlpBaseUrl, toolContentConsented } from '../../config/config.js';
 import type { AgentWatchConfig, OtelConfig, OtelSignalName } from '../../config/types/config.types.js';
-import { backupFile } from '../../storage/atomic-file.js';
+import { backupFile, currentMode } from '../../storage/atomic-file.js';
 import { SECRET_FILE_MODE } from '../../storage/constants/storage.constants.js';
 import { readJsonFile } from '../../storage/json-file.js';
 import { HOOK_COMMAND_MARKER } from '../constants/provider.constants.js';
@@ -177,9 +177,16 @@ export class GeminiOtelConfigurator implements NativeTelemetryConfigurator {
     const nextSettings = hasOurLegacyHelper(withEnv) ? omitKeys(withEnv, new Set([LEGACY_HELPER_KEY])) : withEnv;
     const changed = JSON.stringify(nextSettings) !== JSON.stringify(settings);
 
+    // Only when the block actually carries the bearer. This file is Gemini's,
+    // not ours, and `writeFileAtomic` preserves the target's mode by design —
+    // so tightening it unconditionally changed another tool's permissions on a
+    // shared workstation for no reason, and could never be undone.
+    const carriesCredential = desired[OTLP_HEADERS_KEY] !== undefined;
+    const priorMode = carriesCredential ? await currentMode(settingsPath) : undefined;
+
     if (changed) {
       await backupFile(settingsPath, context.paths.backupsDir, context.env.now());
-      await writeJsonValidated(settingsPath, nextSettings, SECRET_FILE_MODE);
+      await writeJsonValidated(settingsPath, nextSettings, carriesCredential ? SECRET_FILE_MODE : undefined);
     }
 
     return {
@@ -191,7 +198,8 @@ export class GeminiOtelConfigurator implements NativeTelemetryConfigurator {
       installState: withOtelInstall(context.installState, GEMINI_PROVIDER_ID, {
         configPath: settingsPath,
         ownedKeys: Object.keys(desired),
-        configuredAt: context.env.now()
+        configuredAt: context.env.now(),
+        ...(changed && priorMode !== undefined && priorMode !== SECRET_FILE_MODE ? { priorMode } : {})
       })
     };
   }
@@ -227,7 +235,10 @@ export class GeminiOtelConfigurator implements NativeTelemetryConfigurator {
 
     if (changed) {
       await backupFile(settingsPath, context.paths.backupsDir, context.env.now());
-      await writeJsonValidated(settingsPath, nextSettings);
+      // The mode the file had before AgentWatch tightened it, when it was
+      // tightened. `writeJsonValidated` with no mode would otherwise keep our
+      // 0600 on a file that no longer holds a token.
+      await writeJsonValidated(settingsPath, nextSettings, context.installState.agents[GEMINI_PROVIDER_ID]?.otelPriorMode);
     }
 
     return {

@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { writeFileAtomic } from '../src/storage/atomic-file.js';
+import { SECRET_FILE_MODE } from '../src/storage/constants/storage.constants.js';
 import { EventQueue } from '../src/transport/queue.js';
 
 function summary(id: string) {
@@ -47,10 +49,13 @@ describe('the retention sweep against an injected clock', () => {
     await queue.enqueue([summary('evt_stale')]);
 
     // A marker last claimed two hours ago in wall-clock terms: due, by the only
-    // clock the marker is written in.
+    // clock the marker is written in. Written through `writeFileAtomic`, as the
+    // package writes every file under a directory `AGENTWATCH_DATA_DIR` may put
+    // in a shared temp tree: an unpredictable temp name, 0600, and a rename that
+    // replaces a pre-planted symlink rather than following it.
     const marker = path.join(queueDir, '.sweep');
 
-    await fs.writeFile(marker, '');
+    await writeFileAtomic(marker, '', SECRET_FILE_MODE);
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
 
     await fs.utimes(marker, twoHoursAgo, twoHoursAgo);
@@ -59,7 +64,7 @@ describe('the retention sweep against an injected clock', () => {
     const [file] = await fs.readdir(queueDir).then((names) => names.filter((name) => name.endsWith('.json')));
     const entry = JSON.parse(await fs.readFile(path.join(queueDir, file!), 'utf8'));
 
-    await fs.writeFile(path.join(queueDir, file!), JSON.stringify({ ...entry, firstQueuedAt: '2026-07-01T10:00:00.000Z' }));
+    await writeFileAtomic(path.join(queueDir, file!), JSON.stringify({ ...entry, firstQueuedAt: '2026-07-01T10:00:00.000Z' }), SECRET_FILE_MODE);
 
     expect(await queue.sweep()).toBe(1);
     expect(await queue.pendingCount()).toBe(0);

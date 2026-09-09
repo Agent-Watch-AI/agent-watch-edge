@@ -151,6 +151,31 @@ export class EventQueue {
   }
 
   /**
+   * Enforce retention across the whole partition, without sending anything.
+   *
+   * `drain` sweeps too, but every early return in `deliverEvents` skips a drain
+   * — a tripped cooldown, and a credential the backend is refusing — and those
+   * are precisely the multi-day outages the age bound exists for. A block has no
+   * timer at all, so a revoked token used to mean nothing aged out until someone
+   * fixed the credential, while `enforceBound` quietly shed the oldest records
+   * at the ceiling. Sharing the marker with the drain's own sweep, so a hook
+   * that does reach a drain still pays for only one pass.
+   *
+   * Takes no lock: every removal is idempotent, which is the same reason
+   * `claimSweep` is unlocked.
+   *
+   * @param statsRecorder - Optional sink for what aged out.
+   * @returns How many entries were removed.
+   */
+  async sweep(statsRecorder?: DrainStatsRecorder): Promise<number> {
+    const { dropped } = await this.sweepUnsendable(this.now().getTime());
+
+    if (dropped > 0) await statsRecorder?.recordDropped(dropped);
+
+    return dropped;
+  }
+
+  /**
    * Re-pin entries queued for one destination to another, and hand them to the
    * identity that will send them.
    *
@@ -359,7 +384,15 @@ export class EventQueue {
    * @returns What the sweep dropped, or nothing when it was not due.
    */
   private async sweepUnsendable(nowMs: number): Promise<DrainDelta> {
-    if (!(await claimSweep(path.join(this.options.queueDir, SWEEP_MARKER_FILE), QUEUE_SWEEP_INTERVAL_MS, nowMs))) return EMPTY_DELTA;
+    // `Date.now()`, not `nowMs`: the throttle is a marker file's mtime, which is
+    // real wall-clock time, and `nowMs` comes from the injectable clock. Compared
+    // against each other a fixed test clock — or a backward NTP step in
+    // production — makes `nowMs - last` negative forever, which reads as "not
+    // due" and silences the retention pass for good. `TurnStateStore.sweep`
+    // passes the wall clock here for the same reason. Expiry below still uses
+    // `nowMs`, because that is a judgement about the entries, not about when this
+    // process last swept.
+    if (!(await claimSweep(path.join(this.options.queueDir, SWEEP_MARKER_FILE), QUEUE_SWEEP_INTERVAL_MS, Date.now()))) return EMPTY_DELTA;
 
     let dropped = 0;
 
@@ -547,6 +580,11 @@ export class EventQueue {
    *
    * The oldest are the least likely to still be deliverable, and an unbounded
    * queue on a developer machine is a disk-space bug.
+   *
+   * Reported through `options.stats`, like every other permanent loss: these
+   * deletions used to be the one kind that left `totalDropped` at zero, so a
+   * machine steadily shedding records at the bound looked, in `status`, exactly
+   * like one that had never lost any.
    */
   private async enforceBound(): Promise<void> {
     const files = await this.listFiles();
@@ -568,6 +606,8 @@ export class EventQueue {
     for (const { full } of doomed) {
       await fs.rm(full, { force: true });
     }
+
+    if (doomed.length > 0) await this.options.stats?.recordDropped(doomed.length);
   }
 
   /**

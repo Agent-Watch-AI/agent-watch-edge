@@ -16,6 +16,7 @@ export { loadProvider, providerIds } from './loaders.js';
  * `loaders.js` is how it gets exactly that one.
  *
  * Adding an agent = implementing AgentProvider, registering it here, and adding
- * its loader in `loaders.js`.
+ * its loader in `loaders.js`. Both, or `tests/providers.test.ts` fails: an agent
+ * present here and missing there installs hooks that resolve no provider.
  */
 export const providers: readonly AgentProvider[] = [claudeProvider, codexProvider, cursorProvider, geminiProvider, antigravityProvider];

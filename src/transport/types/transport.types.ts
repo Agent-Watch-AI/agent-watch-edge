@@ -58,6 +58,16 @@ export interface QueueOptions {
   readonly maxAttempts: number;
   readonly maxEventAgeDays: number;
   readonly now?: () => Date;
+  /**
+   * Sink for the entries the bound sacrifices on enqueue.
+   *
+   * On the options rather than on `enqueue`, because `enforceBound` runs under
+   * every enqueue — including the snapshot pipeline's, which has no stats of
+   * its own — and a deletion nobody counts is exactly the invisibility
+   * `DeliveryStatsSnapshot` exists to remove. Drain reports its own losses
+   * through the recorder passed to it.
+   */
+  readonly stats?: DrainStatsRecorder;
 }
 
 export interface DrainStats {

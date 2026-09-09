@@ -4,9 +4,9 @@ import { readJsonFile } from '../storage/json-file.js';
 import { writeFileAtomic } from '../storage/atomic-file.js';
 import { SECRET_FILE_MODE } from '../storage/constants/storage.constants.js';
 import type { AgentWatchPaths } from '../storage/types/storage.types.js';
-import { CONTENT_CAPTURE_KEYS } from './constants/config.constants.js';
+import { CONTENT_CAPTURE_KEYS, DELIVERABLE_URL_MESSAGE } from './constants/config.constants.js';
 import { defaultConfig } from './config.js';
-import { configSchema } from './schemas/config.schema.js';
+import { configSchema, nonDeliverableUrlFields } from './schemas/config.schema.js';
 import type { AgentWatchConfig, CaptureConfig, ConfigLoadResult } from './types/config.types.js';
 
 export type { ConfigLoadResult } from './types/config.types.js';
@@ -25,15 +25,20 @@ export type { ConfigLoadResult } from './types/config.types.js';
 export async function loadConfig(paths: AgentWatchPaths): Promise<ConfigLoadResult> {
   const result = await readJsonFile(paths.configFile);
 
-  if (result.state === 'missing') return { state: 'missing', config: fallbackConfig() };
+  if (result.state === 'missing') return { state: 'missing', config: fallbackConfig(), warnings: [] };
 
-  if (result.state === 'invalid') return { state: 'invalid', error: result.error, config: fallbackConfig() };
+  if (result.state === 'invalid') return { state: 'invalid', error: result.error, config: fallbackConfig(), warnings: [] };
 
+  // The schema drops a URL the edge refuses to talk to rather than failing the
+  // whole file — see `deliverableUrl`. What it cannot do is say so, because by
+  // then the field is gone, so the raw value is asked instead. Every caller
+  // reports these: the hook path on stderr, `doctor` and `status` by name.
+  const warnings = nonDeliverableUrlFields(result.value).map((field) => `${field}: ${DELIVERABLE_URL_MESSAGE} — ignored, nothing is sent there`);
   const parsed = configSchema.safeParse(result.value);
 
-  if (!parsed.success) return { state: 'invalid', error: describeIssues(parsed.error.issues), config: fallbackConfig() };
+  if (!parsed.success) return { state: 'invalid', error: describeIssues(parsed.error.issues), config: fallbackConfig(), warnings };
 
-  return { state: 'ok', config: parsed.data };
+  return { state: 'ok', config: parsed.data, warnings };
 }
 
 /**

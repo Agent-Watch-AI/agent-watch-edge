@@ -125,6 +125,57 @@ describe('a rejected credential suspends sending without losing a record', () =>
     expect(await queue.pendingCount()).toBe(0);
   });
 
+  // The block's early return in `deliverEvents` skips `queue.drain`, and the
+  // whole-partition retention pass used to live inside it. A revoked token
+  // therefore aged nothing out for as long as the block stood — and a block has
+  // no timer — while `enforceBound` quietly shed the oldest entries at the
+  // ceiling without counting them. That is the week-long, invisible loss the
+  // bound and the tally both exist to prevent.
+  it('still ages the backlog out while the credential is refused', async () => {
+    const clock = { at: new Date('2026-09-01T10:00:00.000Z') };
+    const aging = new EventQueue({
+      queueDir: path.join(world.home, 'aging'),
+      locksDir: path.join(world.home, 'locks'),
+      maxEvents: 50,
+      maxAttempts: 20,
+      maxEventAgeDays: 7,
+      now: () => clock.at
+    });
+
+    await aging.enqueue([makeEvent('evt_old')], BACKEND);
+    await authBlock.raise(BACKEND, 401);
+
+    clock.at = new Date('2026-09-30T10:00:00.000Z');
+
+    const refusing = new FakeTransport({ ok: false, status: 401, retryable: false, error: 'HTTP 401' });
+    const outcome = await deliverEvents([], refusing, aging, 10, undefined, stats, authBlock);
+
+    // Nothing was sent — the block stands — and the expired entry is gone and
+    // counted rather than held for a backend that will never take it.
+    expect(refusing.calls).toBe(0);
+    expect(outcome.delivered).toBe(0);
+    expect(await aging.pendingCount()).toBe(0);
+    expect((await stats.read())?.totalDropped).toBe(1);
+  });
+
+  // `enforceBound` was the one permanent loss that never reached the tally, so a
+  // machine steadily shedding records at the ceiling reported `totalDropped: 0`.
+  it('counts the entries the queue bound sacrifices', async () => {
+    const bounded = new EventQueue({
+      queueDir: path.join(world.home, 'bounded'),
+      locksDir: path.join(world.home, 'locks'),
+      maxEvents: 2,
+      maxAttempts: 20,
+      maxEventAgeDays: 7,
+      stats
+    });
+
+    await bounded.enqueue([makeEvent('evt_1'), makeEvent('evt_2'), makeEvent('evt_3'), makeEvent('evt_4')], BACKEND);
+
+    expect(await bounded.pendingCount()).toBe(2);
+    expect((await stats.read())?.totalDropped).toBe(2);
+  });
+
   it('keeps the first refusal time across later refusals', async () => {
     const clock = { at: new Date('2026-09-01T10:00:00.000Z') };
     const block = new BackendAuthBlock(path.join(world.home, 'timed.json'), () => clock.at);

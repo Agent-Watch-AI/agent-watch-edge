@@ -27,6 +27,47 @@ function dirs() {
   return { base, queueDir: path.join(base, 'queue'), locksDir: path.join(base, 'locks') };
 }
 
+// The sweep's throttle is a marker file's mtime, which is real wall-clock time,
+// and the pass used to compare it against the queue's *injected* clock. A fixed
+// test clock — or a backward NTP step in production — made the difference a large
+// negative number, which reads as "not due", so the retention pass was silenced
+// for good and nothing ever aged out again.
+describe('the retention sweep against an injected clock', () => {
+  it('claims a due sweep even when the queue clock is not the wall clock', async () => {
+    const { base, queueDir, locksDir } = dirs();
+    const queue = new EventQueue({
+      queueDir,
+      locksDir,
+      maxEvents: 50,
+      maxAttempts: 20,
+      maxEventAgeDays: 7,
+      now: () => new Date('2026-08-15T10:00:00Z')
+    });
+
+    await queue.enqueue([summary('evt_stale')]);
+
+    // A marker last claimed two hours ago in wall-clock terms: due, by the only
+    // clock the marker is written in.
+    const marker = path.join(queueDir, '.sweep');
+
+    await fs.writeFile(marker, '');
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+
+    await fs.utimes(marker, twoHoursAgo, twoHoursAgo);
+
+    // Queued under the injected clock, so by that same clock it is 45 days old.
+    const [file] = await fs.readdir(queueDir).then((names) => names.filter((name) => name.endsWith('.json')));
+    const entry = JSON.parse(await fs.readFile(path.join(queueDir, file!), 'utf8'));
+
+    await fs.writeFile(path.join(queueDir, file!), JSON.stringify({ ...entry, firstQueuedAt: '2026-07-01T10:00:00.000Z' }));
+
+    expect(await queue.sweep()).toBe(1);
+    expect(await queue.pendingCount()).toBe(0);
+
+    await fs.rm(base, { recursive: true, force: true });
+  });
+});
+
 describe('queue fairness', () => {
   it('evicts by firstQueuedAt, not by file mtime', async () => {
     const { base, queueDir, locksDir } = dirs();

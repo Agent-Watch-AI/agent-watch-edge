@@ -1,7 +1,9 @@
 import { z } from 'zod';
+import { asRecord } from '../../core/object.js';
 import type { CONTENT_CAPTURE_KEYS } from '../constants/config.constants.js';
 import {
   DELIVERABLE_URL_MESSAGE,
+  URL_FIELDS,
   LOOPBACK_HOSTS,
   DEFAULT_DRAIN_BATCH_SIZE,
   DEFAULT_ENFORCEMENT_CACHE_TTL_MS,
@@ -166,8 +168,76 @@ function parseUrl(value: string): URL | undefined {
 /**
  * Every backend URL in the file, validated the same way. One definition, so a
  * fifth URL field cannot be added without the rule.
+ *
+ * An offending value is *dropped*, not fatal, and the field reads as absent.
+ * Failing the parse instead took the whole file down with it, and `loadConfig`
+ * answers a failed parse with `fallbackConfig()` — no endpoint, no token, no
+ * installation id. Two consequences, both worse than the misconfiguration:
+ *
+ * - An upgrade of a fleet pointed at an internal `http://collector.corp:4318`
+ *   lost its *token* along with its endpoint, so every hook queued into
+ *   `unconfigured/` under `ANY_DESTINATION` while the existing backlog stayed
+ *   pinned to `sha256(token)` — a partition nothing would ever drain again.
+ * - `roots` is a record of these same fields, so one typo in one project's
+ *   entry stopped delivery for every other project on the machine.
+ *
+ * Dropping keeps the identity, keeps the backlog claimable, and confines the
+ * damage to the field that is actually wrong. Delivery still stops for that
+ * destination — which is the point: the alternative is a bearer token and
+ * captured prompts in cleartext — but it stops loudly, and only there.
+ * `loadConfig` reports each dropped field, the hook path warns on stderr, and
+ * `doctor` and `status` name it. New values never take this path: `enrollment`
+ * rejects a non-deliverable `--endpoint` outright, at the moment someone can
+ * still fix it.
  */
-const deliverableUrl = z.string().url().refine(isDeliverableUrl, { message: DELIVERABLE_URL_MESSAGE });
+const deliverableUrl = z
+  .string()
+  .url()
+  .refine(isDeliverableUrl, { message: DELIVERABLE_URL_MESSAGE })
+  .optional()
+  .catch(undefined);
+
+/**
+ * Which fields of a config object hold a URL the edge refuses to talk to.
+ *
+ * Read from the *raw* value, because the schema has already dropped them by the
+ * time anything can be said about it. Reported by `loadConfig`, so a dropped
+ * field is a line on stderr and in `doctor` rather than a silent stop.
+ *
+ * @param value - The parsed JSON of the config file, whatever shape it has.
+ * @returns Dotted paths of the offending fields, empty when there are none.
+ */
+export function nonDeliverableUrlFields(value: unknown): string[] {
+  const found: string[] = [];
+  const record = asRecord(value);
+
+  if (!record) return found;
+
+  collectNonDeliverable(record, '', found);
+
+  for (const [root, override] of Object.entries(asRecord(record['roots']) ?? {})) {
+    const entry = asRecord(override);
+
+    if (entry) collectNonDeliverable(entry, `roots.${root}.`, found);
+  }
+
+  return found;
+}
+
+/**
+ * Append the offending URL fields of one flat object.
+ *
+ * @param record - The config or one `roots[]` entry.
+ * @param prefix - Dotted prefix for the reported path.
+ * @param found - Accumulator.
+ */
+function collectNonDeliverable(record: Record<string, unknown>, prefix: string, found: string[]): void {
+  for (const field of URL_FIELDS) {
+    const value = record[field];
+
+    if (typeof value === 'string' && !isDeliverableUrl(value)) found.push(`${prefix}${field}`);
+  }
+}
 
 /**
  * One project root's identity. Only the fields that decide *who* the events
@@ -179,9 +249,9 @@ const deliverableUrl = z.string().url().refine(isDeliverableUrl, { message: DELI
  */
 export const rootOverrideSchema = z
   .object({
-    endpoint: deliverableUrl.optional(),
-    eventsUrl: deliverableUrl.optional(),
-    otlpUrl: deliverableUrl.optional(),
+    endpoint: deliverableUrl,
+    eventsUrl: deliverableUrl,
+    otlpUrl: deliverableUrl,
     token: z.string().optional(),
     installationId: z.string().optional(),
     developerEmail: z.string().optional()
@@ -193,11 +263,11 @@ export const configSchema = z
   .object({
     schemaVersion: z.literal(1).default(1),
     /** Backend base URL, e.g. https://backend.example.com */
-    endpoint: deliverableUrl.optional(),
+    endpoint: deliverableUrl,
     /** Overrides; derived from endpoint when absent. */
-    eventsUrl: deliverableUrl.optional(),
-    otlpUrl: deliverableUrl.optional(),
-    enforcementUrl: deliverableUrl.optional(),
+    eventsUrl: deliverableUrl,
+    otlpUrl: deliverableUrl,
+    enforcementUrl: deliverableUrl,
     token: z.string().optional(),
     installationId: z.string().optional(),
     /** Developer identity attached to turn summaries; falls back to `git config user.email`. */

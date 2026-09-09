@@ -21,6 +21,10 @@ export type { DeliveryOutcome } from './types/transport.types.js';
  * rather than costing every hook a full timeout. And it keeps the backlog
  * moving even on hooks that emit nothing, because those are the majority.
  *
+ * Both skips run `queue.sweep` before returning, because the retention bound
+ * has to hold on exactly the paths that skip a drain: those are the week-long
+ * outages it exists for, and a credential block has no timer to end it.
+ *
  * @param events - Product events this hook produced; often empty.
  * @param transport - Where to send, or undefined before setup configures one.
  * @param queue - The offline queue.
@@ -55,6 +59,8 @@ export async function deliverEvents(
     // proves the credential good again.
     if (events.length > 0) await queue.enqueue(events, transport.destination);
 
+    await queue.sweep(stats);
+
     return { delivered: 0, queued: events.length, drained: 0, rejected: 0 };
   }
 
@@ -62,6 +68,8 @@ export async function deliverEvents(
     // Circuit breaker: a recently-dead backend must not cost every hook the
     // full send timeout. Skip straight to the queue.
     if (events.length > 0) await queue.enqueue(events, transport.destination);
+
+    await queue.sweep(stats);
 
     return { delivered: 0, queued: events.length, drained: 0, rejected: 0 };
   }

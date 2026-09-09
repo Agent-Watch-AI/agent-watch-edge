@@ -4,17 +4,31 @@ import { MAX_DEPTH, MAX_STRING_LENGTH, REDACTED, SECRET_PATTERNS, SENSITIVE_KEY_
 /**
  * Redact known credential shapes inside a string, and cap its length.
  *
+ * Redaction runs on the whole string and the cap is applied to the result,
+ * never the other way round. Truncating first cuts a credential that straddles
+ * the boundary short, so no pattern matches it any more and the surviving
+ * prefix ships in the clear: `openai-anthropic-key` needs 16 characters after
+ * `sk-`, and `jwt` needs its third dot-separated segment — a JWT cut mid
+ * signature would have shipped its header and payload, which base64url-decode
+ * to the very claims this exists to keep off the wire.
+ *
+ * Scrubbing the whole string is affordable because every pattern is linear in
+ * its input — see `url-credentials`, which was not. A bounded window instead of
+ * the whole string would not do: the margin would have to exceed the longest
+ * credential, and a private-key block or a JWT with a fat payload has no such
+ * length.
+ *
  * @param text - Text about to leave the machine.
  * @returns The scrubbed text.
  */
 export function sanitizeText(text: string): string {
-  let out = text.length > MAX_STRING_LENGTH ? text.slice(0, MAX_STRING_LENGTH) : text;
+  let out = text;
 
   for (const { pattern, replacement } of SECRET_PATTERNS) {
     out = out.replace(pattern, replacement ?? REDACTED);
   }
 
-  return out;
+  return out.length > MAX_STRING_LENGTH ? out.slice(0, MAX_STRING_LENGTH) : out;
 }
 
 /**

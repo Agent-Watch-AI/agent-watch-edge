@@ -155,6 +155,10 @@ function nodeVersionCheck(): Check {
  * @returns The check.
  */
 function configurationCheck(context: CliContext): Check {
+  // A dropped field first, whatever the state: the file parsed, so every other
+  // check reads healthy while one destination silently receives nothing.
+  if (context.configWarnings.length > 0) return { name: 'configuration', level: 'fail', detail: `${context.paths.configFile}: ${context.configWarnings.join('; ')}` };
+
   if (context.configState === 'ok') return { name: 'configuration', level: 'ok', detail: context.paths.configFile };
 
   if (context.configState === 'missing') return { name: 'configuration', level: 'warn', detail: 'not found — run `agentwatch setup`' };
@@ -165,13 +169,21 @@ function configurationCheck(context: CliContext): Check {
 /**
  * Whether a backend and a token are configured. Never reveals the token.
  *
+ * The *rooted* identity, and it says so when a root produced it: a diagnostic
+ * that names the machine-global endpoint while the hooks in this directory send
+ * somewhere else on another token is a diagnostic of an install nobody is
+ * running.
+ *
  * @param context - Resolved CLI context.
  * @returns The checks.
  */
 function endpointChecks(context: CliContext): Check[] {
+  const config = context.identityConfig;
+  const via = context.identityRoot === undefined ? '' : ` (root ${context.identityRoot})`;
+
   return [
-    { name: 'backend endpoint', level: context.config.endpoint ? 'ok' : 'warn', detail: context.config.endpoint ?? 'not configured' },
-    { name: 'auth token', level: 'ok', detail: context.config.token ? 'present (hidden)' : 'none configured' }
+    { name: 'backend endpoint', level: config.endpoint ? 'ok' : 'warn', detail: config.endpoint === undefined ? 'not configured' : `${config.endpoint}${via}` },
+    { name: 'auth token', level: 'ok', detail: config.token ? `present (hidden)${via}` : 'none configured' }
   ];
 }
 
@@ -189,7 +201,7 @@ function endpointChecks(context: CliContext): Check[] {
  * @returns The check.
  */
 async function developerIdentityCheck(env: Env, context: CliContext, options: DoctorOptions): Promise<Check> {
-  const identity = await developerIdentity(context.config.developerEmail, env.cwd, { home: env.home, run: options.gitRun });
+  const identity = await developerIdentity(context.identityConfig.developerEmail, env.cwd, { home: env.home, run: options.gitRun });
 
   if (!identity) return { name: DEVELOPER_IDENTITY_CHECK, level: 'fail', detail: `${NO_DEVELOPER_IDENTITY}; ${DEVELOPER_IDENTITY_REMEDIES}` };
 
@@ -209,11 +221,14 @@ async function connectivityChecks(context: CliContext): Promise<Check[]> {
   if (context.disabled) return [];
 
   const checks: Check[] = [];
-  const url = eventsUrl(context.config);
+  // The rooted URL, probed with the rooted token: a 2xx here is what lifts a
+  // standing block, and the only credential whose proof may lift a block is the
+  // one the block was raised against.
+  const url = eventsUrl(context.identityConfig);
 
   checks.push(url ? await probeBackend(url, context) : { name: BACKEND_CONNECTIVITY_CHECK, level: 'warn', detail: 'no backend configured yet — run `agentwatch setup`' });
 
-  const otlp = otlpBaseUrl(context.config);
+  const otlp = otlpBaseUrl(context.identityConfig);
 
   if (otlp) checks.push({ name: 'OTLP base URL', level: 'ok', detail: otlp });
 
@@ -243,7 +258,7 @@ async function probeBackend(url: string, context: CliContext): Promise<Check> {
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: { [CONTENT_TYPE_HEADER]: JSON_CONTENT_TYPE, ...edgeHeaders(context.config.token, context.config.installationId) },
+      headers: { [CONTENT_TYPE_HEADER]: JSON_CONTENT_TYPE, ...edgeHeaders(context.identityConfig.token, context.identityConfig.installationId) },
       body: JSON.stringify({ events: [] }),
       redirect: 'error',
       signal: AbortSignal.timeout(BACKEND_PROBE_TIMEOUT_MS)

@@ -66,8 +66,18 @@ function reportBackend(context: CliContext): void {
     return;
   }
 
-  if (context.config.endpoint) {
-    println(`${symbols.ok} ${context.config.endpoint}`);
+  // Named before the endpoint, because this is why an endpoint someone wrote
+  // into the file is not the one printed below.
+  for (const warning of context.configWarnings) println(`${symbols.fail} config ${warning}`);
+
+  if (context.identityConfig.endpoint) {
+    println(`${symbols.ok} ${context.identityConfig.endpoint}`);
+
+    // The identity is per directory, so the report has to say when this one is
+    // not the machine's: everything below — the backlog, the losses, the
+    // credential block — belongs to the root's partition, not the global one.
+    if (context.identityRoot !== undefined) println(dim(`  identity from root ${context.identityRoot}`));
+
     reportEnforcement(context);
 
     return;
@@ -193,7 +203,7 @@ async function reportDelivery(context: CliContext): Promise<void> {
  * @param pending - Entries in this identity's backlog.
  */
 async function reportAuthBlock(context: CliContext, authBlock: BackendAuthBlock, pending: number): Promise<void> {
-  const url = eventsUrl(context.config);
+  const url = eventsUrl(context.identityConfig);
 
   if (!url) return;
 
@@ -239,13 +249,13 @@ async function reportUnattributed(context: CliContext): Promise<void> {
 async function retryBacklog(context: CliContext, queue: EventQueue, deliveryStats: DeliveryStats, authBlock: BackendAuthBlock): Promise<number> {
   const pending = await queue.pendingCount();
 
-  if (pending === 0 || !eventsUrl(context.config)) return pending;
+  if (pending === 0 || !eventsUrl(context.identityConfig)) return pending;
 
   const transport = buildTransport(context, STATUS_SEND_TIMEOUT_MS);
 
   if (!transport) return pending;
 
-  const drained = await queue.drain(transport, context.config.delivery.drainBatchSize, deliveryStats, authBlock);
+  const drained = await queue.drain(transport, context.identityConfig.delivery.drainBatchSize, deliveryStats, authBlock);
 
   if (drained.sent > 0) println(dim(`  retried: ${drained.sent} event(s) delivered`));
 

@@ -124,20 +124,45 @@ describe('a bearer may only travel over a URL that cannot leak it', () => {
   it('refuses plain http to anywhere else, so the token cannot cross a network in cleartext', async () => {
     const result = await loadWith({ endpoint: 'http://backend.example.com' });
 
-    expect(result.state).toBe('invalid');
-    expect(result.state === 'invalid' ? result.error : '').toContain('https');
+    expect(result.config.endpoint).toBeUndefined();
+    expect(result.warnings.join(' ')).toContain('https');
   });
 
   it('refuses the schemes z.string().url() would otherwise wave through', async () => {
     for (const endpoint of ['file:///etc/passwd', 'javascript:alert(1)', 'data:text/plain,x', 'ftp://backend.example.com']) {
-      expect((await loadWith({ endpoint })).state, endpoint).toBe('invalid');
+      const result = await loadWith({ endpoint });
+
+      expect(result.config.endpoint, endpoint).toBeUndefined();
+      expect(result.warnings, endpoint).toEqual([expect.stringContaining('endpoint')]);
     }
   });
 
   it('applies the same rule to every URL field, including a per-root override', async () => {
-    expect((await loadWith({ eventsUrl: 'http://backend.example.com/v1/events' })).state).toBe('invalid');
-    expect((await loadWith({ otlpUrl: 'http://backend.example.com' })).state).toBe('invalid');
-    expect((await loadWith({ enforcementUrl: 'http://backend.example.com/v1/decide' })).state).toBe('invalid');
-    expect((await loadWith({ roots: { '/repo': { endpoint: 'http://backend.example.com' } } })).state).toBe('invalid');
+    expect((await loadWith({ eventsUrl: 'http://backend.example.com/v1/events' })).config.eventsUrl).toBeUndefined();
+    expect((await loadWith({ otlpUrl: 'http://backend.example.com' })).config.otlpUrl).toBeUndefined();
+    expect((await loadWith({ enforcementUrl: 'http://backend.example.com/v1/decide' })).config.enforcementUrl).toBeUndefined();
+
+    const rooted = await loadWith({ roots: { '/repo': { endpoint: 'http://backend.example.com' } } });
+
+    expect(rooted.config.roots?.['/repo']?.endpoint).toBeUndefined();
+    expect(rooted.warnings).toEqual([expect.stringContaining('roots./repo.endpoint')]);
+  });
+
+  // The whole reason the rule drops a field instead of failing the parse: a
+  // failed parse answers with `fallbackConfig()`, which has no token, so an
+  // upgrade of a fleet on an internal http endpoint lost the identity its
+  // existing backlog is partitioned under — and one typo in one project's
+  // `roots[]` entry stopped delivery for every other project on the machine.
+  it('keeps the identity, and the rest of the file, when one URL is refused', async () => {
+    const result = await loadWith({
+      endpoint: 'https://backend.example.com',
+      roots: { '/repo': { endpoint: 'http://collector.corp:4318', token: 'aw_edge_root' } }
+    });
+
+    expect(result.state).toBe('ok');
+    expect(result.config.token).toBe('aw_edge_secret');
+    expect(result.config.endpoint).toBe('https://backend.example.com');
+    expect(result.config.roots?.['/repo']).toEqual({ token: 'aw_edge_root' });
+    expect(result.warnings).toEqual([expect.stringContaining('roots./repo.endpoint')]);
   });
 });

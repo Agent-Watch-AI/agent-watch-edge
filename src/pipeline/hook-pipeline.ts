@@ -369,13 +369,18 @@ async function snapshot(state: HookPipelineState): Promise<StepOutcome<HookPipel
  * @returns A queue bound to this run's paths and delivery limits.
  */
 function buildQueue(state: HookPipelineState): EventQueue {
+  const identity = identityPaths(state.paths, state.config.token);
+
   return new EventQueue({
-    queueDir: identityPaths(state.paths, state.config.token).queueDir,
+    queueDir: identity.queueDir,
     locksDir: state.paths.locksDir,
     maxEvents: state.config.delivery.maxQueueEvents,
     maxAttempts: state.config.delivery.maxAttempts,
     maxEventAgeDays: state.config.delivery.maxEventAgeDays,
-    now: state.env.now
+    now: state.env.now,
+    // So the entries the bound sacrifices are counted wherever an enqueue
+    // happens, the snapshot pipeline's included.
+    stats: new DeliveryStats(identity.statsFile, state.env.now, state.paths.locksDir)
   });
 }
 

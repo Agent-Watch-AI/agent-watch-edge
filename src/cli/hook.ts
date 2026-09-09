@@ -139,6 +139,17 @@ function respondToDecision(provider: AgentProvider, payload: unknown, result?: H
 async function processPayload(provider: AgentProvider, payload: unknown, options: HookRunOptions): Promise<HookPipelineState> {
   const paths = resolvePaths(options.env);
   const loaded = await loadConfig(paths);
+
+  // On stderr, on every hook, because this is the only place a developer ever
+  // sees it. A config the schema refuses degrades the runtime to `fallbackConfig`
+  // — no endpoint, no token — and nothing else on this path says a word, so an
+  // install that stopped delivering the moment someone hand-edited the file
+  // looked healthy until somebody thought to run `status`. `missing` is not
+  // warned: that is a machine before `setup`, which is not a fault.
+  if (loaded.state === 'invalid') warnLog(`config ${paths.configFile} is invalid (${loaded.error}); running metadata-only with nothing configured`);
+
+  for (const warning of loaded.warnings) warnLog(`config ${paths.configFile}: ${warning}`);
+
   const result = await runHookPipeline({
     provider,
     env: options.env,

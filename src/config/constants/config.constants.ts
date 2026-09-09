@@ -39,6 +39,14 @@ export const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.
 
 /** Said to whoever wrote the URL, so the remedy is in the message. */
 export const DELIVERABLE_URL_MESSAGE = 'must be an https:// URL (http:// is allowed for localhost only)';
+
+/**
+ * Every field that holds a backend URL, in the config and in a `roots[]` entry.
+ *
+ * One list, so a fifth URL field is reported by `nonDeliverableUrlFields` the
+ * moment the schema validates it.
+ */
+export const URL_FIELDS: readonly string[] = ['endpoint', 'eventsUrl', 'otlpUrl', 'enforcementUrl'];
 export const OTLP_BASE_PATH = '/v1/otlp';
 export const ENFORCEMENT_PATH = '/v1/enforcement/decision';
 

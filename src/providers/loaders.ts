@@ -11,8 +11,13 @@ import type { AgentProvider } from './types/provider.types.js';
  * to trouble to lazy-import command modules "so the hook path does not pay
  * their startup"; this is the same argument applied to the agents.
  *
- * The literal is the single source of the supported agent ids: `registry.ts`
- * builds its eager list from these keys, so a sixth agent is one entry here.
+ * This literal and `registry.providers` are two hand-maintained lists of the
+ * same five agents, and they cannot be derived from one another: the eager list
+ * holds the provider objects, and having these loaders produce it would import
+ * every agent, which is the cost this file exists to avoid. `tests/providers.test.ts`
+ * asserts the two agree, so a sixth agent registered in only one of them fails
+ * the suite rather than installing hooks whose every invocation resolves no
+ * provider and drops the agent's telemetry in silence.
  */
 const PROVIDER_LOADERS: Readonly<Record<string, () => Promise<AgentProvider>>> = {
   claude: async () => (await import('./claude/claude.provider.js')).claudeProvider,

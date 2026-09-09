@@ -44,12 +44,44 @@ items before upgrading a fleet.
 - **Secrets in object keys are scrubbed.** The sanitizer pattern-scrubbed values
   only, so a credential used as a *key* in a captured map was transmitted
   verbatim. Two keys that scrub to the same string keep distinct spellings
-  rather than silently merging into one entry.
+  rather than silently merging into one entry. Redaction also runs *before* the
+  length cap rather than after it: a credential straddling the 64KiB boundary
+  was cut short first, so no pattern matched it any more and the surviving
+  prefix shipped in the clear — for a JWT, a header and payload that decode to
+  the claims the sanitizer exists to withhold. The URL-credentials pattern is
+  bounded, which is what makes scrubbing the whole string affordable; unbounded,
+  it cost 1.8s of CPU on a single 64KiB prompt, on the hook path.
 - **A backend URL is validated on every load, not only when setup writes it.**
   Every URL in the configuration must be `https:`, or `http:` to loopback, so a
   hand-edited or MDM-templated config cannot send a bearer and captured content
-  in cleartext. Response bodies the hook decodes are capped, and neither the
-  batch send nor the enforcement check follows a redirect — both carry a bearer.
+  in cleartext. An offending URL is *dropped* and named — on stderr from the
+  hook, and by `status` and `doctor` — rather than invalidating the whole file:
+  a failed parse falls back to a config with no token, which orphaned the
+  existing backlog under a partition nothing would drain again, and one bad URL
+  in one `roots[]` entry would have stopped delivery for every other project on
+  the machine. `setup` still refuses a non-deliverable `--endpoint` outright.
+  Response bodies the hook decodes are capped, and neither the batch send nor
+  the enforcement check follows a redirect — both carry a bearer.
+- **`status` and `doctor` act as the identity of the directory they run in.**
+  Both read the machine-global token where the hooks in a `roots[]` project use
+  that root's own. A 401 inside such a project raised a block under the root
+  credential's fingerprint that `status` could not see and `doctor` could not
+  lift — it probed the global token, and a 2xx cleared a block that was never
+  the one standing — leaving that project's telemetry suspended, with no timer
+  to end it and no diagnostic naming it.
+- **Retention holds on the paths that never send.** The whole-partition sweep ran
+  inside a delivery pass, and both skips — a tripped cooldown and a refused
+  credential — return before one. A revoked token therefore aged nothing out for
+  as long as the block stood, while the queue bound quietly shed the oldest
+  entries at the ceiling without counting them, so `status` reported nothing
+  lost. The sweep now runs on both skips, its hourly throttle is read from the
+  clock the marker is written in (an injected or backward-stepped clock silenced
+  it permanently), and the bound reports what it sacrifices.
+- **Every registered agent is loadable.** The eager provider list and the lazy
+  loader map are two hand-maintained lists of the same agents; a test now asserts
+  they agree. An agent in only one of them installed hooks that resolved no
+  provider on every invocation and dropped all of that agent's telemetry, while
+  `setup`, `status` and `doctor` all reported success.
 - **A degraded turn summary is attributed to the same developer as a healthy
   one.** On a machine that takes its identity from git rather than from
   configuration, a summary emitted after turn assembly failed carried no

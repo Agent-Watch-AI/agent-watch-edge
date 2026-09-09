@@ -15,9 +15,29 @@ export interface CliContext {
   readonly disabled: boolean;
   readonly env: Env;
   readonly paths: AgentWatchPaths;
+  /**
+   * The machine's global config, `roots` included. What `setup`, `uninstall`
+   * and `toggle` read and write: the file on disk is machine-wide.
+   */
   readonly config: AgentWatchConfig;
+  /**
+   * The same config with the matching `roots[]` entry applied for `env.cwd` —
+   * the identity the hooks in this directory actually send as.
+   *
+   * Everything partitioned by identity is built from this and never from
+   * `config`: the queue, the loss tally, the credential block and the
+   * transport. The hook path resolves its identity through `applyRootOverride`,
+   * so a command reading the global token would look at another partition's
+   * files — reporting an empty backlog for a root that has one, and probing,
+   * blocking and unblocking a credential that is not the one being refused.
+   */
+  readonly identityConfig: AgentWatchConfig;
+  /** The `roots[]` path that produced `identityConfig`, when one matched. */
+  readonly identityRoot?: string;
   readonly configState: ConfigLoadResult['state'];
   readonly configError?: string;
+  /** Fields the load accepted the file without — a URL nothing may be sent to. */
+  readonly configWarnings: readonly string[];
   readonly installState: InstallState;
 }
 

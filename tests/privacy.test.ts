@@ -42,10 +42,39 @@ describe('sanitizeText', () => {
     }
   });
 
+  // The scheme bound is what makes scrubbing the whole string affordable; the
+  // userinfo groups must stay unbounded. Under a `{1,256}` ceiling a 300-character
+  // URL password went out in the clear, and a signed URL, a service-account
+  // secret or a JWT used as a password is routinely longer than that.
+  it('redacts a URL credential far longer than any sane ceiling', () => {
+    for (const length of [200, 400, 2_000]) {
+      const secret = 'p'.repeat(length);
+      const out = sanitizeText(`connecting postgres://svc_user:${secret}@db.internal.example.com:5432/prod`);
+
+      expect(out, `${String(length)} chars`).not.toContain('pppppppppppppppppppp');
+      expect(out).toContain(REDACTED);
+      expect(out).toContain('@db.internal.example.com:5432/prod');
+    }
+
+    // The same for a long username with no password at all.
+    const user = 'u'.repeat(400);
+
+    expect(sanitizeText(`https://${user}:pw@h.example.com`)).not.toContain('uuuuuuuuuuuuuuuuuuuu');
+  });
+
   // The bound that makes scrubbing the whole string affordable. `url-credentials`
   // was quadratic in the input — 1.8s on one 64KiB prompt — and it runs on the
-  // agent's hook path.
+  // agent's hook path. The adversarial shape is a scheme followed by a long run
+  // with no `@` to end it, which is what forced the backtracking.
   it('scrubs a large string in linear time', () => {
+    const started = Date.now();
+
+    sanitizeText('http://' + 'x'.repeat(200_000));
+
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('scrubs a large string with no scheme in it in linear time', () => {
     const started = Date.now();
 
     sanitizeText('x'.repeat(200_000));

@@ -29,16 +29,21 @@ export const SENSITIVE_KEY_PATTERN
  */
 export const SECRET_PATTERNS: readonly SecretPattern[] = [
   { name: 'private-key-block', pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g },
-  // Every quantifier bounded, deliberately. `\w+` was unbounded, and because the
-  // engine retries at each start index and `\w+` re-consumes the rest of the
-  // string before backtracking to look for `://`, the cost was quadratic in the
-  // input: 1.8s on a 64KiB prompt and 17s on a 200_000-character one, paid on the
-  // agent's hook path on every turn that captures content. No real scheme or
-  // userinfo comes near these ceilings — `\w` never matched `mongodb+srv` in the
-  // first place — and the bound is what makes scrubbing the *whole* string
-  // affordable, which `sanitizeText` needs to redact a credential that straddles
-  // the length cap.
-  { name: 'url-credentials', pattern: /(\w{1,32}:\/\/)([^/\s:@]{1,256})(?::([^/\s@]{1,256}))?@/g, replacement: `$1${REDACTED}@` },
+  // The scheme is the only part that was quadratic: `\w+` re-consumed the rest of
+  // the string at every start index before backtracking to look for `://`, which
+  // cost 1.8s on a 64KiB prompt and 17s on a 200_000-character one, on the
+  // agent's hook path. `\w{1,32}` ends that, and no real scheme comes near 32 —
+  // `\w` never matched `mongodb+srv` in the first place. That bound is what makes
+  // scrubbing the *whole* string affordable, which `sanitizeText` needs in order
+  // to redact a credential straddling the length cap.
+  //
+  // The userinfo groups stay unbounded on purpose. A negated class that cannot
+  // cross `@` or whitespace cannot backtrack the same way — measured linear, 21ms
+  // on a 200_000-character run with no `@` in it — while a ceiling there leaks
+  // every credential longer than it: a 300-character URL password went out in the
+  // clear under a `{1,256}` bound, and a signed URL, a service-account secret or
+  // a JWT used as a password is routinely longer than that.
+  { name: 'url-credentials', pattern: /(\w{1,32}:\/\/)([^/\s:@]+)(?::([^/\s@]+))?@/g, replacement: `$1${REDACTED}@` },
   { name: 'aws-access-key', pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
   { name: 'github-token', pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/g },
   { name: 'github-fine-grained', pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g },

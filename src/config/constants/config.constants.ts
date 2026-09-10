@@ -41,12 +41,22 @@ export const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.
 export const DELIVERABLE_URL_MESSAGE = 'must be an https:// URL (http:// is allowed for localhost only)';
 
 /**
- * Every field that holds a backend URL, in the config and in a `roots[]` entry.
+ * Every field of the config file itself that holds a backend URL.
  *
  * One list, so a fifth URL field is reported by `nonDeliverableUrlFields` the
  * moment the schema validates it.
  */
 export const URL_FIELDS: readonly string[] = ['endpoint', 'eventsUrl', 'otlpUrl', 'enforcementUrl'];
+
+/**
+ * The subset a `roots[]` entry may carry.
+ *
+ * Not the same set, and reporting them as if it were made `doctor` *fail* on a
+ * `roots[].enforcementUrl`: `rootOverrideSchema` strips it as an unknown key
+ * whatever its value, so it has never had any effect. A per-root enforcement URL
+ * would mean adding it there, not reporting it here.
+ */
+export const ROOT_URL_FIELDS: readonly string[] = ['endpoint', 'eventsUrl', 'otlpUrl'];
 export const OTLP_BASE_PATH = '/v1/otlp';
 export const ENFORCEMENT_PATH = '/v1/enforcement/decision';
 

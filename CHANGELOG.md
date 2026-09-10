@@ -54,12 +54,17 @@ items before upgrading a fleet.
 - **A backend URL is validated on every load, not only when setup writes it.**
   Every URL in the configuration must be `https:`, or `http:` to loopback, so a
   hand-edited or MDM-templated config cannot send a bearer and captured content
-  in cleartext. An offending URL is *dropped* and named — on stderr from the
+  in cleartext. An offending URL is *refused* and named — on stderr from the
   hook, and by `status` and `doctor` — rather than invalidating the whole file:
   a failed parse falls back to a config with no token, which orphaned the
   existing backlog under a partition nothing would drain again, and one bad URL
   in one `roots[]` entry would have stopped delivery for every other project on
-  the machine. `setup` still refuses a non-deliverable `--endpoint` outright.
+  the machine. A refused field reads as "configured but unusable" and never as
+  absent, so a `roots[]` entry cannot inherit the machine-global backend and
+  send one tenant's prompts to another's collector under the first tenant's
+  bearer. `setup` refuses to run while the file holds one, rather than
+  overwriting the file without the line the developer wrote. `setup` still
+  refuses a non-deliverable `--endpoint` outright.
   Response bodies the hook decodes are capped, and neither the batch send nor
   the enforcement check follows a redirect — both carry a bearer.
 - **`status` and `doctor` act as the identity of the directory they run in.**

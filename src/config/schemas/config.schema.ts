@@ -3,6 +3,7 @@ import { asRecord } from '../../core/object.js';
 import type { CONTENT_CAPTURE_KEYS } from '../constants/config.constants.js';
 import {
   DELIVERABLE_URL_MESSAGE,
+  ROOT_URL_FIELDS,
   URL_FIELDS,
   LOOPBACK_HOSTS,
   DEFAULT_DRAIN_BATCH_SIZE,
@@ -169,10 +170,11 @@ function parseUrl(value: string): URL | undefined {
  * Every backend URL in the file, validated the same way. One definition, so a
  * fifth URL field cannot be added without the rule.
  *
- * An offending value is *dropped*, not fatal, and the field reads as absent.
- * Failing the parse instead took the whole file down with it, and `loadConfig`
- * answers a failed parse with `fallbackConfig()` — no endpoint, no token, no
- * installation id. Two consequences, both worse than the misconfiguration:
+ * An offending value becomes `null` — "a URL was written here and refused" —
+ * rather than fatal. Failing the parse instead took the whole file down with it,
+ * and `loadConfig` answers a failed parse with `fallbackConfig()` — no endpoint,
+ * no token, no installation id. Two consequences, both worse than the
+ * misconfiguration:
  *
  * - An upgrade of a fleet pointed at an internal `http://collector.corp:4318`
  *   lost its *token* along with its endpoint, so every hook queued into
@@ -181,21 +183,36 @@ function parseUrl(value: string): URL | undefined {
  * - `roots` is a record of these same fields, so one typo in one project's
  *   entry stopped delivery for every other project on the machine.
  *
- * Dropping keeps the identity, keeps the backlog claimable, and confines the
- * damage to the field that is actually wrong. Delivery still stops for that
- * destination — which is the point: the alternative is a bearer token and
- * captured prompts in cleartext — but it stops loudly, and only there.
- * `loadConfig` reports each dropped field, the hook path warns on stderr, and
- * `doctor` and `status` name it. New values never take this path: `enrollment`
- * rejects a non-deliverable `--endpoint` outright, at the moment someone can
- * still fix it.
+ * This keeps the identity, keeps the backlog claimable, and confines the damage
+ * to the field that is actually wrong. Delivery still stops for that destination
+ * — which is the point: the alternative is a bearer token and captured prompts
+ * in cleartext — but it stops loudly, and only there. `loadConfig` reports each
+ * refused field, the hook path warns on stderr, and `doctor` and `status` name
+ * it. New values never take this path: `enrollment` rejects a non-deliverable
+ * `--endpoint` outright, at the moment someone can still fix it.
+ *
+ * `null` and not absent, and that distinction is the whole point for a `roots[]`
+ * entry. `applyRootOverride` lays the override over the global config through
+ * `compact`, which skips undefined-valued keys precisely so an override cannot
+ * erase a global — so an *absent* endpoint made the root inherit the machine's.
+ * A consultant's `roots["/work/clientA"]` on an internal `http:` collector would
+ * have had every prompt, response and branch name in that directory POSTed to
+ * the *other* tenant's backend, authenticated with clientA's own bearer, where
+ * before the file was refused and nothing was sent anywhere. Segregating tenants
+ * is the only reason `roots` exists. `null` survives `compact`, so the root
+ * overrides the global endpoint with "unusable" and its events queue under its
+ * own token instead of leaving.
+ *
+ * `.catch(null)` covers every failure, not only a bad URL string: a number, an
+ * array or a `null` a templating tool emitted for a missing value all land here
+ * rather than being waved through as absent.
  */
 const deliverableUrl = z
   .string()
   .url()
   .refine(isDeliverableUrl, { message: DELIVERABLE_URL_MESSAGE })
-  .optional()
-  .catch(undefined);
+  .nullish()
+  .catch(null);
 
 /**
  * Which fields of a config object hold a URL the edge refuses to talk to.
@@ -213,12 +230,12 @@ export function nonDeliverableUrlFields(value: unknown): string[] {
 
   if (!record) return found;
 
-  collectNonDeliverable(record, '', found);
+  collectNonDeliverable(record, URL_FIELDS, '', found);
 
   for (const [root, override] of Object.entries(asRecord(record['roots']) ?? {})) {
     const entry = asRecord(override);
 
-    if (entry) collectNonDeliverable(entry, `roots.${root}.`, found);
+    if (entry) collectNonDeliverable(entry, ROOT_URL_FIELDS, `roots.${root}.`, found);
   }
 
   return found;
@@ -227,15 +244,32 @@ export function nonDeliverableUrlFields(value: unknown): string[] {
 /**
  * Append the offending URL fields of one flat object.
  *
+ * Anything present that is not a deliverable *string* counts, not only a bad
+ * URL string: `deliverableUrl` catches every failure, so a number, an array or
+ * a `null` a config-management tool emitted for a missing value all become
+ * "refused". Testing only strings left those reported by nobody — and for a
+ * `roots[]` entry an unreported refusal is the cross-tenant misroute
+ * `deliverableUrl` describes, arrived at in total silence.
+ *
  * @param record - The config or one `roots[]` entry.
+ * @param fields - The URL fields that object may carry.
  * @param prefix - Dotted prefix for the reported path.
  * @param found - Accumulator.
  */
-function collectNonDeliverable(record: Record<string, unknown>, prefix: string, found: string[]): void {
-  for (const field of URL_FIELDS) {
+function collectNonDeliverable(
+  record: Record<string, unknown>,
+  fields: readonly string[],
+  prefix: string,
+  found: string[]
+): void {
+  for (const field of fields) {
+    if (!(field in record)) continue;
+
     const value = record[field];
 
-    if (typeof value === 'string' && !isDeliverableUrl(value)) found.push(`${prefix}${field}`);
+    if (value === undefined) continue;
+
+    if (typeof value !== 'string' || !isDeliverableUrl(value)) found.push(`${prefix}${field}`);
   }
 }
 

@@ -41,6 +41,35 @@ describe('CLI commands', () => {
   }
 
   describe('setup', () => {
+    // `saveConfig` replaces the file with the *parsed* config, and a refused URL
+    // is not in that. So the first unrelated setup run would delete the URL the
+    // developer hand-wrote — and with it the only thing still reporting the
+    // problem, since `nonDeliverableUrlFields` reads the raw file. Afterwards
+    // `doctor` says `configuration: ok` while that destination goes on receiving
+    // nothing, and the hand-written line is unrecoverable except from a backup.
+    it('refuses to overwrite a config holding a URL the edge will not send to', async () => {
+      const repo = path.join(world.home, 'work', 'clientA');
+
+      await writeJson(resolvePaths(world.env).configFile, {
+        ...defaultConfig(),
+        endpoint: 'https://mycorp.example.com',
+        token: 'tok-global',
+        roots: { [repo]: { endpoint: 'http://collector.clienta.internal', token: 'tok-client-a' } }
+      });
+
+      const { result, stdout } = await captureStdout(setupOnce);
+
+      expect(result).toBe(1);
+      expect(stdout).toContain('will not send to');
+      expect(stdout).toContain(`roots.${repo}.endpoint`);
+
+      // And the file is exactly as the developer left it.
+      const onDisk = await readJson(resolvePaths(world.env).configFile);
+
+      expect(onDisk.roots[repo].endpoint).toBe('http://collector.clienta.internal');
+      expect(onDisk.token).toBe('tok-global');
+    });
+
     it('takes the token from the environment when no flag carries it', async () => {
       // How an MDM policy passes a secret: argv is visible to `ps` for the life
       // of the process, and a root script has no other private channel.

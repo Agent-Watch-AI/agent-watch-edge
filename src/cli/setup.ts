@@ -60,6 +60,25 @@ export async function runSetup(options: SetupOptions): Promise<number> {
     return 1;
   }
 
+  // A refused URL is not written back, so setup must not write over the file
+  // that holds it. `saveConfig` replaces the file with the *parsed* config, and
+  // a refused field is not in that — so the first unrelated setup run (a second
+  // agent, another root) would delete the URL the developer hand-wrote, and with
+  // it the only thing still reporting the problem: `nonDeliverableUrlFields`
+  // reads the raw file, so afterwards `doctor` says `configuration: ok` while
+  // that root's telemetry goes on being refused, or worse, inherited. Refusing
+  // here keeps the field, keeps the warning, and names what to fix — the same
+  // answer as `invalid` above.
+  if (context.configWarnings.length > 0) {
+    println(`${symbols.fail} existing config at ${context.paths.configFile} holds a URL the edge will not send to:`);
+
+    for (const warning of context.configWarnings) println(`  ${warning}`);
+
+    println('  fix or remove it, then re-run setup; setup would otherwise overwrite the file without it');
+
+    return 1;
+  }
+
   // A fresh install starts from the schema defaults: metadata on, content off.
   // Turning content capture on is a separate, deliberate edit to the config.
   const baseConfig = context.configState === 'missing' ? defaultConfig() : context.config;
@@ -269,7 +288,11 @@ async function enroll(
   try {
     return await resolveEnrollment({
       setupUrl: options.setupUrl,
-      endpoint: options.endpoint ?? inherited.endpoint,
+      // `?? undefined` last, so a *refused* stored endpoint — `null`, a URL the
+      // edge will not talk to — is nothing to inherit rather than a value to
+      // carry forward. `setup` refuses to run at all while the file holds one,
+      // so this is the belt to that brace.
+      endpoint: options.endpoint ?? inherited.endpoint ?? undefined,
       // Flag, then environment, then what is already stored. An MDM policy runs
       // with no terminal and has to get the token in somehow; `--token` puts it
       // on a command line, where `ps` can read it for the life of the process.

@@ -3,7 +3,8 @@ import path from 'node:path';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { loadConfig } from '../src/config/config-store.js';
 import { resolvePaths } from '../src/storage/paths.js';
-import { defaultConfig, parseOtelSignals } from '../src/config/config.js';
+import { defaultConfig, eventsUrl, parseOtelSignals } from '../src/config/config.js';
+import { applyRootOverride } from '../src/config/root-config.js';
 import { makeTempEnv, writeJson, type TempWorld } from './helpers.js';
 
 describe('config load fallback', () => {
@@ -124,7 +125,9 @@ describe('a bearer may only travel over a URL that cannot leak it', () => {
   it('refuses plain http to anywhere else, so the token cannot cross a network in cleartext', async () => {
     const result = await loadWith({ endpoint: 'http://backend.example.com' });
 
-    expect(result.config.endpoint).toBeUndefined();
+    // Null, not absent: "a URL was written here and refused". See the per-root
+    // case below for why the distinction decides where events go.
+    expect(result.config.endpoint).toBeNull();
     expect(result.warnings.join(' ')).toContain('https');
   });
 
@@ -132,23 +135,23 @@ describe('a bearer may only travel over a URL that cannot leak it', () => {
     for (const endpoint of ['file:///etc/passwd', 'javascript:alert(1)', 'data:text/plain,x', 'ftp://backend.example.com']) {
       const result = await loadWith({ endpoint });
 
-      expect(result.config.endpoint, endpoint).toBeUndefined();
+      expect(result.config.endpoint, endpoint).toBeNull();
       expect(result.warnings, endpoint).toEqual([expect.stringContaining('endpoint')]);
     }
   });
 
   it('applies the same rule to every URL field, including a per-root override', async () => {
-    expect((await loadWith({ eventsUrl: 'http://backend.example.com/v1/events' })).config.eventsUrl).toBeUndefined();
-    expect((await loadWith({ otlpUrl: 'http://backend.example.com' })).config.otlpUrl).toBeUndefined();
-    expect((await loadWith({ enforcementUrl: 'http://backend.example.com/v1/decide' })).config.enforcementUrl).toBeUndefined();
+    expect((await loadWith({ eventsUrl: 'http://backend.example.com/v1/events' })).config.eventsUrl).toBeNull();
+    expect((await loadWith({ otlpUrl: 'http://backend.example.com' })).config.otlpUrl).toBeNull();
+    expect((await loadWith({ enforcementUrl: 'http://backend.example.com/v1/decide' })).config.enforcementUrl).toBeNull();
 
     const rooted = await loadWith({ roots: { '/repo': { endpoint: 'http://backend.example.com' } } });
 
-    expect(rooted.config.roots?.['/repo']?.endpoint).toBeUndefined();
+    expect(rooted.config.roots?.['/repo']?.endpoint).toBeNull();
     expect(rooted.warnings).toEqual([expect.stringContaining('roots./repo.endpoint')]);
   });
 
-  // The whole reason the rule drops a field instead of failing the parse: a
+  // The whole reason the rule refuses a field instead of failing the parse: a
   // failed parse answers with `fallbackConfig()`, which has no token, so an
   // upgrade of a fleet on an internal http endpoint lost the identity its
   // existing backlog is partitioned under — and one typo in one project's
@@ -162,7 +165,55 @@ describe('a bearer may only travel over a URL that cannot leak it', () => {
     expect(result.state).toBe('ok');
     expect(result.config.token).toBe('aw_edge_secret');
     expect(result.config.endpoint).toBe('https://backend.example.com');
-    expect(result.config.roots?.['/repo']).toEqual({ token: 'aw_edge_root' });
+    expect(result.config.roots?.['/repo']?.token).toBe('aw_edge_root');
     expect(result.warnings).toEqual([expect.stringContaining('roots./repo.endpoint')]);
+  });
+
+  // A refused root URL must read as "unusable", never as "absent". Absent, the
+  // override is skipped by `compact` — which exists so an override cannot erase
+  // a global — and the root inherits the *machine's* endpoint while keeping its
+  // own bearer. On a consultant's machine that is every prompt, response and
+  // branch name under `/work/clientA` POSTed to the other tenant's backend,
+  // authenticated with clientA's token. Segregating tenants is the only reason
+  // `roots` exists.
+  it('does not let a root with a refused URL inherit the machine\'s backend', async () => {
+    const repo = path.join(world.home, 'work', 'clientA');
+    const result = await loadWith({
+      endpoint: 'https://mycorp.example.com',
+      roots: { [repo]: { endpoint: 'http://collector.clienta.internal', token: 'aw_edge_client_a' } }
+    });
+
+    expect(result.config.roots?.[repo]?.endpoint).toBeNull();
+
+    const rooted = applyRootOverride(result.config, repo).config;
+
+    expect(rooted.token).toBe('aw_edge_client_a');
+    expect(rooted.endpoint).not.toBe('https://mycorp.example.com');
+    expect(eventsUrl(rooted)).toBeUndefined();
+  });
+
+  // `.catch(null)` swallows every failure, not only a bad URL string, so the
+  // report has to cover more than strings — a `null` from a config-management
+  // tool that had no value to substitute is the same silent misroute as above.
+  it('refuses and reports a URL field that is not even a string', async () => {
+    const numbered = await loadWith({ endpoint: 12345 });
+
+    expect(numbered.state).toBe('ok');
+    expect(numbered.config.endpoint).toBeNull();
+    expect(numbered.warnings).toEqual([expect.stringContaining('endpoint')]);
+
+    const nulled = await loadWith({ roots: { '/repo': { otlpUrl: null, token: 'aw_edge_root' } } });
+
+    expect(nulled.warnings).toEqual([expect.stringContaining('roots./repo.otlpUrl')]);
+  });
+
+  // `rootOverrideSchema` strips `enforcementUrl` as an unknown key whatever its
+  // value, so it has never had any effect — and `doctor` turns any warning into
+  // a failure, so reporting it failed the diagnostic over a field being
+  // discarded either way.
+  it('does not report a root field the schema does not accept', async () => {
+    const result = await loadWith({ roots: { '/repo': { enforcementUrl: 'http://x.corp', token: 'aw_edge_root' } } });
+
+    expect(result.warnings).toEqual([]);
   });
 });

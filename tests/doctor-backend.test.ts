@@ -6,7 +6,7 @@ import { loadConfig, saveConfig } from '../src/config/config-store.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { BackendAuthBlock } from '../src/transport/auth-block.js';
 import { identityPaths } from '../src/transport/queue-partition.js';
-import { captureStdout, makeTempEnv, type TempWorld } from './helpers.js';
+import { captureStdout, makeTempEnv, writeJson, type TempWorld } from './helpers.js';
 
 const TOKEN = 'aw_edge_doctor';
 
@@ -61,8 +61,16 @@ describe('doctor tells a rejected credential from a healthy install', () => {
 
   /** The one check an install script reads, from the machine-readable report. */
   async function connectivityCheck(): Promise<{ code: number; level: string; detail: string }> {
+    return namedCheck('backend connectivity');
+  }
+
+  async function configurationCheck(): Promise<{ code: number; level: string; detail: string }> {
+    return namedCheck('configuration');
+  }
+
+  async function namedCheck(name: string): Promise<{ code: number; level: string; detail: string }> {
     const { result, stdout } = await captureStdout(() => runDoctor(world.env, { json: true }));
-    const check = JSON.parse(stdout).checks.find((entry: { name: string }) => entry.name === 'backend connectivity');
+    const check = JSON.parse(stdout).checks.find((entry: { name: string }) => entry.name === name);
 
     return { code: result, level: check.level, detail: check.detail };
   }
@@ -108,6 +116,39 @@ describe('doctor tells a rejected credential from a healthy install', () => {
 
     expect(check.level).toBe('warn');
     expect(check.detail).toContain('no backend configured yet');
+  });
+
+  // `loadConfig` attaches warnings to an *invalid* result too, so checking them
+  // first hid the far more serious diagnosis: the runtime is on `fallbackConfig`
+  // — no token, no installation id, the backlog orphaned — and `doctor` said
+  // only that a URL had been refused. The developer fixes the URL, re-runs, and
+  // reads the same line, because the file still does not parse.
+  it('names the fatal parse error, not only the refused URL, when a file has both', async () => {
+    await writeJson(resolvePaths(world.env).configFile, {
+      ...defaultConfig(),
+      schemaVersion: 2,
+      endpoint: 'http://collector.corp:4318',
+      token: TOKEN
+    });
+
+    const check = await configurationCheck();
+
+    expect(check.level).toBe('fail');
+    expect(check.detail).toContain('schemaVersion');
+    expect(check.detail).toContain('endpoint');
+  });
+
+  it('reports a refused URL as a failure when the rest of the file is sound', async () => {
+    await writeJson(resolvePaths(world.env).configFile, {
+      ...defaultConfig(),
+      endpoint: 'http://collector.corp:4318',
+      token: TOKEN
+    });
+
+    const check = await configurationCheck();
+
+    expect(check.level).toBe('fail');
+    expect(check.detail).toContain('endpoint');
   });
 
   it('probes even while a block stands, and a 2xx lifts it', async () => {

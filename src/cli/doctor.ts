@@ -155,15 +155,24 @@ function nodeVersionCheck(): Check {
  * @returns The check.
  */
 function configurationCheck(context: CliContext): Check {
-  // A dropped field first, whatever the state: the file parsed, so every other
-  // check reads healthy while one destination silently receives nothing.
+  // The state first, because `loadConfig` attaches warnings to an *invalid*
+  // result too: a file with both a refused URL and a genuinely fatal error —
+  // a `schemaVersion` from a downgrade, a `maxAttempts` a templating tool sent
+  // as a string — would otherwise report only the URL, and never the fact that
+  // the runtime is on `fallbackConfig()` with no token, no installation id and
+  // the backlog orphaned. The developer fixes the URL, re-runs, and reads the
+  // same line. `status.ts` orders these the same way.
+  if (context.configState === 'invalid') {
+    return { name: 'configuration', level: 'fail', detail: [context.configError, ...context.configWarnings].join('; ') };
+  }
+
+  // Then a refused field: the file parsed, so every other check reads healthy
+  // while one destination receives nothing.
   if (context.configWarnings.length > 0) return { name: 'configuration', level: 'fail', detail: `${context.paths.configFile}: ${context.configWarnings.join('; ')}` };
 
   if (context.configState === 'ok') return { name: 'configuration', level: 'ok', detail: context.paths.configFile };
 
-  if (context.configState === 'missing') return { name: 'configuration', level: 'warn', detail: 'not found — run `agentwatch setup`' };
-
-  return { name: 'configuration', level: 'fail', detail: context.configError };
+  return { name: 'configuration', level: 'warn', detail: 'not found — run `agentwatch setup`' };
 }
 
 /**

@@ -4,6 +4,7 @@ import { applyProductCapture } from '../privacy/product-capture.js';
 import {
   CONTENT_TYPE_HEADER,
   JSON_CONTENT_TYPE,
+  MIN_VIABLE_SEND_MS,
   RETRYABLE_STATUSES
 } from './constants/transport.constants.js';
 import { edgeHeaders } from './headers.js';
@@ -20,6 +21,7 @@ export type { HttpTransportOptions } from './types/transport.types.js';
  */
 export class HttpTransport implements EventTransport {
   private readonly fetchFn: typeof fetch;
+  private deadline: number | undefined;
 
   /**
    * Bind the transport to one backend.
@@ -28,6 +30,7 @@ export class HttpTransport implements EventTransport {
    */
   constructor(private readonly options: HttpTransportOptions) {
     this.fetchFn = options.fetchFn ?? fetch;
+    this.deadline = options.deadline;
   }
 
   /**
@@ -61,9 +64,17 @@ export class HttpTransport implements EventTransport {
 
     if (payload.length === 0) return { ok: true, retryable: false };
 
-    const remaining = this.options.deadline === undefined ? this.options.timeoutMs : this.options.deadline - (this.options.nowMs?.() ?? performance.now());
+    const now = this.options.nowMs?.() ?? performance.now();
 
-    if (remaining <= 0) return { ok: false, retryable: true, deferred: true };
+    // Only hook-owned transports opt into a pass budget. Start on first use,
+    // after selection and capture, so construction and local checks cost none.
+    if (this.deadline === undefined && this.options.budgetMs !== undefined) this.deadline = now + this.options.budgetMs;
+
+    const remaining = this.deadline === undefined ? this.options.timeoutMs : this.deadline - now;
+
+    if (remaining < Math.min(MIN_VIABLE_SEND_MS, this.options.timeoutMs)) return { ok: false, retryable: true, deferred: true };
+
+    const requestMs = Math.min(this.options.timeoutMs, remaining);
 
     try {
       const response = await this.fetchFn(this.options.eventsUrl, {
@@ -73,7 +84,7 @@ export class HttpTransport implements EventTransport {
         // A redirect would move a batch that carries a bearer to an endpoint
         // nothing configured; refusing is the only safe answer.
         redirect: 'error',
-        signal: AbortSignal.timeout(Math.max(1, Math.ceil(Math.min(this.options.timeoutMs, remaining))))
+        signal: AbortSignal.timeout(Math.max(1, Math.floor(requestMs)))
       });
 
       if (response.ok) {
@@ -84,6 +95,12 @@ export class HttpTransport implements EventTransport {
 
       return { ok: false, status: response.status, retryable: isRetryableStatus(response.status), error: `HTTP ${response.status}` };
     } catch (error) {
+      // A shortened request exhausting the remainder of a pass is local
+      // scheduling pressure, not evidence that the backend is unhealthy.
+      if (requestMs < this.options.timeoutMs && error instanceof Error && error.name === 'TimeoutError') {
+        return { ok: false, retryable: true, deferred: true };
+      }
+
       // Never include response or request bodies in errors: they carry event
       // content, and this string ends up in logs.
       return { ok: false, retryable: true, error: (error as Error).name || 'network error' };

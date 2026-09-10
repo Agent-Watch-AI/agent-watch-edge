@@ -17,7 +17,7 @@ export interface DeliveryResult {
   /** Whether a failure is worth retrying later (network error, 5xx, 429...). */
   readonly retryable: boolean;
   readonly error?: string;
-  /** No request was attempted because the shared delivery deadline elapsed. */
+  /** The local pass budget prevented or curtailed a request; no retry is charged. */
   readonly deferred?: boolean;
   /** Per-event outcomes from an accepted batch, when the backend sent them. */
   readonly counters?: DeliveryCounters;
@@ -44,6 +44,8 @@ export interface HttpTransportOptions {
   readonly fetchFn?: typeof fetch;
   /** Monotonic deadline shared by direct delivery, drain and isolation probes. */
   readonly deadline?: number;
+  /** Hook-owned pass duration, started on first send; omit for reusable transports. */
+  readonly budgetMs?: number;
   /** Clock in the same units as deadline; performance.now in production. */
   readonly nowMs?: () => number;
 }

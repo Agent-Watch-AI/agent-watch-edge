@@ -33,9 +33,19 @@ and macOS rather than enforcing unstable absolute timing thresholds on shared
 runners.
 
 `delivery.timeoutMs` is a shared monotonic network deadline for one delivery
-pass: a request gets only the remaining time, and later sends are deferred when
-it is exhausted. Deferral keeps queued records and their retry counters intact.
+hook pass, starting at its first send: a request gets only the remaining time.
+Later sends defer when less than 10 ms remains (or the configured timeout, if
+smaller). A shortened request timing out against the remainder also defers. Deferral keeps queued records and their retry counters intact.
 This is not an end-to-end hook deadline: startup, filesystem work, transcript
 settling, enforcement and snapshots have additional costs. Tests exercise
-partial acceptance, exhausted budgets and authentication failures independently
+gateway 503, accepted-batch rejections, exhausted budgets and authentication failures independently
 of machine speed.
+
+Upgrade note: existing `delivery.timeoutMs` values parse unchanged but previously
+gave drain batches and isolation probes a fresh timeout each. Low values can now
+leave backlog pending after a direct send. Review tuned values on upgrade; later
+hooks without new records can drain it. `agentwatch status` keeps its separate
+3-second per-request timeout, including isolation, and CLI-built transports do
+not expire while idle. This shared hook budget intentionally avoids a separate
+drain setting; it limits network latency but does not guarantee backlog progress
+on every hook.

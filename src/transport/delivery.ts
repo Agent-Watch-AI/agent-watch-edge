@@ -64,7 +64,7 @@ export async function deliverEvents(
 
   // A failed filesystem write must remain observable to the enclosing hook
   // flow; returning a successful outcome would falsely claim durable delivery.
-  if (!flow.completed) throw new Error(flow.reason);
+  if (!flow.completed) throw new Error(`delivery failed at ${flow.stoppedAt}: ${flow.reason}`, { cause: flow.cause });
 
   return flow.state.outcome;
 }
@@ -93,7 +93,7 @@ async function sendCurrent(state: DeliveryFlowState): Promise<StepOutcome<Delive
 async function preserveUnsent(state: DeliveryFlowState): Promise<StepOutcome<DeliveryFlowState>> {
   if (state.events.length === 0 || state.result?.ok) return next(state);
 
-  // One queue path for absence, auth block, cooldown, timeout and partial 2xx.
+  // One queue path for absence, auth block, cooldown and transport failures.
   // It precedes diagnostic writes so a stats failure cannot discard a record.
   await state.queue.enqueue(state.events, state.transport?.destination ?? ANY_DESTINATION);
 
@@ -108,7 +108,7 @@ async function reportBackend(state: DeliveryFlowState): Promise<StepOutcome<Deli
   if (!result.ok) {
     debugLog('direct send failed', result.error ?? `status ${result.status}`);
 
-    if (result.retryable && cooldown) await cooldown.trip(BACKEND_COOLDOWN_MS);
+    if (result.retryable && (result.status === undefined || result.status >= 400) && cooldown) await cooldown.trip(BACKEND_COOLDOWN_MS);
 
     if (!result.retryable && stats) await stats.recordRefusal(result.status);
 

@@ -43,6 +43,8 @@ export interface FlowResult<TState> {
   readonly state: TState;
   readonly completed: boolean;
   readonly stoppedAt?: string;
+  /** Original thrown value retained for callers, never included in observer traces. */
+  readonly cause?: unknown;
   readonly reason?: string;
 }
 

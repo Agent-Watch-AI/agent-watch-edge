@@ -234,11 +234,14 @@ enforcement and snapshots have separate costs; this is not a hard deadline for
 the entire hook. Failed records are queued before diagnostic writes, with bounded
 retries and eventual loss reported by status.
 
-A 2xx response with a positive `failed` counter is not a full acknowledgement.
-Because aggregate counters cannot identify which events failed, the whole batch
-is retried with the original IDs. The receiver must deduplicate by event ID to
-avoid counting accepted records twice. A thrown transport error also queues the
-records. Unread response bodies are cancelled and stream readers are released.
+The gateway reports partial publish failures as HTTP 503, so the entire batch
+is retried with its original IDs. A 2xx acknowledges the batch; its `rejected`
+counter records permanent per-event rejection without a retry or cooldown.
+Receivers must handle replay safely: the gateway's dedupe cache lasts 10 minutes,
+while edge backoff can reach 6 hours. Later retries require durable idempotency
+in downstream storage; the gateway cache alone is insufficient. A thrown transport
+error also queues the records. Unread response bodies are cancelled and stream
+readers are released.
 
 A backend that answers 401 or 403 is refusing the credential, not failing
 transiently. The records stay queued — a product record is never discarded on a

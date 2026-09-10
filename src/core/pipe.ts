@@ -61,7 +61,7 @@ export async function runFlow<TState>(steps: readonly Step<TState>[], initial: T
     } catch (error) {
       observe?.({ step: current.name, outcome: 'threw', reason: errorMessage(error) });
 
-      return { state, completed: false, stoppedAt: current.name, reason: errorMessage(error) };
+      return { state, completed: false, stoppedAt: current.name, reason: errorMessage(error), cause: error };
     }
 
     observe?.({ step: current.name, outcome: outcome.kind, reason: outcome.kind === 'stop' ? outcome.reason : undefined });

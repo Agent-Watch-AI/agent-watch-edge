@@ -2,6 +2,21 @@
 
 ## 0.3.0
 
+### Behaviour change: hook delivery timeout
+
+Existing configurations need no schema migration, but `delivery.timeoutMs`
+changes from a per-request timeout to a shared hook delivery budget for direct
+send, drain and isolation. It starts at the first send, not at transport
+construction. A low existing value can leave no time to drain after a direct
+send; those records wait for a later hook or an explicit `agentwatch status`
+retry. Review custom values during upgrade. The default remains 1,500 ms.
+There is no separate drain setting: keeping one hook budget bounds its network
+latency without introducing competing timeout controls. CLI/status transports
+remain reusable with a fresh timeout per request (3 seconds in status), including
+bounded isolation probes. Local budget deferrals do not spend retry attempts.
+
+### Fixes and verification
+
 - **Backlog migration requires an existing exclusive identity.** A new root
   inherits no machine/parent backlog; a shared token's queue stays in place.
   Collector warnings use the same effective-route check as the credential
@@ -10,8 +25,8 @@
 
 - **Delivery follows one ordered flow:** choose whether to send, attempt,
   preserve unsent records, update diagnostics, then drain or sweep the queue.
-  A thrown transport error or 2xx response with failed events keeps the records
-  for retry with their original IDs. The receiver must deduplicate retries.
+  A thrown transport error or gateway 503 keeps the records for retry with
+  their original IDs. Accepted-batch rejection counters remain diagnostic.
 - **One network budget per delivery pass.** Direct delivery, backlog sends and
   isolation probes share `delivery.timeoutMs` (1,500 ms by default). Deferred
   requests consume no retry attempts and do not trip backend cooldown. A 401/403

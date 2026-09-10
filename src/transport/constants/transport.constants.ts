@@ -5,6 +5,9 @@
  */
 export const ANY_DESTINATION = '*';
 
+/** Avoid starting a drain/probe with an unusable remainder of the hook budget. */
+export const MIN_VIABLE_SEND_MS = 10;
+
 /** How long hooks skip direct sends after the backend failed one. */
 export const BACKEND_COOLDOWN_MS = 60_000;
 

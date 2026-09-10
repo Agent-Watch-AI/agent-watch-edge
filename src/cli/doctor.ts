@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { selectRoot } from '../config/root-config.js';
 import { enabledSignalNames, enforcementUrl, eventsUrl, otlpBaseUrl } from '../config/config.js';
 import { loadEffectiveConfig } from '../config/repo-config.js';
 import { CONTENT_CAPTURE_KEYS } from '../config/constants/config.constants.js';
@@ -213,7 +214,14 @@ function enforcementCheck(context: CliContext): Check {
 
   if (!url) return { name, level: 'fail', detail: `budget caps are not enforced${via}: no usable decision URL; fix the endpoint reported by the configuration check` };
 
-  return { name, level: 'ok', detail: `decision route configured${via}; request failures allow turns` };
+  const root = context.identityRoot === undefined ? undefined : selectRoot(context.config.roots, context.identityRoot)?.override;
+  const host = new URL(url).host;
+
+  if (root && root.endpoint === undefined && (root.eventsUrl !== undefined || root.otlpUrl !== undefined)) {
+    return { name, level: 'warn', detail: `budget decisions at ${host} use this root's credential${via}; set this root's endpoint if budget checks belong elsewhere` };
+  }
+
+  return { name, level: 'ok', detail: `decision route at ${host}${via}; request failures allow turns` };
 }
 
 /**

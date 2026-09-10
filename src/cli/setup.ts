@@ -6,7 +6,7 @@ import { defaultConfig, enabledSignalNames, eventsUrl, parseOtelSignals, sharesO
 import { ensureInstallationId, saveConfig } from '../config/config-store.js';
 import { CONTENT_CAPTURE_KEYS } from '../config/constants/config.constants.js';
 import type { Destination } from '../config/types/destination.types.js';
-import { applyRootOverride } from '../config/root-config.js';
+import { applyRootOverride, canonicalRoot } from '../config/root-config.js';
 import { transitionDestination } from '../config/destination.js';
 import { asRecord, compact } from '../core/object.js';
 import type { AgentWatchConfig, OtelConfig, RootOverride } from '../config/types/config.types.js';
@@ -154,14 +154,18 @@ export async function runSetup(options: SetupOptions): Promise<number> {
 
   await reportContentDowngrade(context, config);
   await saveConfig(context.paths, config);
-  const previousIdentity = previousQueueIdentity(baseConfig, rootPath);
+  const previousIdentity = exclusiveQueueIdentity(baseConfig, rootPath);
 
-  if (previousIdentity) {
-    await offerBacklogRetarget(context, previousIdentity, rootPath === undefined ? config : applyRootOverride(config, rootPath).config, ask);
+  const targetIdentity = exclusiveQueueIdentity(config, rootPath);
+  const beforeIdentity = rootPath === undefined ? baseConfig : applyRootOverride(baseConfig, rootPath).config;
+  const afterIdentity = rootPath === undefined ? config : applyRootOverride(config, rootPath).config;
+
+  if (previousIdentity && targetIdentity) {
+    await offerBacklogRetarget(context, previousIdentity, targetIdentity, ask, rootPath ?? 'machine');
   }
 
-  if (!previousIdentity && stored?.token && stored.token !== identity.token) {
-    println(`${symbols.warn} offline backlog is shared with another identity and stays in its original queue; automatic migration skipped`);
+  if ((!previousIdentity || !targetIdentity) && stored && beforeIdentity.token && (beforeIdentity.token !== afterIdentity.token || eventsUrl(beforeIdentity) !== eventsUrl(afterIdentity))) {
+    println(`${symbols.warn} offline backlog source or destination is shared with another identity; backlog stays in its original queue and expires under retention; automatic migration skipped`);
   }
 
   if (rootPath !== undefined) println(`${symbols.ok} project root: ${rootPath}`);
@@ -188,7 +192,7 @@ export async function runSetup(options: SetupOptions): Promise<number> {
 // A partition is keyed by token, not by checkout. Only an existing, exclusive
 // identity owns a backlog we can offer to migrate. A new/nested root never
 // adopts its parent's queue, and changing a shared token cannot move siblings.
-function previousQueueIdentity(config: AgentWatchConfig, rootPath: string | undefined): AgentWatchConfig | undefined {
+function exclusiveQueueIdentity(config: AgentWatchConfig, rootPath: string | undefined): AgentWatchConfig | undefined {
   const roots = config.roots ?? {};
 
   if (rootPath === undefined) {
@@ -242,7 +246,7 @@ function previousEndpoint(stored: RootOverride | undefined, baseConfig: AgentWat
  *
  * @param options - Flags and environment.
  * @param baseConfig - Config the run starts from.
- * @returns The canonical root (absent without `--root`), or the refusal.
+ * @returns The existing matching key or a new canonical root, or the refusal.
  */
 async function resolveRoot(options: SetupOptions, baseConfig: AgentWatchConfig): Promise<{ root?: string } | { error: string }> {
   if (options.root === undefined) return {};
@@ -252,7 +256,12 @@ async function resolveRoot(options: SetupOptions, baseConfig: AgentWatchConfig):
   if (options.otel !== undefined) return { error: 'native OTLP signals are machine-wide; run setup without --root to change them' };
 
   try {
-    return { root: await fs.realpath(path.resolve(options.env.cwd, options.root)) };
+    const root = await fs.realpath(path.resolve(options.env.cwd, options.root));
+    const existing = Object.keys(baseConfig.roots ?? {}).filter((key) => path.isAbsolute(key) && canonicalRoot(key) === root);
+
+    if (existing.length > 1) return { error: `multiple configured root keys resolve to ${root}; consolidate them before setup` };
+
+    return { root: existing[0] ?? root };
   } catch {
     return { error: `project root does not exist: ${options.root}` };
   }
@@ -438,12 +447,14 @@ function reportMissingIdentity(): void {
  * @param previousConfig - Config before this run.
  * @param config - Config this run just wrote.
  * @param ask - The prompt, when the run is interactive.
+ * @param owner - Machine or selected root whose records would move.
  */
 async function offerBacklogRetarget(
   context: CliContext,
   previousConfig: AgentWatchConfig,
   config: AgentWatchConfig,
-  ask: ((question: string) => Promise<string>) | undefined
+  ask: ((question: string) => Promise<string>) | undefined,
+  owner: string
 ): Promise<void> {
   const previousUrl = eventsUrl(previousConfig);
   const configuredUrl = eventsUrl(config);
@@ -459,8 +470,8 @@ async function offerBacklogRetarget(
 
   const question
     = previousUrl === configuredUrl
-      ? `${stranded} offline event(s) are queued under the previous token. Deliver them with the new token? [y/N]: `
-      : `${stranded} offline event(s) are queued for the previous backend (${previousUrl}). Deliver them to the new backend? [y/N]: `;
+      ? `${stranded} offline event(s) captured under ${owner} are queued under the previous token. Deliver them with the new token? [y/N]: `
+      : `${stranded} offline event(s) captured under ${owner} are queued for the previous backend (${previousUrl}). Deliver them to the new backend? [y/N]: `;
   const answer = ask ? (await ask(question)).trim().toLowerCase() : '';
 
   if (answer !== 'y' && answer !== 'yes') {

@@ -132,7 +132,12 @@ on that root if its budget checks belong to a separate backend. `agentwatch conf
 and `doctor` explain unavailable routes. Backlog moves remain opt-in and target
 an existing identity with an exclusive token, regardless of the directory setup
 is run from. New roots inherit no backlog. If another configured identity shares
-the source token, setup keeps the queue in place instead of offering a migration.
+the source or destination token, setup keeps the queue in place instead of offering
+a migration and warns even when only the destination URL changes. Consent names
+the machine or root that captured the backlog. Existing symlink root keys are
+updated in place; duplicate keys for one canonical path require consolidation.
+For route-only roots, doctor warns which host receives the root credential for
+budget decisions; it does not infer a policy host from telemetry URLs.
 A refused root base has no usable enforcement route: budget checks allow turns,
 and doctor reports this as an explicit budget-enforcement failure. Repair the
 root endpoint to restore checks; the root bearer is never sent to machine policy

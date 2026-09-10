@@ -19,7 +19,7 @@ export { captureSchema, configSchema, deliverySchema, emitSchema, otelSchema } f
 export { defaultConfig, enabledSignalNames, eventsUrl, joinUrl, otelEnabled, otlpBaseUrl, parseOtelSignals, sharesOtlpCollector } from './config.js';
 export { ensureInstallationId, loadConfig, saveConfig } from './config-store.js';
 export { findRepoConfigFile, loadEffectiveConfig, mergeRepoConfig } from './repo-config.js';
-export { applyRootOverride, selectRoot, servesMultipleIdentities } from './root-config.js';
+export { applyRootOverride, canonicalRoot, selectRoot, servesMultipleIdentities } from './root-config.js';
 
 export { normalizeEndpoint, sameEndpoint, transitionDestination } from './destination.js';
 export type { Destination, DestinationTransition } from './types/destination.types.js';

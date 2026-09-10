@@ -16,6 +16,20 @@ import { queuePartition } from '../src/transport/queue-partition.js';
 import { CONTENT_CAPTURE_ON, captureStdout, makeTempEnv, queueEntryFiles, readJson, readQueueEntries, writeJson, type TempWorld } from './helpers.js';
 import { claudePostToolUseEdit, claudeUserPromptSubmit } from './fixtures/claude.js';
 
+async function queueOwnership(queueDir: string): Promise<Record<string, number>> {
+  const result: Record<string, number> = {};
+
+  for (const entry of await fs.readdir(queueDir, { withFileTypes: true }).catch(() => [])) {
+    if (!entry.isDirectory()) continue;
+
+    const count = (await queueEntryFiles(path.join(queueDir, entry.name))).length;
+
+    if (count > 0) result[entry.name] = count;
+  }
+
+  return result;
+}
+
 describe('CLI commands', () => {
   let world: TempWorld;
 
@@ -791,6 +805,7 @@ describe('setup --root: a second tenant on one machine', () => {
     expect(questions.some((question) => question.includes('previous token'))).toBe(true);
     expect(await queueEntryFiles(queuePartition(paths.queueDir, 'tok-machine'))).toEqual([]);
     expect(await queueEntryFiles(queuePartition(paths.queueDir, 'tok-rotated'))).toHaveLength(1);
+    expect(await queueOwnership(paths.queueDir)).toEqual({ [path.basename(queuePartition(paths.queueDir, 'tok-rotated'))]: 1 });
   });
 
   it('retargets the selected root backlog even when setup runs outside that root', async () => {
@@ -813,7 +828,8 @@ describe('setup --root: a second tenant on one machine', () => {
     } }));
 
     expect(result).toBe(0);
-    expect(questions).toEqual([expect.stringContaining('previous backend (https://old.example.com/v1/events)')]);
+    expect(questions).toEqual([expect.stringContaining(`captured under ${repo}`)]);
+    expect(await queueOwnership(paths.queueDir)).toEqual({ [path.basename(queuePartition(paths.queueDir, 'root-new'))]: 1 });
     expect(await queueEntryFiles(queuePartition(paths.queueDir, 'root-old'))).toHaveLength(0);
     expect(await queueEntryFiles(queuePartition(paths.queueDir, 'root-new'))).toHaveLength(1);
     expect(await queueEntryFiles(queuePartition(paths.queueDir, 'tok-machine'))).toHaveLength(0);
@@ -826,7 +842,10 @@ describe('setup --root: a second tenant on one machine', () => {
     { kind: 'inherited-token', backend: 'https://other.example.com' },
     { kind: 'machine-token', backend: 'https://other.example.com' },
     { kind: 'sibling-token', backend: 'https://other.example.com' },
-    { kind: 'machine-with-shared-root', backend: 'https://other.example.com' }
+    { kind: 'machine-with-shared-root', backend: 'https://other.example.com' },
+    { kind: 'shared-same-token', backend: 'https://other.example.com' },
+    { kind: 'destination-root', backend: 'https://other.example.com' },
+    { kind: 'destination-machine', backend: 'https://other.example.com' }
   ])('never offers a non-exclusive backlog during $kind enrollment to $backend', async ({ kind, backend }) => {
     await machineSetup();
 
@@ -840,19 +859,29 @@ describe('setup --root: a second tenant on one machine', () => {
       ...(kind === 'nested' ? { [parent]: { token: sourceToken } } : {}),
       ...(kind === 'inherited-token' ? { [repo]: { developerEmail: 'root@example.com' } } : {}),
       ...(kind === 'machine-token' || kind === 'sibling-token' ? { [repo]: { token: sourceToken } } : {}),
-      ...(kind === 'sibling-token' || kind === 'machine-with-shared-root' ? { [sibling]: { token: sourceToken } } : {})
+      ...(kind === 'sibling-token' || kind === 'machine-with-shared-root' || kind === 'shared-same-token' ? { [sibling]: { token: sourceToken } } : {})
     };
 
-    await writeJson(paths.configFile, { ...stored, roots });
+    const targetToken = kind === 'shared-same-token' ? sourceToken : 'tok-new';
+    const finalRoots = {
+      ...roots,
+      ...(kind === 'destination-root' ? { [repo]: { token: sourceToken === 'tok-machine' ? 'tok-own' : sourceToken }, [sibling]: { token: targetToken } } : {}),
+      ...(kind === 'destination-machine' ? { [sibling]: { token: targetToken } } : {})
+    };
+    const actualSource = kind === 'destination-root' ? 'tok-own' : sourceToken;
 
-    const sourceDir = queuePartition(paths.queueDir, sourceToken);
+    await writeJson(paths.configFile, { ...stored, roots: finalRoots });
+
+    const sourceDir = queuePartition(paths.queueDir, actualSource);
     const source = new EventQueue({ queueDir: sourceDir, locksDir: paths.locksDir, maxEvents: 100, maxAttempts: 3, maxEventAgeDays: 7 });
 
     await source.enqueue([{ id: 'unrelated-record', event: { type: 'turn.summary' } } as unknown as Parameters<EventQueue['enqueue']>[0][number]], 'https://backend.example.com/v1/events');
 
     const before = await fs.readFile(path.join(sourceDir, 'unrelated-record.json'), 'utf8');
     const questions: string[] = [];
-    const { result } = await captureStdout(() => rootSetup({ root: kind === 'machine-with-shared-root' ? undefined : repo, endpoint: backend, token: 'tok-new', yes: false, ask: async (question) => {
+    const beforeOwners = await queueOwnership(paths.queueDir);
+    const machine = ['machine-with-shared-root', 'shared-same-token', 'destination-machine'].includes(kind);
+    const { result, stdout } = await captureStdout(() => rootSetup({ root: machine ? undefined : repo, endpoint: backend, token: targetToken, yes: false, ask: async (question) => {
       questions.push(question);
 
       return 'y';
@@ -860,8 +889,85 @@ describe('setup --root: a second tenant on one machine', () => {
 
     expect(result).toBe(0);
     expect(questions).toEqual([]);
+    expect(await queueOwnership(paths.queueDir)).toEqual(beforeOwners);
+
+    if (!['new', 'nested'].includes(kind)) expect(stdout).toContain('automatic migration skipped');
+
     expect(await fs.readFile(path.join(sourceDir, 'unrelated-record.json'), 'utf8')).toBe(before);
-    expect(await queueEntryFiles(queuePartition(paths.queueDir, 'tok-new'))).toHaveLength(0);
+
+    if (targetToken !== actualSource) expect(await queueEntryFiles(queuePartition(paths.queueDir, targetToken))).toHaveLength(0);
+  });
+
+  it('updates an existing symlink root in place so runtime selects the new identity', async () => {
+    await machineSetup();
+
+    const repo = await rootDir('canonical-root');
+    const alias = path.join(world.home, 'configured-alias');
+    const paths = resolvePaths(world.env);
+
+    await fs.symlink(repo, alias);
+    await writeJson(paths.configFile, { ...(await readJson(paths.configFile)), roots: { [alias]: { endpoint: 'https://old.example.com', token: 'old-root' } } });
+
+    const source = new EventQueue({ queueDir: queuePartition(paths.queueDir, 'old-root'), locksDir: paths.locksDir, maxEvents: 100, maxAttempts: 3, maxEventAgeDays: 7 });
+
+    await source.enqueue([{ id: 'alias-record', event: { type: 'turn.summary' } } as unknown as Parameters<EventQueue['enqueue']>[0][number]], 'https://old.example.com/v1/events');
+
+    const questions: string[] = [];
+    const { result } = await captureStdout(() => rootSetup({ root: repo, endpoint: 'https://new.example.com', token: 'new-root', yes: false, ask: async (question) => {
+      questions.push(question);
+
+      return 'y';
+    } }));
+
+    expect(result).toBe(0);
+    expect(Object.keys((await readJson(paths.configFile)).roots)).toEqual([alias]);
+    expect((await loadEffectiveConfig(paths, repo)).config.token).toBe('new-root');
+    expect(questions).toEqual([expect.stringContaining(`captured under ${alias}`)]);
+    expect(await queueOwnership(paths.queueDir)).toEqual({ [path.basename(queuePartition(paths.queueDir, 'new-root'))]: 1 });
+  });
+
+  it('refuses ambiguous canonical root aliases without modifying config', async () => {
+    await machineSetup();
+
+    const repo = await rootDir('ambiguous-root');
+    const alias = path.join(world.home, 'duplicate-alias');
+    const paths = resolvePaths(world.env);
+
+    await fs.symlink(repo, alias);
+    await writeJson(paths.configFile, { ...(await readJson(paths.configFile)), roots: { [alias]: { token: 'one' }, [repo]: { token: 'two' } } });
+
+    const before = await fs.readFile(paths.configFile, 'utf8');
+    const { result, stdout } = await captureStdout(() => rootSetup({ root: repo, token: 'three' }));
+
+    expect(result).toBe(1);
+    expect(stdout).toContain('multiple configured root keys');
+    expect(await fs.readFile(paths.configFile, 'utf8')).toBe(before);
+  });
+
+  it.each([
+    { kind: 'disabled', message: 'disabled; budget caps are not enforced' },
+    { kind: 'no-credential', message: 'no credential configured; budget caps are not enforced' },
+    { kind: 'route-only', message: "budget decisions at backend.example.com use this root's credential" }
+  ])('explains budget enforcement for $kind identities', async ({ kind, message }) => {
+    await machineSetup();
+
+    const repo = await rootDir('budget-root');
+    const paths = resolvePaths(world.env);
+    const stored = await readJson(paths.configFile);
+
+    await writeJson(paths.configFile, {
+      ...stored,
+      token: kind === 'no-credential' ? undefined : stored.token,
+      enforcement: { ...stored.enforcement, enabled: kind !== 'disabled' },
+      ...(kind === 'route-only' ? { roots: { [repo]: { eventsUrl: 'https://vendor.example.com/events', token: 'root-secret' } } } : {})
+    });
+
+    const report = JSON.parse((await captureStdout(() => runDoctor({ ...world.env, cwd: repo }, { json: true }))).stdout);
+    const check = report.checks.find((entry: { name: string }) => entry.name === 'budget enforcement');
+
+    expect(check.level).toBe('warn');
+    expect(check.detail).toContain(message);
+    expect(JSON.stringify(report)).not.toContain('root-secret');
   });
 
   it('reports collector sharing consistently with otel-headers for a trailing-slash machine base', async () => {

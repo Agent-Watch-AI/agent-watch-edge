@@ -17,6 +17,11 @@ bounded isolation probes. Local budget deferrals do not spend retry attempts.
 
 ### Fixes and verification
 
+- Backlog migration requires exclusive source and destination identities;
+  skipped migrations warn on endpoint-only changes and consent names the owner.
+  Setup reuses existing canonical-equivalent root keys and refuses ambiguous
+  duplicates. Doctor names the enforcement host and warns about route-only roots.
+
 - **Backlog migration requires an existing exclusive identity.** A new root
   inherits no machine/parent backlog; a shared token's queue stays in place.
   Collector warnings use the same effective-route check as the credential

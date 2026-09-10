@@ -5,7 +5,7 @@ import readline from 'node:readline/promises';
 import { defaultConfig, enabledSignalNames, eventsUrl, parseOtelSignals } from '../config/config.js';
 import { ensureInstallationId, saveConfig } from '../config/config-store.js';
 import { CONTENT_CAPTURE_KEYS } from '../config/constants/config.constants.js';
-import { asRecord } from '../core/object.js';
+import { asRecord, compact } from '../core/object.js';
 import type { AgentWatchConfig, OtelConfig, RootOverride } from '../config/types/config.types.js';
 import { collectGitContext, developerIdentity } from '../git/git-context.js';
 import { resolveEnrollment } from '../enrollment/enrollment.js';
@@ -134,13 +134,25 @@ export async function runSetup(options: SetupOptions): Promise<number> {
   }
 
   const identity: RootOverride = { endpoint: enrolled.endpoint, token: enrolled.token, developerEmail };
-  // Merged into the entry, not written over it. Replacing it dropped every key
-  // this run does not set — the root's `installationId`, so the next delivery
-  // presents a different install to the backend, and a refused sibling URL,
-  // which ends up *absent* rather than `null` and so is invisible to the
-  // carry-over in `saveConfig`. That is the erasure this release removed,
-  // surviving in the one root an operator repairing a URL is likeliest to name.
-  const rootIdentity: RootOverride = rootPath === undefined ? identity : { ...baseConfig.roots?.[rootPath], ...identity };
+  // Merged into the entry, not written over it — but only the keys this run
+  // cannot supply. Replacing wholesale dropped the root's `installationId`, so
+  // the next delivery presented a different install to the backend, and dropped
+  // a *refused* sibling URL, which ends up absent rather than `null` and so is
+  // invisible to the carry-over in `saveConfig` — the erasure this release
+  // removed, surviving in the one root an operator repairing a URL would name.
+  //
+  // Carrying the entry wholesale is not the answer either: a sibling naming a
+  // *live* host out-ranks `identity.endpoint` in `eventsUrl()`, so re-enrolling
+  // a root against another backend would keep POSTing that root's prompts to
+  // the previous engagement's ingest under the new tenant's bearer, while setup
+  // printed the new backend.
+  const stored = rootPath === undefined ? undefined : baseConfig.roots?.[rootPath];
+  const carried: RootOverride = {
+    installationId: stored?.installationId,
+    eventsUrl: stored?.eventsUrl === null ? null : undefined,
+    otlpUrl: stored?.otlpUrl === null ? null : undefined
+  };
+  const rootIdentity: RootOverride = rootPath === undefined ? identity : { ...compact(carried), ...identity };
   const withIdentity = rootPath === undefined ? { ...baseConfig, ...identity } : { ...baseConfig, roots: { ...baseConfig.roots, [rootPath]: rootIdentity } };
   const config = ensureInstallationId({ ...withIdentity, otel, emit: { ...baseConfig.emit, llmCalls: true } });
 

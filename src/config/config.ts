@@ -145,9 +145,17 @@ export function otlpBaseUrl(config: AgentWatchConfig): string | undefined {
  * the machine off silently. The security argument does not carry either: the
  * derived URL is a path on an `endpoint` already validated as `https:`, so
  * deriving sends the bearer nowhere it was not already going. `doctor` reports
- * the refused field as `configuration: fail` regardless. This is also not a
- * `roots[]` field, so the cross-tenant inheritance the rule exists to stop
- * cannot happen through it.
+ * the refused field as `configuration: fail` regardless.
+ *
+ * What that does not mean is that a root cannot reach the wrong host through
+ * it. `enforcementUrl` has no `roots[]` field, so the URL is the machine's
+ * while the bearer is the root's, and `requestDecision` sends them together: a
+ * root that claims its own backend still asks the *machine's* enforcement
+ * service about its tenant, and hands over that tenant's credential, the
+ * developer id, the checkout path and the model to do it. This predates the
+ * rule and the answer is a per-root enforcement URL, sketched in
+ * `config.constants.ts`. Clearing it here instead would only bring the
+ * fail-open back per root.
  *
  * @param config - Effective configuration.
  * @returns The decision URL, or undefined when no backend is configured.

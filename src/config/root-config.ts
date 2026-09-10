@@ -87,31 +87,45 @@ export function applyRootOverride(config: AgentWatchConfig, cwd: string): Rooted
 }
 
 /**
- * The global config with its destination cleared, when the root names one.
+ * The global config with its derived routes cleared, when the root names a
+ * destination of its own.
  *
- * The three URL fields move as a set. Per field they do not: `eventsUrl()` and
- * `otlpBaseUrl()` prefer their own field and fall back to `endpoint`, so a root
- * that names `endpoint` alone still had the machine's *explicit* `eventsUrl`
- * and `otlpUrl` laid under it — those are strings, they win before the fallback
- * is reached, and the root sent to them under its own bearer. A refusal does
- * not help, because the value that has to stop being read is on the global side
- * of the merge. `otel-headers` compares the two OTLP bases to decide whether the
- * agent's exporter may carry the root's bearer, and they compared equal for the
- * same reason, so the credential crossed the tenant boundary too.
+ * `eventsUrl()` and `otlpBaseUrl()` prefer their own field and only fall back
+ * to `endpoint`, so a machine that splits its routes across hosts laid two
+ * explicit strings under every root, and they won before the root's own
+ * `endpoint` was consulted: that root's prompts went to the machine's ingest
+ * under the root's own bearer, refused or not. `otel-headers` compares the two
+ * OTLP bases to decide whether the agent's exporter may carry the root's
+ * bearer, and they compared equal for the same reason. The value that has to
+ * stop being read is on the global side of the merge, which is why no accessor
+ * can fix it.
  *
- * A `roots[]` entry that names any URL field is claiming a backend of its own,
- * so the root's routes come from the root's own fields or from nothing. An entry
- * that names none — a second seat on the same backend, a developer email — still
- * inherits the machine's destination, which is what those entries are for.
+ * Only the two route fields are cleared, never `endpoint`. `enforcementUrl` has
+ * no `roots[]` field of its own and derives from `endpoint`, and no decision
+ * URL means `ALLOW` — so clearing `endpoint` would silently switch every
+ * `block` cap off under a root that named nothing but its own ingest.
+ *
+ * "Names a destination of its own" is a *different* value, not merely a present
+ * key: `setup --root` always writes `endpoint`, the machine's own unless
+ * `--endpoint` says otherwise, so every root enrolled through the CLI names one.
+ * Keying on presence took the machine's split routes away from an existing
+ * second seat on upgrade — its events to a host that is not an ingest route,
+ * its exporter unauthenticated — with nothing in the file changed to explain it.
  *
  * @param config - The machine's global config, roots already stripped.
  * @param override - The winning root's overrides.
  * @returns The config to lay the override over.
  */
 function withoutDestination<T extends AgentWatchConfig>(config: Omit<T, 'roots'>, override: RootOverride): Omit<T, 'roots'> {
-  if (!ROOT_URL_FIELDS.some((field) => field in override)) return config;
+  const named = ROOT_URL_FIELDS.some((field) => {
+    const key = field as keyof RootOverride & keyof typeof config;
 
-  return { ...config, endpoint: undefined, eventsUrl: undefined, otlpUrl: undefined };
+    return key in override && override[key] !== config[key];
+  });
+
+  if (!named) return config;
+
+  return { ...config, eventsUrl: undefined, otlpUrl: undefined };
 }
 
 /**

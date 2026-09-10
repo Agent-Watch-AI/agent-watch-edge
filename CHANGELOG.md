@@ -61,13 +61,13 @@ items before upgrading a fleet.
   in one `roots[]` entry would have stopped delivery for every other project on
   the machine. A refused field reads as "configured but unusable" and never as
   absent — through `endpoint`, `eventsUrl` and `otlpUrl` alike. A `roots[]`
-  entry that names any backend URL now takes its routes from its own fields or
-  from none: the machine's `eventsUrl` and `otlpUrl` are explicit strings that
-  used to win before a root's own `endpoint` was ever consulted, so one tenant's
-  prompts reached the other's ingest under the first tenant's bearer whether or
-  not a refusal was involved, and `otel-headers` handed that bearer to the
-  machine-wide collector. An entry that names no URL — a second seat on the same
-  backend — still inherits the machine's destination. `enforcementUrl` is the one
+  entry that names a backend of its own now takes its routes from its own fields
+  or from none: the machine's `eventsUrl` and `otlpUrl` are explicit strings
+  that used to win before a root's own `endpoint` was ever consulted, so one
+  tenant's prompts reached the other's ingest under the first tenant's bearer
+  whether or not a refusal was involved, and `otel-headers` handed that bearer
+  to the machine-wide collector. An entry that repeats the machine's endpoint —
+  a second seat on the same backend — still inherits its routes and its bearer. `enforcementUrl` is the one
   accessor a refusal deliberately does *not* make unusable: no decision URL means
   `ALLOW`, so a typo there would switch every `block` cap off silently, and the
   derived route is a path on an already-validated `https:` endpoint.

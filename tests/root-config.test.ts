@@ -169,6 +169,27 @@ describe('a root that names a backend does not inherit the machine\'s routes', (
     return { global: config, config: applyRootOverride(config, REPO).config };
   }
 
+  // Only the two route fields are cleared. `enforcementUrl` has no `roots[]`
+  // field and derives from `endpoint`, and no decision URL means ALLOW — so
+  // clearing `endpoint` switched every `block` cap off under a root that named
+  // nothing but its own ingest, on a tenant delivering events perfectly well.
+  it('leaves the machine\'s endpoint standing, so enforcement still asks', () => {
+    const { config } = rooted({ eventsUrl: 'https://ingest.clientc.example.com/v1/events', token: 'tok-c' });
+
+    expect(eventsUrl(config)).toBe('https://ingest.clientc.example.com/v1/events');
+    expect(enforcementUrl(config)).toBe('https://mycorp.example.com/v1/enforcement/decision');
+  });
+
+  // `setup --root` always writes `endpoint` — the machine's own unless
+  // `--endpoint` says otherwise — so keying on a present key took the machine's
+  // split routes away from every second seat ever enrolled through the CLI.
+  it('keeps inheriting for a root that repeats the machine\'s endpoint', () => {
+    const { global, config } = rooted({ endpoint: 'https://mycorp.example.com', token: 'tok-seat2' });
+
+    expect(eventsUrl(config)).toBe(eventsUrl(global));
+    expect(otlpBaseUrl(config)).toBe(otlpBaseUrl(global));
+  });
+
   it('sends nowhere when the root\'s own endpoint was refused', () => {
     const { global, config } = rooted({ endpoint: 'http://collector.clienta.internal', token: 'tok-client-a' });
 

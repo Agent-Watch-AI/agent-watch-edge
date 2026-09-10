@@ -7,10 +7,11 @@ import { runDoctor } from '../src/cli/doctor.js';
 import { runUninstall } from '../src/cli/uninstall.js';
 import { runHook } from '../src/cli/hook.js';
 import { runOtelHeaders } from '../src/cli/misc.js';
+import { loadEffectiveConfig } from '../src/config/repo-config.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { EventQueue } from '../src/transport/queue.js';
 import { loadConfig, saveConfig } from '../src/config/config-store.js';
-import { defaultConfig } from '../src/config/config.js';
+import { defaultConfig, eventsUrl } from '../src/config/config.js';
 import { queuePartition } from '../src/transport/queue-partition.js';
 import { CONTENT_CAPTURE_ON, captureStdout, makeTempEnv, queueEntryFiles, readJson, readQueueEntries, writeJson, type TempWorld } from './helpers.js';
 import { claudePostToolUseEdit, claudeUserPromptSubmit } from './fixtures/claude.js';
@@ -844,6 +845,81 @@ describe('setup --root: a second tenant on one machine', () => {
     expect(onDisk.roots[repo].installationId).toBe('inst-root');
     // And the field is still reported, which is what the erasure took with it.
     expect((await loadConfig(paths)).warnings).toEqual([expect.stringContaining(`roots.${repo}.eventsUrl`)]);
+  });
+
+  // A split-route machine is the deployment the `eventsUrl`/`otlpUrl` overrides
+  // exist for, and `setup --root` always writes `endpoint`. So a second seat on
+  // the same backend names a URL field without claiming a destination: it has
+  // to keep the machine's routes and its bearer, or its events 4xx against a
+  // host that is not an ingest route and its exporter goes unauthenticated.
+  it('leaves a second seat on a split-route machine on the machine\'s routes', async () => {
+    await machineSetup();
+
+    const paths = resolvePaths(world.env);
+    const stored = await readJson(paths.configFile);
+
+    await writeJson(paths.configFile, {
+      ...stored,
+      eventsUrl: 'https://ingest.backend.example.com/v1/events',
+      otlpUrl: 'https://otlp.backend.example.com'
+    });
+
+    const repo = await rootDir('seat2');
+
+    expect(await captureStdout(() => rootSetup({ root: repo, token: 'tok-seat2' })).then((run) => run.result)).toBe(0);
+
+    const rooted = (await loadEffectiveConfig(paths, repo)).config;
+
+    expect(eventsUrl(rooted)).toBe('https://ingest.backend.example.com/v1/events');
+    expect(rooted.token).toBe('tok-seat2');
+    expect(JSON.parse((await captureStdout(() => runOtelHeaders({ ...world.env, cwd: repo }))).stdout)).toEqual({ Authorization: 'Bearer tok-seat2' });
+  });
+
+  // The carry-over must not keep a *live* route from the previous engagement:
+  // a sibling `eventsUrl` out-ranks the new `endpoint`, so re-enrolling against
+  // another backend would POST this root's prompts to the old tenant's ingest
+  // under the new tenant's bearer, while setup printed the new backend.
+  it('drops a live sibling route when a root is re-enrolled against another backend', async () => {
+    await machineSetup();
+
+    const repo = await rootDir('clientA');
+    const paths = resolvePaths(world.env);
+    const stored = await readJson(paths.configFile);
+
+    await writeJson(paths.configFile, {
+      ...stored,
+      roots: { [repo]: { endpoint: 'https://clienta.example.com', eventsUrl: 'https://ingest.clienta.example.com/v1/events', token: 'tok-a' } }
+    });
+
+    const { result } = await captureStdout(() => rootSetup({ root: repo, endpoint: 'https://clientb.example.com', token: 'tok-b' }));
+
+    expect(result).toBe(0);
+    expect((await readJson(paths.configFile)).roots[repo].eventsUrl).toBeUndefined();
+
+    const rooted = (await loadEffectiveConfig(paths, repo)).config;
+
+    expect(eventsUrl(rooted)).toBe('https://clientb.example.com/v1/events');
+    expect(rooted.token).toBe('tok-b');
+  });
+
+  // `undefined === undefined` is true, so the guard opened exactly when neither
+  // side has a collector at all — printing the root's bearer for nobody.
+  it('otel-headers signs with nothing when no OTLP base is configured either side', async () => {
+    await machineSetup();
+
+    const repo = await rootDir('clientC');
+    const paths = resolvePaths(world.env);
+    const stored = await readJson(paths.configFile);
+
+    await writeJson(paths.configFile, {
+      ...stored,
+      endpoint: 'http://collector.corp:4318',
+      roots: { [repo]: { eventsUrl: 'https://ingest.clientc.example.com/v1/events', token: 'tok-c' } }
+    });
+
+    const { stdout } = await captureStdout(() => runOtelHeaders({ ...world.env, cwd: repo }));
+
+    expect(JSON.parse(stdout)).toEqual({});
   });
 
   // A root whose own OTLP URL was refused is a foreign tenant too. Read by

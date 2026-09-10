@@ -21,9 +21,10 @@ export type { DeliveryOutcome } from './types/transport.types.js';
  * rather than costing every hook a full timeout. And it keeps the backlog
  * moving even on hooks that emit nothing, because those are the majority.
  *
- * Both skips run `queue.sweep` before returning, because the retention bound
- * has to hold on exactly the paths that skip a drain: those are the week-long
- * outages it exists for, and a credential block has no timer to end it.
+ * Every path that skips a drain runs `queue.sweep` before returning, because
+ * the retention bound has to hold on exactly those paths: they are the
+ * week-long outages it exists for, a credential block has no timer to end it,
+ * and an endpoint the edge refuses is a state a machine can sit in for good.
  *
  * @param events - Product events this hook produced; often empty.
  * @param transport - Where to send, or undefined before setup configures one.
@@ -47,6 +48,17 @@ export async function deliverEvents(
     // No endpoint configured yet: keep the events for whatever backend setup
     // configures first.
     if (events.length > 0) await queue.enqueue(events, ANY_DESTINATION);
+
+    // Sweeping here mattered less when `!transport` only meant "before setup",
+    // where the queue is empty. It is now a durable steady state for a
+    // *configured* machine: a refused endpoint reads as unusable, the file still
+    // parses and the token survives, so hooks go on queueing under that token
+    // and every one of them takes this branch. Without the sweep, nothing past
+    // `maxEventAgeDays` is ever removed and the partition sits at
+    // `maxQueueEvents` files of prompt and response text indefinitely — on a
+    // machine whose owner set an age bound. `enforceBound` keeps the disk
+    // bounded, but retention is a promise about age, not size.
+    await queue.sweep(stats);
 
     return { delivered: 0, queued: events.length, drained: 0, rejected: 0 };
   }

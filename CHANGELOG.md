@@ -79,9 +79,11 @@ items before upgrading a fleet.
   credential — return before one. A revoked token therefore aged nothing out for
   as long as the block stood, while the queue bound quietly shed the oldest
   entries at the ceiling without counting them, so `status` reported nothing
-  lost. The sweep now runs on both skips, its hourly throttle is read from the
-  clock the marker is written in (an injected or backward-stepped clock silenced
-  it permanently), and the bound reports what it sacrifices.
+  lost. The sweep now runs on every path that skips a pass — including the one
+  where no usable endpoint is configured, which a refused URL makes a durable
+  state rather than a pre-setup one — its hourly throttle is read from the clock
+  the marker is written in (an injected or backward-stepped clock silenced it
+  permanently), and the bound reports what it sacrifices.
 - **Every registered agent is loadable.** The eager provider list and the lazy
   loader map are two hand-maintained lists of the same agents; a test now asserts
   they agree. An agent in only one of them installed hooks that resolved no

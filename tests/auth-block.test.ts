@@ -158,6 +158,32 @@ describe('a rejected credential suspends sending without losing a record', () =>
     expect((await stats.read())?.totalDropped).toBe(1);
   });
 
+  // The third skip. `!transport` used to mean "before setup", where the queue is
+  // empty; it is now a durable state for a configured machine — a refused
+  // endpoint reads as unusable while the token survives, so hooks queue under it
+  // and take this branch on every invocation, for good.
+  it('still ages the backlog out when no usable endpoint is configured', async () => {
+    const clock = { at: new Date('2026-09-01T10:00:00.000Z') };
+    const aging = new EventQueue({
+      queueDir: path.join(world.home, 'unconfigured'),
+      locksDir: path.join(world.home, 'locks'),
+      maxEvents: 50,
+      maxAttempts: 20,
+      maxEventAgeDays: 7,
+      now: () => clock.at
+    });
+
+    await aging.enqueue([makeEvent('evt_orphan')], BACKEND);
+
+    clock.at = new Date('2026-09-30T10:00:00.000Z');
+
+    const outcome = await deliverEvents([], undefined, aging, 10, undefined, stats);
+
+    expect(outcome.delivered).toBe(0);
+    expect(await aging.pendingCount()).toBe(0);
+    expect((await stats.read())?.totalDropped).toBe(1);
+  });
+
   // `enforceBound` was the one permanent loss that never reached the tally, so a
   // machine steadily shedding records at the ceiling reported `totalDropped: 0`.
   it('counts the entries the queue bound sacrifices', async () => {

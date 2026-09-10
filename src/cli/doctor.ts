@@ -255,13 +255,33 @@ async function connectivityChecks(context: CliContext): Promise<Check[]> {
   // one the block was raised against.
   const url = eventsUrl(context.identityConfig);
 
-  checks.push(url ? await probeBackend(url, context) : { name: BACKEND_CONNECTIVITY_CHECK, level: 'warn', detail: 'no backend configured yet — run `agentwatch setup`' });
+  checks.push(url ? await probeBackend(url, context) : { name: BACKEND_CONNECTIVITY_CHECK, level: 'warn', detail: noBackendDetail(context) });
 
   const otlp = otlpBaseUrl(context.identityConfig);
 
   if (otlp) checks.push({ name: 'OTLP base URL', level: 'ok', detail: otlp });
 
   return checks;
+}
+
+/**
+ * Why there is nothing to probe.
+ *
+ * A root that names a destination of its own does not inherit the machine's
+ * routes, so a root that named only its OTLP base has no events route at all —
+ * a deliberate stop, but one that read as an unconfigured machine while the
+ * line above printed this root's endpoint. `agentwatch setup` is the wrong
+ * remedy for it too: re-running under the root writes the machine's endpoint
+ * into the entry, which stops it naming a destination of its own and quietly
+ * makes it a second seat on the machine's backend.
+ *
+ * @param context - Resolved CLI context.
+ * @returns The detail line.
+ */
+function noBackendDetail(context: CliContext): string {
+  if (context.identityRoot === undefined) return 'no backend configured yet — run `agentwatch setup`';
+
+  return `root ${context.identityRoot} names a backend of its own and no events route to it — set "eventsUrl" or "endpoint" on that root, or remove its other URL to inherit the machine's`;
 }
 
 /**

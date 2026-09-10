@@ -73,10 +73,13 @@ items before upgrading a fleet.
   derived route is a path on an already-validated `https:` endpoint.
   `setup` names a refused URL and leaves the line the developer wrote exactly
   where it is: the value is carried over the write from the file rather than
-  replaced by the parse, re-enrolling a root merges into that root's entry
-  instead of replacing it, so no run erases a field it does not set and no run
-  is blocked by another tenant's typo. `setup` still refuses a non-deliverable
-  `--endpoint` outright.
+  replaced by the parse, re-enrolling merges into the entry instead of replacing
+  it, so no run erases a field it does not set and no run is blocked by another
+  tenant's typo. A route override survives a run that leaves the destination
+  where it was and is dropped by one that moves it — for a `roots[]` entry and
+  for the machine identity alike, so winding one engagement down and enrolling
+  the next no longer keeps POSTing to the first one's ingest under the second
+  one's bearer. `setup` still refuses a non-deliverable `--endpoint` outright.
   Response bodies the hook decodes are capped, and neither the batch send nor
   the enforcement check follows a redirect — both carry a bearer.
 - **`status` and `doctor` act as the identity of the directory they run in.**

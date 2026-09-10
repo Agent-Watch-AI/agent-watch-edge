@@ -151,20 +151,21 @@ export async function runSetup(options: SetupOptions): Promise<number> {
   // the destination where it was. Dropping it unconditionally deleted a route
   // override an operator had written — a seat's regional ingest, say — on a run
   // that only rotated its token, with nothing printed and nothing to restore it
-  // from: `storedRefusedUrls` rescues `null`, not a live string. Compared
-  // against the entry's *effective* previous destination, because an entry that
-  // names no endpoint of its own was sending to the machine's.
+  // from: `storedRefusedUrls` rescues `null`, not a live string.
   const stored = rootPath === undefined ? undefined : baseConfig.roots?.[rootPath];
-  const previous = stored === undefined ? undefined : (stored.endpoint ?? baseConfig.endpoint);
-  const carriedUrl = (value: string | null | undefined): string | null | undefined =>
-    value === null || previous === identity.endpoint ? value : undefined;
   const carried: RootOverride = {
     installationId: stored?.installationId,
-    eventsUrl: carriedUrl(stored?.eventsUrl),
-    otlpUrl: carriedUrl(stored?.otlpUrl)
+    ...carriedRoutes(stored, previousEndpoint(stored, baseConfig), identity.endpoint)
   };
   const rootIdentity: RootOverride = rootPath === undefined ? identity : { ...compact(carried), ...identity };
-  const withIdentity = rootPath === undefined ? { ...baseConfig, ...identity } : { ...baseConfig, roots: { ...baseConfig.roots, [rootPath]: rootIdentity } };
+  // The machine identity is held to the same rule. Spreading `identity` over
+  // `baseConfig` left the global `eventsUrl` standing, so a consultant winding
+  // one engagement down and starting the next on the same laptop — the flow of
+  // someone who never learned about `--root` — kept POSTing to the previous
+  // tenant's ingest under the new tenant's bearer, with setup printing the new
+  // backend.
+  const machine = { ...identity, ...carriedRoutes(baseConfig, baseConfig.endpoint, identity.endpoint) };
+  const withIdentity = rootPath === undefined ? { ...baseConfig, ...machine } : { ...baseConfig, roots: { ...baseConfig.roots, [rootPath]: rootIdentity } };
   const config = ensureInstallationId({ ...withIdentity, otel, emit: { ...baseConfig.emit, llmCalls: true } });
 
   await reportContentDowngrade(context, config);
@@ -190,6 +191,55 @@ export async function runSetup(options: SetupOptions): Promise<number> {
   println(dim('  run `agentwatch status` anytime, `agentwatch doctor` to diagnose'));
 
   return failures === 0 ? 0 : 1;
+}
+
+/**
+ * The destination the entry was sending to before this run.
+ *
+ * An entry that names no `endpoint` of its own was sending to the machine's, so
+ * a run that changes nothing must not read as a reroute. A *refused* one is not
+ * converted: this file's own rule is that a refusal is never the same
+ * destination as the machine's, and `??` would have said the opposite —
+ * carrying the previous engagement's live ingest onto a new token, which is the
+ * misroute the carry list exists to stop.
+ *
+ * @param stored - The entry as it stands, absent for a root being created.
+ * @param baseConfig - Config this run starts from.
+ * @returns The previous destination, or undefined when there is no entry.
+ */
+function previousEndpoint(stored: RootOverride | undefined, baseConfig: AgentWatchConfig): string | null | undefined {
+  if (stored === undefined) return undefined;
+
+  return stored.endpoint === undefined ? baseConfig.endpoint : stored.endpoint;
+}
+
+/**
+ * The route overrides this run keeps.
+ *
+ * A refused route is the developer's own line, kept as `null` so the carry-over
+ * in `saveConfig` can lay the raw value back. A live one is kept only while the
+ * destination is unchanged: it out-ranks `endpoint` in `eventsUrl()`, so
+ * carrying it across a reroute sends the new tenant's prompts to the old
+ * tenant's host. A refused previous destination is therefore never "unchanged",
+ * and the carry is refused — the direction an operator can recover from, unlike
+ * a cross-tenant POST.
+ *
+ * @param stored - The entry, or the whole config for the machine identity.
+ * @param previous - Where it was sending before this run.
+ * @param next - Where this run says it sends.
+ * @returns The two route fields, each kept, refused or cleared.
+ */
+function carriedRoutes(
+  stored: Pick<RootOverride, 'eventsUrl' | 'otlpUrl'> | undefined,
+  previous: string | null | undefined,
+  next: string | null | undefined
+): Pick<RootOverride, 'eventsUrl' | 'otlpUrl'> {
+  // `next != null` pins the argument rather than trusting `resolveEnrollment`
+  // to keep making it: two refusals must never compare equal here.
+  const unchanged = next != null && previous === next;
+  const keep = (value: string | null | undefined): string | null | undefined => (value === null || unchanged ? value : undefined);
+
+  return { eventsUrl: keep(stored?.eventsUrl), otlpUrl: keep(stored?.otlpUrl) };
 }
 
 /**

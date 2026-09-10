@@ -948,6 +948,102 @@ describe('setup --root: a second tenant on one machine', () => {
     expect(rooted.token).toBe('tok-new');
   });
 
+  // The three shapes the entry's endpoint can take, since the branch that keeps
+  // a live route is reached by all of them and each answers differently.
+  it('carries a live route for an entry that named no endpoint of its own', async () => {
+    await machineSetup();
+
+    const repo = await rootDir('inherited-seat');
+    const paths = resolvePaths(world.env);
+    const stored = await readJson(paths.configFile);
+
+    await writeJson(paths.configFile, {
+      ...stored,
+      roots: { [repo]: { eventsUrl: 'https://ingest-eu.backend.example.com/v1/events', token: 'tok-old' } }
+    });
+
+    expect(await captureStdout(() => rootSetup({ root: repo, token: 'tok-new' })).then((run) => run.result)).toBe(0);
+
+    // It was sending to the machine's endpoint, and still is, so nothing moved.
+    expect((await readJson(paths.configFile)).roots[repo].eventsUrl).toBe('https://ingest-eu.backend.example.com/v1/events');
+  });
+
+  // A refusal is not a destination anyone can compare against. Reading it as
+  // "was sending to the machine's" carried the previous engagement's live
+  // ingest onto the new token — the cross-tenant POST, through a typo.
+  it('drops a live route when the entry it sat beside was a refused endpoint', async () => {
+    await machineSetup();
+
+    const repo = await rootDir('clientA-typo');
+    const paths = resolvePaths(world.env);
+    const stored = await readJson(paths.configFile);
+
+    await writeJson(paths.configFile, {
+      ...stored,
+      roots: {
+        [repo]: {
+          endpoint: 'http://collector.clienta.internal',
+          eventsUrl: 'https://ingest.clienta.example.com/v1/events',
+          token: 'tok-a'
+        }
+      }
+    });
+
+    expect(await captureStdout(() => rootSetup({ root: repo, token: 'tok-b' })).then((run) => run.result)).toBe(0);
+
+    expect((await readJson(paths.configFile)).roots[repo].eventsUrl).toBeUndefined();
+
+    const rooted = (await loadEffectiveConfig(paths, repo)).config;
+
+    expect(eventsUrl(rooted)).toBe('https://backend.example.com/v1/events');
+    expect(rooted.token).toBe('tok-b');
+  });
+
+  // The machine identity is held to the same rule: a consultant winding one
+  // engagement down and starting the next on the same laptop never has to learn
+  // about `--root` to reach the same misroute.
+  it('drops the machine\'s live route when setup names another backend', async () => {
+    const paths = resolvePaths(world.env);
+
+    await writeJson(paths.configFile, {
+      ...defaultConfig(),
+      endpoint: 'https://clienta.example.com',
+      eventsUrl: 'https://ingest.clienta.example.com/v1/events',
+      token: 'tok-a'
+    });
+
+    const { result } = await captureStdout(() => rootSetup({ endpoint: 'https://clientb.example.com', token: 'tok-b' }));
+
+    expect(result).toBe(0);
+
+    const onDisk = await readJson(paths.configFile);
+
+    expect(onDisk.eventsUrl).toBeUndefined();
+    expect(eventsUrl((await loadConfig(paths)).config)).toBe('https://clientb.example.com/v1/events');
+  });
+
+  // The cleared route is a deliberate stop, and it read as an unconfigured
+  // machine two lines under this root's own endpoint — with `agentwatch setup`
+  // offered as the remedy, which would quietly make it a second seat instead.
+  it('doctor names the root that has no events route, rather than calling it unconfigured', async () => {
+    await machineSetup();
+
+    const repo = await rootDir('clientC');
+    const paths = resolvePaths(world.env);
+    const stored = await readJson(paths.configFile);
+
+    await writeJson(paths.configFile, {
+      ...stored,
+      roots: { [repo]: { otlpUrl: 'https://otlp.clientc.example.com', token: 'tok-c' } }
+    });
+
+    const { stdout } = await captureStdout(() => runDoctor({ ...world.env, cwd: repo }, { json: true }));
+    const check = JSON.parse(stdout).checks.find((entry: { name: string }) => entry.name === 'backend connectivity');
+
+    expect(check.detail).toContain(repo);
+    expect(check.detail).not.toContain('no backend configured yet');
+  });
+
   // A root that names one route and not the other must not get the other from
   // the machine — here the machine's collector is derived from a healthy
   // endpoint, so the `Boolean(base)` guard never sees it and the bases matched.

@@ -280,7 +280,7 @@ describe('deliverEvents', () => {
 
     // Simulate the next hook invocation with a healthy backend: direct send
     // succeeds and the backlog drains. Force the queued entry to be due.
-    const file = (await fs.readdir(path.join(world.home, 'q')))[0]!;
+    const file = (await fs.readdir(path.join(world.home, 'q'))).find((name) => name.endsWith('.json'))!;
     const full = path.join(world.home, 'q', file);
     const entry = JSON.parse(await fs.readFile(full, 'utf8'));
 

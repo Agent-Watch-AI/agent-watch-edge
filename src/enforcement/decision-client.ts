@@ -1,6 +1,6 @@
 import { debugLog } from '../core/logger.js';
 import { edgeHeaders } from '../transport/headers.js';
-import { readCappedJson } from '../transport/response-body.js';
+import { discardResponseBody, readCappedJson } from '../transport/response-body.js';
 import { BRANCH_PARAM, DEVELOPER_ID_PARAM, MODEL_PARAM, REPOSITORY_PARAM } from './constants/enforcement.constants.js';
 import { cacheTtlSchema, decisionSchema } from './schemas/enforcement.schema.js';
 import type { AnsweredDecision, DecisionRequest } from './types/enforcement.types.js';
@@ -33,6 +33,7 @@ export async function requestDecision(request: DecisionRequest): Promise<Answere
     });
 
     if (!response.ok) {
+      discardResponseBody(response);
       debugLog(`enforcement: HTTP ${response.status}; allowing`);
 
       return undefined;

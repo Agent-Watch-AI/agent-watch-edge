@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import type { ProductEvent } from '../events/product-event.js';
 import { applyProductCapture } from '../privacy/product-capture.js';
 import {
@@ -6,7 +7,7 @@ import {
   RETRYABLE_STATUSES
 } from './constants/transport.constants.js';
 import { edgeHeaders } from './headers.js';
-import { readCappedJson } from './response-body.js';
+import { discardResponseBody, readCappedJson } from './response-body.js';
 import type { DeliveryResult, EventTransport, HttpTransportOptions } from './types/transport.types.js';
 
 export type { HttpTransportOptions } from './types/transport.types.js';
@@ -50,9 +51,19 @@ export class HttpTransport implements EventTransport {
 
     // Current policy, not the policy the record was written under: a queued
     // event may predate a revoked consent or capture flag.
-    const payload = events.map((event) => applyProductCapture(event, this.options.capture)).filter((event) => event !== undefined);
+    const payload: ProductEvent[] = [];
+
+    for (const event of events) {
+      const captured = applyProductCapture(event, this.options.capture);
+
+      if (captured) payload.push(captured);
+    }
 
     if (payload.length === 0) return { ok: true, retryable: false };
+
+    const remaining = this.options.deadline === undefined ? this.options.timeoutMs : this.options.deadline - (this.options.nowMs?.() ?? performance.now());
+
+    if (remaining <= 0) return { ok: false, retryable: true, deferred: true };
 
     try {
       const response = await this.fetchFn(this.options.eventsUrl, {
@@ -62,12 +73,14 @@ export class HttpTransport implements EventTransport {
         // A redirect would move a batch that carries a bearer to an endpoint
         // nothing configured; refusing is the only safe answer.
         redirect: 'error',
-        signal: AbortSignal.timeout(this.options.timeoutMs)
+        signal: AbortSignal.timeout(Math.max(1, Math.ceil(Math.min(this.options.timeoutMs, remaining))))
       });
 
       if (response.ok) {
         return { ok: true, status: response.status, retryable: false, counters: await readCounters(response) };
       }
+
+      discardResponseBody(response);
 
       return { ok: false, status: response.status, retryable: isRetryableStatus(response.status), error: `HTTP ${response.status}` };
     } catch (error) {
@@ -106,7 +119,7 @@ async function readCounters(response: Response): Promise<DeliveryResult['counter
     const body = (await readCappedJson(response)) as Record<string, unknown>;
     // Own properties only: this object came off the network, so a `__proto__`
     // in the body must not answer for a counter nobody sent.
-    const numeric = (key: string): number => (Object.hasOwn(body, key) && typeof body[key] === 'number' ? (body[key] as number) : 0);
+    const numeric = (key: string): number => (Object.hasOwn(body, key) && Number.isSafeInteger(body[key]) && (body[key] as number) >= 0 ? body[key] as number : 0);
 
     return {
       accepted: numeric('accepted'),

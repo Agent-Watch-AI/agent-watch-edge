@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MAX_RESPONSE_BYTES } from '../src/transport/constants/transport.constants.js';
 import { readCappedJson } from '../src/transport/response-body.js';
 
@@ -37,5 +37,32 @@ describe('readCappedJson', () => {
 
   it('rejects a body that is not JSON at all', async () => {
     await expect(readCappedJson(new Response('<html>nope</html>'))).rejects.toThrow();
+  });
+  it('cancels an oversized declared body without waiting for its producer', async () => {
+    const cancel = vi.fn(() => new Promise<void>(() => undefined));
+    const response = new Response(new ReadableStream({ cancel }), { headers: { 'content-length': String(MAX_RESPONSE_BYTES + 1) } });
+
+    await expect(readCappedJson(response)).rejects.toThrow(/too large/);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(response.body?.locked).toBe(false);
+  });
+
+  it('cancels an oversized stream and releases its reader even if cancellation fails', async () => {
+    const cancel = vi.fn(async () => { throw new Error('cleanup failed'); });
+    const response = new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(MAX_RESPONSE_BYTES + 1)); },
+      cancel
+    }));
+
+    await expect(readCappedJson(response)).rejects.toThrow(/too large/);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(response.body?.locked).toBe(false);
+  });
+
+  it('releases the reader after a normal response', async () => {
+    const response = chunked(['{"accepted":1}']);
+
+    await expect(readCappedJson(response)).resolves.toEqual({ accepted: 1 });
+    expect(response.body?.locked).toBe(false);
   });
 });

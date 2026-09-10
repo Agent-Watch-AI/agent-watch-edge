@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import { asRecord } from '../core/object.js';
 import { applyProductCapture } from '../privacy/product-capture.js';
 import { debugLog } from '../core/logger.js';
@@ -400,7 +401,8 @@ function buildTransport(state: HookPipelineState): EventTransport | undefined {
     capture: state.config.capture,
     token: state.config.token,
     installationId: state.config.installationId,
-    timeoutMs: state.config.delivery.timeoutMs
+    timeoutMs: state.config.delivery.timeoutMs,
+    deadline: performance.now() + state.config.delivery.timeoutMs
   });
 }
 

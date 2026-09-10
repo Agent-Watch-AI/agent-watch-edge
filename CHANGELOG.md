@@ -2,6 +2,20 @@
 
 ## 0.3.0
 
+- **Delivery follows one ordered flow:** choose whether to send, attempt,
+  preserve unsent records, update diagnostics, then drain or sweep the queue.
+  A thrown transport error or 2xx response with failed events keeps the records
+  for retry with their original IDs. The receiver must deduplicate retries.
+- **One network budget per delivery pass.** Direct delivery, backlog sends and
+  isolation probes share `delivery.timeoutMs` (1,500 ms by default). Deferred
+  requests consume no retry attempts and do not trip backend cooldown. A 401/403
+  during isolation stops further probes and persists the credential block.
+- **Response cleanup is bounded.** Unread bodies are cancelled, including
+  oversized declared responses and diagnostic probes; readers release their locks.
+- **Linux and macOS are checked on Node 20 and 24.** CI also publishes repeatable
+  hook/queue timing reports. Windows and managed-fleet rollout remain separate
+  verification work.
+
 Production-installation readiness. Everything below either changes what an
 operator sees or what the package does on the hook path; read the first two
 items before upgrading a fleet.

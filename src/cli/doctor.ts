@@ -16,6 +16,7 @@ import type { AgentProvider, SetupContext } from '../providers/types/provider.ty
 import { SECRET_FILE_MODE } from '../storage/constants/storage.constants.js';
 import { unattributedCount, unattributedQueue } from '../transport/queue-partition.js';
 import { AUTH_REJECTED_STATUSES, CONTENT_TYPE_HEADER, JSON_CONTENT_TYPE } from '../transport/constants/transport.constants.js';
+import { discardResponseBody } from '../transport/response-body.js';
 import { edgeHeaders } from '../transport/headers.js';
 import { buildAuthBlock, buildCliContext, buildHookCommand, buildQueue } from './context.js';
 import { installedHookChecks } from './hook-check.js';
@@ -316,6 +317,8 @@ async function probeBackend(url: string, context: CliContext): Promise<Check> {
       redirect: 'error',
       signal: AbortSignal.timeout(BACKEND_PROBE_TIMEOUT_MS)
     });
+
+    discardResponseBody(response);
 
     if (response.ok) {
       await buildAuthBlock(context).clear();

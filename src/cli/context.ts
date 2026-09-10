@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import path from 'node:path';
 import process from 'node:process';
 import { eventsUrl } from '../config/config.js';
@@ -125,7 +126,8 @@ export function buildTransport(context: CliContext, timeoutMs?: number): EventTr
     capture: context.identityConfig.capture,
     token: context.identityConfig.token,
     installationId: context.identityConfig.installationId,
-    timeoutMs: timeoutMs ?? context.identityConfig.delivery.timeoutMs
+    timeoutMs: timeoutMs ?? context.identityConfig.delivery.timeoutMs,
+    deadline: performance.now() + (timeoutMs ?? context.identityConfig.delivery.timeoutMs)
   });
 }
 

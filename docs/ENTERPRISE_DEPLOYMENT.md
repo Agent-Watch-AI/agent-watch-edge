@@ -84,8 +84,8 @@ Node >=22.14 for OIDC support. No long-lived npm token is required. The workflow
 publishes the verified artifact with provenance; it does not create a GitHub release.
 See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/).
 
-The version must be deliberately selected before triggering publication; this
-change does not bump it. Signing with a real release identity is a later step,
+The version must be deliberately selected before triggering publication;
+publishing an already released version is not supported. Signing with a real release identity is a later step,
 not a simulated signature.
 
 Provenance covers the npm artifact, not the git history it was built from, so
@@ -131,3 +131,17 @@ other telemetry route; it still uses machine enforcement. Configure `endpoint`
 on that root if its budget checks belong to a separate backend. `agentwatch config`
 and `doctor` explain unavailable routes. Backlog moves remain opt-in and target
 the identity being enrolled, regardless of the directory setup is run from.
+
+## Verification scope and performance
+
+CI runs lint, type checking, coverage and build on Linux and macOS with Node 20
+and 24. Provider configuration is tested in isolated temporary homes; this does
+not replace a managed-fleet pilot with the real agent versions. Windows remains
+unverified. The release artifact is produced once on Linux/Node 24.
+
+Run `npm run benchmark` for fresh-process hook latency and queue scan timings at
+0, 100 and 2,000 entries. CI publishes a separate benchmark JSON artifact for
+Linux and macOS on Node 24. Measurements include the runtime and hardware, and
+report full queue sweeps separately from bounded scans. See
+[performance methodology](PERFORMANCE.md). Timing distributions are diagnostic;
+correctness tests assert the network deadline, bounded scans and record retention.

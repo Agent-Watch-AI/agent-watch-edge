@@ -26,6 +26,7 @@ import {
   RETARGET_LOCK_WAIT_MS,
   RE_UNSAFE_QUEUE_NAME
 } from './constants/transport.constants.js';
+import { sendEvents } from './send.js';
 import { queueEntrySchema } from './schemas/queue.schema.js';
 import type { DrainStats, DrainStatsRecorder, DueEntry, EventTransport, QueueEntry, QueueOptions } from './types/transport.types.js';
 
@@ -419,13 +420,15 @@ export class EventQueue {
    * @returns What the send accomplished and cost.
    */
   private async sendBatch(transport: EventTransport, batch: readonly DueEntry[], nowMs: number, authBlock?: BackendAuthBlock): Promise<DrainDelta> {
-    const result = await transport.send(batch.map(({ entry }) => entry.event as unknown as ProductEvent));
+    const result = await sendEvents(transport, batch.map(({ entry }) => entry.event as unknown as ProductEvent));
 
     if (result.ok) {
       await Promise.all(batch.map(({ file }) => fs.rm(file, { force: true })));
 
       return { ...EMPTY_DELTA, sent: batch.length, rejected: reportRejected(result.counters?.rejected, 'the drained batch') };
     }
+
+    if (result.deferred) return { ...EMPTY_DELTA, failed: batch.length };
 
     debugLog('queue drain failed', result.error ?? `status ${result.status}`);
 
@@ -439,7 +442,7 @@ export class EventQueue {
       return { ...EMPTY_DELTA, failed: batch.length };
     }
 
-    if (!result.retryable && batch.length > 1) return this.isolateBatch(transport, batch, nowMs);
+    if (!result.retryable && batch.length > 1) return this.isolateBatch(transport, batch, nowMs, authBlock);
 
     let delta = EMPTY_DELTA;
 
@@ -462,9 +465,10 @@ export class EventQueue {
    * @param transport - Where to send.
    * @param batch - Entries the batch send refused.
    * @param nowMs - This pass's clock reading.
+   * @param authBlock - Persisted refusal, including one received by a single probe.
    * @returns What the probes accomplished and cost.
    */
-  private async isolateBatch(transport: EventTransport, batch: readonly DueEntry[], nowMs: number): Promise<DrainDelta> {
+  private async isolateBatch(transport: EventTransport, batch: readonly DueEntry[], nowMs: number, authBlock?: BackendAuthBlock): Promise<DrainDelta> {
     let delta = EMPTY_DELTA;
     let probes = 0;
 
@@ -475,7 +479,13 @@ export class EventQueue {
       }
 
       probes += 1;
-      const single = await transport.send([entry.event as unknown as ProductEvent]);
+      const single = await sendEvents(transport, [entry.event as unknown as ProductEvent]);
+
+      if (single.deferred || (single.status !== undefined && AUTH_REJECTED_STATUSES.has(single.status))) {
+        if (!single.deferred && single.status !== undefined && authBlock && transport.destination) await authBlock.raise(transport.destination, single.status);
+
+        return mergeDeltas(delta, { ...EMPTY_DELTA, failed: batch.length - probes + 1 });
+      }
 
       if (!single.ok) {
         delta = mergeDeltas(delta, await this.recordFailure(file, entry, nowMs));

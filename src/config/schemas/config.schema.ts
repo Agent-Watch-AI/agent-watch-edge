@@ -64,7 +64,7 @@ export const captureSchema = z
 /** Tuning for the in-hook send and the machine-global offline queue. */
 export const deliverySchema = z
   .object({
-    /** Budget for the in-hook direct send. Keep small: we are on the agent's critical path. */
+    /** Shared network budget for direct send and backlog retries in one delivery pass. */
     timeoutMs: z.number().int().positive().default(DEFAULT_SEND_TIMEOUT_MS),
     /** How many queued events one drain pass may send. */
     drainBatchSize: z.number().int().positive().default(DEFAULT_DRAIN_BATCH_SIZE),
@@ -230,19 +230,19 @@ export function nonDeliverableUrlFields(value: unknown): string[] {
 
   if (!record) return found;
 
-  collectNonDeliverable(record, URL_FIELDS, '', found);
+  found.push(...collectNonDeliverable(record, URL_FIELDS, ''));
 
   for (const [root, override] of Object.entries(asRecord(record['roots']) ?? {})) {
     const entry = asRecord(override);
 
-    if (entry) collectNonDeliverable(entry, ROOT_URL_FIELDS, `roots.${root}.`, found);
+    if (entry) found.push(...collectNonDeliverable(entry, ROOT_URL_FIELDS, `roots.${root}.`));
   }
 
   return found;
 }
 
 /**
- * Append the offending URL fields of one flat object.
+ * Find the offending URL fields without mutating the caller's accumulator.
  *
  * Anything present that is not a deliverable *string* counts, not only a bad
  * URL string: `deliverableUrl` catches every failure, so a number, an array or
@@ -254,14 +254,15 @@ export function nonDeliverableUrlFields(value: unknown): string[] {
  * @param record - The config or one `roots[]` entry.
  * @param fields - The URL fields that object may carry.
  * @param prefix - Dotted prefix for the reported path.
- * @param found - Accumulator.
+ * @returns The offending field paths.
  */
 function collectNonDeliverable(
   record: Record<string, unknown>,
   fields: readonly string[],
-  prefix: string,
-  found: string[]
-): void {
+  prefix: string
+): string[] {
+  const found: string[] = [];
+
   for (const field of fields) {
     if (!(field in record)) continue;
 
@@ -271,6 +272,8 @@ function collectNonDeliverable(
 
     if (typeof value !== 'string' || !isDeliverableUrl(value)) found.push(`${prefix}${field}`);
   }
+
+  return found;
 }
 
 /**

@@ -169,8 +169,9 @@ and retry timestamps. Defaults are 2,000 events, 20 attempts, and 7 days.
 Expiration is processed during activity, not by a daemon or scheduled erasure.
 Capacity pressure removes oldest entries. Turn state has a 24-hour stale-state
 cleanup bound, and queued records a `maxEventAgeDays` bound (7 by default). Both
-sweeps are activity-driven and run at most hourly, so removal happens within the
-retention window plus that interval rather than on every hook. Backups and other local caches have no
+sweeps are activity-driven and run at most hourly. On an active installation,
+removal happens at the next eligible sweep after expiration; an idle machine
+retains the files until activity resumes. Backups and other local caches have no
 guaranteed automatic deletion deadline. The package does not delete provider-owned
 transcripts; it can read them locally for usage attribution.
 
@@ -209,9 +210,9 @@ Defaults derived from that endpoint are `POST /v1/events`, native OTLP base
 when configured. Every URL in the configuration is validated on every *read* of
 the file, not only when `setup` writes it: `https://` anywhere, and `http://`
 only to `localhost`, `127.0.0.1` or `::1`. A configuration naming any other
-scheme — or plain `http://` to a remote host — fails to load and `doctor`
-reports it, rather than sending the bearer and the captured content over the
-network in cleartext.
+scheme — or plain `http://` to a remote host — refuses that URL and `doctor`
+reports it. The remaining valid configuration and identity stay loaded; a
+refused root destination does not inherit machine telemetry routes.
 Enforcement sends developer and checkout attribution, and the session's
 model when the agent named one, not prompt/tool bodies.
 Doctor probes connectivity with an empty events batch carrying the same
@@ -225,8 +226,19 @@ network activity while disabled.
 
 Hook errors return the provider's passive response/exit zero. Unknown inputs,
 missing configuration, parser failures and unexpected exceptions must not crash
-the coding agent. Direct sends have a default 1,500 ms timeout; failed records
-are queued, with bounded retries and eventual loss reported by status.
+the coding agent. A delivery pass shares a default 1,500 ms monotonic network budget across
+its direct send, backlog batch and isolation probes. Each request uses the
+remaining budget. Exhaustion defers unsent records without consuming their retry
+attempts or marking the backend unavailable. Filesystem work, transcript settling,
+enforcement and snapshots have separate costs; this is not a hard deadline for
+the entire hook. Failed records are queued before diagnostic writes, with bounded
+retries and eventual loss reported by status.
+
+A 2xx response with a positive `failed` counter is not a full acknowledgement.
+Because aggregate counters cannot identify which events failed, the whole batch
+is retried with the original IDs. The receiver must deduplicate by event ID to
+avoid counting accepted records twice. A thrown transport error also queues the
+records. Unread response bodies are cancelled and stream readers are released.
 
 A backend that answers 401 or 403 is refusing the credential, not failing
 transiently. The records stay queued — a product record is never discarded on a
@@ -235,8 +247,8 @@ failed send, and that does not change — but automatic sends for that
 rejected bearer on every hook for the whole retention window, which reads to a
 backend's security monitoring as low-rate credential stuffing and to the
 operator as nothing at all. No queued entry spends a retry attempt while the
-refusal stands, so a backlog cannot age out over a rejection that is not its
-fault. `status` reports the refusing status, when the refusals started and how
+refusal stands, including when it first occurs during an isolation probe.
+Normal age and size retention limits still apply. `status` reports the refusing status, when the refusals started and how
 many records are held. The suspension is lifted by configuring a different
 credential or endpoint, or by `doctor` proving the credential good again; it
 never expires on a timer. This is

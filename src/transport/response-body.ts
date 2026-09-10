@@ -19,7 +19,11 @@ import { BODY_TOO_LARGE, CONTENT_LENGTH_HEADER, MAX_RESPONSE_BYTES } from './con
  * @returns The parsed body.
  */
 export async function readCappedJson(response: Response): Promise<unknown> {
-  if (Number(response.headers.get(CONTENT_LENGTH_HEADER)) > MAX_RESPONSE_BYTES) throw new Error(BODY_TOO_LARGE);
+  if (Number(response.headers.get(CONTENT_LENGTH_HEADER)) > MAX_RESPONSE_BYTES) {
+    discardResponseBody(response);
+
+    throw new Error(BODY_TOO_LARGE);
+  }
 
   return JSON.parse(await readCapped(response));
 }
@@ -38,19 +42,32 @@ async function readCapped(response: Response): Promise<string> {
   let text = '';
   let total = 0;
 
-  while (true) {
-    const { done, value } = await reader.read();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
 
-    if (done) return text + decoder.decode();
+      if (done) return text + decoder.decode();
 
-    total += value.byteLength;
+      total += value.byteLength;
 
-    if (total > MAX_RESPONSE_BYTES) {
-      await reader.cancel();
+      if (total > MAX_RESPONSE_BYTES) {
+        void reader.cancel().catch(() => undefined);
 
-      throw new Error(BODY_TOO_LARGE);
+        throw new Error(BODY_TOO_LARGE);
+      }
+
+      text += decoder.decode(value, { stream: true });
     }
-
-    text += decoder.decode(value, { stream: true });
+  } finally {
+    reader.releaseLock();
   }
+}
+
+/**
+ * Release unread responses without making cleanup part of the hook's latency.
+ * @param response - A response whose body the caller will not consume.
+ * @returns Nothing; cancellation errors cannot affect delivery or enforcement.
+ */
+export function discardResponseBody(response: Response): void {
+  void response.body?.cancel().catch(() => undefined);
 }

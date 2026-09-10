@@ -19,7 +19,7 @@ permissions:
 # comment is the version each SHA was, so a bump stays reviewable.
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       # Both runtimes are reported: a failure on the floor and a failure on the
       # release runtime need different answers.
@@ -30,6 +30,7 @@ jobs:
         # Array.prototype.at); without this the floor is a number nothing
         # verifies.
         node: ['20', '24']
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -47,17 +48,25 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
+      - if: matrix.node == '24'
+        run: node scripts/benchmark.mjs > benchmark.json
+      - if: matrix.node == '24'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: benchmark-${{ matrix.os }}
+          path: benchmark.json
+          if-no-files-found: error
       # A vulnerability signal between releases: the SBOM says what is in the
       # tree and nothing was checking it against advisories. Production
       # dependencies only, and only high and above, so this fails on something
       # that ships rather than on a devDependency's transitive advisory.
-      - if: matrix.node == '24'
+      - if: matrix.node == '24' && matrix.os == 'ubuntu-latest'
         run: npm audit --omit=dev --audit-level=high
       # The published tarball is built once, on the release runtime. Node 20 is
       # here to prove the floor, not to produce artifacts.
-      - if: matrix.node == '24'
+      - if: matrix.node == '24' && matrix.os == 'ubuntu-latest'
         run: npm run release:artifacts
-      - if: matrix.node == '24'
+      - if: matrix.node == '24' && matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: npm-release

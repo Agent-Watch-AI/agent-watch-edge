@@ -15,7 +15,7 @@ Supports **Claude Code**, **OpenAI Codex**, **Cursor**, **Gemini CLI** and **Goo
 
 ## Quick Start
 
-**Requirements:** Node.js 20+ — CI runs the whole suite on Node 20 and Node 24, so the floor is verified rather than declared.
+**Requirements:** Node.js 20+ — CI runs the whole suite on Node 20 and Node 24 on Linux and macOS. Windows deployment remains unverified.
 
 ```bash
 npm install -g @agent-watch-ai/edge

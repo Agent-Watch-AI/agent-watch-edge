@@ -122,3 +122,12 @@ export const IDENTITY_FINGERPRINT_CHARS = 12;
 
 /** Under the data directory: one sub-directory per identity for cooldown and loss stats. */
 export const IDENTITY_STATE_DIR_NAME = 'identity';
+
+/** Delivery order makes persistence precede optional diagnostic writes. */
+export const DELIVERY_STAGE_NAMES = {
+  select: 'select-delivery',
+  send: 'send-current',
+  preserve: 'preserve-unsent',
+  report: 'report-backend',
+  maintain: 'maintain-queue'
+} as const;

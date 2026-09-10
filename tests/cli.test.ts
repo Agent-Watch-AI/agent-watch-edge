@@ -922,6 +922,52 @@ describe('setup --root: a second tenant on one machine', () => {
     expect(JSON.parse(stdout)).toEqual({});
   });
 
+  // Rotating a root's token changes no destination, so a route override an
+  // operator wrote for that seat — a regional ingest — must survive the run.
+  // Nothing else records it: `storedRefusedUrls` rescues a refused `null`, not
+  // a live string, so dropping it here is unrecoverable.
+  it('keeps a root\'s own live route when the run only rotates its token', async () => {
+    await machineSetup();
+
+    const repo = await rootDir('seat-eu');
+    const paths = resolvePaths(world.env);
+    const stored = await readJson(paths.configFile);
+
+    await writeJson(paths.configFile, {
+      ...stored,
+      roots: { [repo]: { endpoint: 'https://backend.example.com', eventsUrl: 'https://ingest-eu.backend.example.com/v1/events', token: 'tok-old' } }
+    });
+
+    expect(await captureStdout(() => rootSetup({ root: repo, token: 'tok-new' })).then((run) => run.result)).toBe(0);
+
+    expect((await readJson(paths.configFile)).roots[repo].eventsUrl).toBe('https://ingest-eu.backend.example.com/v1/events');
+
+    const rooted = (await loadEffectiveConfig(paths, repo)).config;
+
+    expect(eventsUrl(rooted)).toBe('https://ingest-eu.backend.example.com/v1/events');
+    expect(rooted.token).toBe('tok-new');
+  });
+
+  // A root that names one route and not the other must not get the other from
+  // the machine — here the machine's collector is derived from a healthy
+  // endpoint, so the `Boolean(base)` guard never sees it and the bases matched.
+  it('otel-headers signs with nothing for a root that names only its own ingest', async () => {
+    await machineSetup();
+
+    const repo = await rootDir('clientC');
+    const paths = resolvePaths(world.env);
+    const stored = await readJson(paths.configFile);
+
+    await writeJson(paths.configFile, {
+      ...stored,
+      roots: { [repo]: { eventsUrl: 'https://ingest.clientc.example.com/v1/events', token: 'tok-c' } }
+    });
+
+    const { stdout } = await captureStdout(() => runOtelHeaders({ ...world.env, cwd: repo }));
+
+    expect(JSON.parse(stdout)).toEqual({});
+  });
+
   // A root whose own OTLP URL was refused is a foreign tenant too. Read by
   // truthiness the refusal fell through to the machine's base, which made the
   // two bases equal and handed that root's bearer to the machine's collector.

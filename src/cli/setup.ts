@@ -146,11 +146,22 @@ export async function runSetup(options: SetupOptions): Promise<number> {
   // a root against another backend would keep POSTing that root's prompts to
   // the previous engagement's ingest under the new tenant's bearer, while setup
   // printed the new backend.
+  //
+  // A refused sibling is always carried; a live one only while this run leaves
+  // the destination where it was. Dropping it unconditionally deleted a route
+  // override an operator had written — a seat's regional ingest, say — on a run
+  // that only rotated its token, with nothing printed and nothing to restore it
+  // from: `storedRefusedUrls` rescues `null`, not a live string. Compared
+  // against the entry's *effective* previous destination, because an entry that
+  // names no endpoint of its own was sending to the machine's.
   const stored = rootPath === undefined ? undefined : baseConfig.roots?.[rootPath];
+  const previous = stored === undefined ? undefined : (stored.endpoint ?? baseConfig.endpoint);
+  const carriedUrl = (value: string | null | undefined): string | null | undefined =>
+    value === null || previous === identity.endpoint ? value : undefined;
   const carried: RootOverride = {
     installationId: stored?.installationId,
-    eventsUrl: stored?.eventsUrl === null ? null : undefined,
-    otlpUrl: stored?.otlpUrl === null ? null : undefined
+    eventsUrl: carriedUrl(stored?.eventsUrl),
+    otlpUrl: carriedUrl(stored?.otlpUrl)
   };
   const rootIdentity: RootOverride = rootPath === undefined ? identity : { ...compact(carried), ...identity };
   const withIdentity = rootPath === undefined ? { ...baseConfig, ...identity } : { ...baseConfig, roots: { ...baseConfig.roots, [rootPath]: rootIdentity } };

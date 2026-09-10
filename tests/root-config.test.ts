@@ -190,6 +190,37 @@ describe('a root that names a backend does not inherit the machine\'s routes', (
     expect(otlpBaseUrl(config)).toBe(otlpBaseUrl(global));
   });
 
+  // With `endpoint` left standing, clearing the routes to `undefined` was a
+  // no-op: both accessors fall back to it, so whichever field the root did not
+  // name came straight back from the machine's backend under the root's bearer.
+  it('gives a root that names one route no fallback for the other', () => {
+    const events = rooted({ eventsUrl: 'https://ingest.clientc.example.com/v1/events', token: 'tok-c' });
+
+    expect(eventsUrl(events.config)).toBe('https://ingest.clientc.example.com/v1/events');
+    expect(otlpBaseUrl(events.config)).toBeUndefined();
+
+    const otlp = rooted({ otlpUrl: 'https://otlp.clientc.example.com', token: 'tok-c' });
+
+    expect(otlpBaseUrl(otlp.config)).toBe('https://otlp.clientc.example.com');
+    expect(eventsUrl(otlp.config)).toBeUndefined();
+  });
+
+  // Two refusals compare equal, so a value test alone read a root whose own
+  // endpoint was refused as a second seat on a machine whose endpoint was
+  // refused too — and handed it every live route the machine had.
+  it('treats a refused root endpoint as a backend of its own, not as the machine\'s', () => {
+    const config = configSchema.parse({
+      endpoint: 'http://collector.corp:4318',
+      eventsUrl: 'https://ingest.mycorp.example.com/v1/events',
+      token: 'tok-machine',
+      roots: { [REPO]: { endpoint: 'http://collector.clienta.internal', token: 'tok-c' } }
+    });
+    const rootedConfig = applyRootOverride(config, REPO).config;
+
+    expect(rootedConfig.token).toBe('tok-c');
+    expect(eventsUrl(rootedConfig)).toBeUndefined();
+  });
+
   it('sends nowhere when the root\'s own endpoint was refused', () => {
     const { global, config } = rooted({ endpoint: 'http://collector.clienta.internal', token: 'tok-client-a' });
 

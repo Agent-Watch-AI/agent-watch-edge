@@ -217,7 +217,14 @@ function enforcementCheck(context: CliContext): Check {
   const root = context.identityRoot === undefined ? undefined : selectRoot(context.config.roots, context.identityRoot)?.override;
   const host = new URL(url).host;
 
-  if (root && root.endpoint === undefined && (root.eventsUrl !== undefined || root.otlpUrl !== undefined)) {
+  // Compare destinations, not which fields happened to be present. An own
+  // base states policy intent; otherwise explicit telemetry routes identify
+  // the root's hosts, falling back to the shared machine base for token-only roots.
+  const routes = root?.endpoint ? [root.endpoint] : [root?.eventsUrl, root?.otlpUrl].filter((value): value is string => Boolean(value));
+  const expected = routes.length > 0 ? routes : [context.config.endpoint];
+  const foreignPolicy = expected.some((value) => value && new URL(value).host !== host);
+
+  if (root && foreignPolicy) {
     return { name, level: 'warn', detail: `budget decisions at ${host} use this root's credential${via}; set this root's endpoint if budget checks belong elsewhere` };
   }
 

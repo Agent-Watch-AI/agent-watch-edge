@@ -17,10 +17,17 @@ bounded isolation probes. Local budget deferrals do not spend retry attempts.
 
 ### Fixes and verification
 
+- Empty token flags fall back to the environment or stored credential. Tokenless
+  configurations cannot own a backlog migration. Queue inspection before consent
+  never adopts legacy records; shared-owner warnings require actual pending events.
+  Migration prompts name both source owner and target URL and explain attribution.
+  Doctor compares policy and configured destination hosts instead of URL field
+  presence. Tests pin the 9/10/11 ms send boundary and usable larger remainders.
+
 - Backlog migration requires exclusive source and destination identities;
   skipped migrations warn on endpoint-only changes and consent names the owner.
   Setup reuses existing canonical-equivalent root keys and refuses ambiguous
-  duplicates. Doctor names the enforcement host and warns about route-only roots.
+  duplicates. Doctor names the enforcement host and warns when the policy host differs from the root’s configured destination hosts.
 
 - **Backlog migration requires an existing exclusive identity.** A new root
   inherits no machine/parent backlog; a shared token's queue stays in place.

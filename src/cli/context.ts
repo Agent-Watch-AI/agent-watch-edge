@@ -73,6 +73,16 @@ export async function buildQueue(context: CliContext): Promise<EventQueue> {
   // owns is a fact about where it was run.
   await settleLegacyQueue(context.paths.queueDir, context.identityConfig.token, servesMultipleIdentities(context.config));
 
+  return openIdentityQueue(context);
+}
+
+/**
+ * Open the selected partition without adopting or moving legacy records.
+ * Setup can inspect ownership and ask for consent without changing the queue.
+ * @param context - Resolved identity and storage paths.
+ * @returns A queue handle; construction performs no filesystem writes.
+ */
+export function openIdentityQueue(context: CliContext): EventQueue {
   return new EventQueue({
     queueDir: identityPaths(context.paths, context.identityConfig.token).queueDir,
     locksDir: context.paths.locksDir,

@@ -20,7 +20,7 @@ import { readJsonFile } from '../storage/json-file.js';
 import { TOKEN_VAR } from '../storage/constants/storage.constants.js';
 import { identityPaths } from '../transport/queue-partition.js';
 import type { InstallState } from '../storage/types/storage.types.js';
-import { buildCliContext, buildHookCommand, buildQueue } from './context.js';
+import { buildCliContext, buildHookCommand, openIdentityQueue } from './context.js';
 import { DEVELOPER_EMAIL_PROMPT, DEVELOPER_IDENTITY_REMEDIES, NO_CONFIG_WRITTEN, NO_DEVELOPER_IDENTITY } from './constants/cli.constants.js';
 import type { CliContext, SetupOptions } from './types/cli.types.js';
 import { bold, dim, printErrln, println, symbols } from './ui.js';
@@ -154,18 +154,12 @@ export async function runSetup(options: SetupOptions): Promise<number> {
 
   await reportContentDowngrade(context, config);
   await saveConfig(context.paths, config);
-  const previousIdentity = exclusiveQueueIdentity(baseConfig, rootPath);
-
-  const targetIdentity = exclusiveQueueIdentity(config, rootPath);
   const beforeIdentity = rootPath === undefined ? baseConfig : applyRootOverride(baseConfig, rootPath).config;
   const afterIdentity = rootPath === undefined ? config : applyRootOverride(config, rootPath).config;
+  const canMigrate = Boolean(exclusiveQueueIdentity(baseConfig, rootPath) && exclusiveQueueIdentity(config, rootPath));
 
-  if (previousIdentity && targetIdentity) {
-    await offerBacklogRetarget(context, previousIdentity, targetIdentity, ask, rootPath ?? 'machine');
-  }
-
-  if ((!previousIdentity || !targetIdentity) && stored && beforeIdentity.token && (beforeIdentity.token !== afterIdentity.token || eventsUrl(beforeIdentity) !== eventsUrl(afterIdentity))) {
-    println(`${symbols.warn} offline backlog source or destination is shared with another identity; backlog stays in its original queue and expires under retention; automatic migration skipped`);
+  if (stored && beforeIdentity.token) {
+    await offerBacklogRetarget(context, beforeIdentity, afterIdentity, ask, rootPath ?? 'machine', canMigrate);
   }
 
   if (rootPath !== undefined) println(`${symbols.ok} project root: ${rootPath}`);
@@ -196,6 +190,8 @@ function exclusiveQueueIdentity(config: AgentWatchConfig, rootPath: string | und
   const roots = config.roots ?? {};
 
   if (rootPath === undefined) {
+    if (!config.token) return undefined;
+
     if (Object.values(roots).some((root) => root.token !== undefined && root.token === config.token)) return undefined;
 
     return config;
@@ -372,7 +368,7 @@ async function enroll(
       // and enrollment treats a defined token as final — so `??` would write an
       // empty token, skip the prompt, and leave an install that authenticates
       // against nothing while reporting success.
-      token: options.token ?? (options.env.vars[TOKEN_VAR] || inherited.token),
+      token: options.token || options.env.vars[TOKEN_VAR] || inherited.token,
       ask
     });
   } catch (error) {
@@ -448,13 +444,15 @@ function reportMissingIdentity(): void {
  * @param config - Config this run just wrote.
  * @param ask - The prompt, when the run is interactive.
  * @param owner - Machine or selected root whose records would move.
+ * @param canMigrate - Both ends have exclusive credentialed queue owners.
  */
 async function offerBacklogRetarget(
   context: CliContext,
   previousConfig: AgentWatchConfig,
   config: AgentWatchConfig,
   ask: ((question: string) => Promise<string>) | undefined,
-  owner: string
+  owner: string,
+  canMigrate: boolean
 ): Promise<void> {
   const previousUrl = eventsUrl(previousConfig);
   const configuredUrl = eventsUrl(config);
@@ -463,15 +461,21 @@ async function offerBacklogRetarget(
 
   if (previousUrl === configuredUrl && previousConfig.token === config.token) return;
 
-  const queue = await buildQueue({ ...context, identityConfig: previousConfig });
+  const queue = openIdentityQueue({ ...context, identityConfig: previousConfig });
   const stranded = await queue.pendingFor(previousUrl);
 
   if (stranded === 0) return;
 
+  if (!canMigrate) {
+    println(`${symbols.warn} ${stranded} offline event(s) captured under ${owner} cannot be migrated: source or destination has no exclusive credential; backlog stays in its original queue and expires under retention; automatic migration skipped`);
+
+    return;
+  }
+
   const question
     = previousUrl === configuredUrl
-      ? `${stranded} offline event(s) captured under ${owner} are queued under the previous token. Deliver them with the new token? [y/N]: `
-      : `${stranded} offline event(s) captured under ${owner} are queued for the previous backend (${previousUrl}). Deliver them to the new backend? [y/N]: `;
+      ? `${stranded} offline event(s) captured under ${owner} are queued under the previous token. Deliver them to ${configuredUrl} with the new token (tenant attribution may change)? [y/N]: `
+      : `${stranded} offline event(s) captured under ${owner} are queued for the previous backend (${previousUrl}). Deliver them to ${configuredUrl} with the configured token (tenant attribution may change)? [y/N]: `;
   const answer = ask ? (await ask(question)).trim().toLowerCase() : '';
 
   if (answer !== 'y' && answer !== 'yes') {

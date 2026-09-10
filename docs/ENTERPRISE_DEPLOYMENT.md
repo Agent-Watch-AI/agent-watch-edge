@@ -133,11 +133,16 @@ and `doctor` explain unavailable routes. Backlog moves remain opt-in and target
 an existing identity with an exclusive token, regardless of the directory setup
 is run from. New roots inherit no backlog. If another configured identity shares
 the source or destination token, setup keeps the queue in place instead of offering
-a migration and warns even when only the destination URL changes. Consent names
-the machine or root that captured the backlog. Existing symlink root keys are
+a migration and warns when records are pending, including when only the destination
+URL changes. Consent names the capturing machine or root, the target URL, and the
+possible change in tenant attribution. Empty token flags fall back to environment
+or stored credentials; tokenless configurations cannot own a migration. Queue
+inspection before consent does not adopt legacy records. Existing symlink root keys are
 updated in place; duplicate keys for one canonical path require consolidation.
-For route-only roots, doctor warns which host receives the root credential for
-budget decisions; it does not infer a policy host from telemetry URLs.
+Doctor names the decision host and warns if it differs from the root’s own base
+host, or explicit telemetry hosts when no base is given. Token-only roots compare
+against the machine base. A different path on the same host does not warn. This
+check reports the configured route; it does not change enforcement routing.
 A refused root base has no usable enforcement route: budget checks allow turns,
 and doctor reports this as an explicit budget-enforcement failure. Repair the
 root endpoint to restore checks; the root bearer is never sent to machine policy

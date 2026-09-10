@@ -217,6 +217,21 @@ describe('delivery preserves records across partial responses and failures', () 
       vi.unstubAllGlobals();
     }
   });
+  it.each([
+    { remaining: 9, deferred: true },
+    { remaining: 10, deferred: false },
+    { remaining: 11, deferred: false },
+    { remaining: 400, deferred: false }
+  ])('uses the documented minimum send budget with $remaining ms left', async ({ remaining, deferred }) => {
+    const fetchFn = vi.fn(async () => Response.json({ accepted: 1 }));
+    const transport = new HttpTransport({ eventsUrl: DESTINATION, timeoutMs: 1500, deadline: 1000, nowMs: () => 1000 - remaining, fetchFn });
+    const result = await transport.send([event('boundary')]);
+
+    expect(result.ok).toBe(!deferred);
+    expect(Boolean(result.deferred)).toBe(deferred);
+    expect(fetchFn).toHaveBeenCalledTimes(deferred ? 0 : 1);
+  });
+
   it('starts a hook budget on first send and shares it with later requests', async () => {
     let nowMs = 0;
     const fetchFn = vi.fn(async () => Response.json({ accepted: 1 }));

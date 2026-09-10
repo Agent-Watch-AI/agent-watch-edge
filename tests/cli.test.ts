@@ -342,7 +342,7 @@ describe('CLI commands', () => {
         ask: async (question) => {
           questions.push(question);
 
-          return question.includes('Deliver them to the new backend') ? 'y' : '';
+          return question.includes('Deliver them to https://new.example.com/v1/events') ? 'y' : '';
         },
         hookCommandFor: (id) => `agentwatch hook --agent ${id}`
       });
@@ -803,6 +803,8 @@ describe('setup --root: a second tenant on one machine', () => {
     ).toBe(0);
 
     expect(questions.some((question) => question.includes('previous token'))).toBe(true);
+    expect(questions).toEqual([expect.stringContaining('Deliver them to https://backend.example.com/v1/events with the new token')]);
+    expect(questions[0]).toContain('tenant attribution may change');
     expect(await queueEntryFiles(queuePartition(paths.queueDir, 'tok-machine'))).toEqual([]);
     expect(await queueEntryFiles(queuePartition(paths.queueDir, 'tok-rotated'))).toHaveLength(1);
     expect(await queueOwnership(paths.queueDir)).toEqual({ [path.basename(queuePartition(paths.queueDir, 'tok-rotated'))]: 1 });
@@ -829,6 +831,8 @@ describe('setup --root: a second tenant on one machine', () => {
 
     expect(result).toBe(0);
     expect(questions).toEqual([expect.stringContaining(`captured under ${repo}`)]);
+    expect(questions[0]).toContain('Deliver them to https://new.example.com/v1/events');
+    expect(questions[0]).not.toContain('root-new');
     expect(await queueOwnership(paths.queueDir)).toEqual({ [path.basename(queuePartition(paths.queueDir, 'root-new'))]: 1 });
     expect(await queueEntryFiles(queuePartition(paths.queueDir, 'root-old'))).toHaveLength(0);
     expect(await queueEntryFiles(queuePartition(paths.queueDir, 'root-new'))).toHaveLength(1);
@@ -896,6 +900,93 @@ describe('setup --root: a second tenant on one machine', () => {
     expect(await fs.readFile(path.join(sourceDir, 'unrelated-record.json'), 'utf8')).toBe(before);
 
     if (targetToken !== actualSource) expect(await queueEntryFiles(queuePartition(paths.queueDir, targetToken))).toHaveLength(0);
+  });
+
+  it('treats an empty token flag as unset and never migrates a credentialed backlog to the adoption pool', async () => {
+    await machineSetup();
+
+    const paths = resolvePaths(world.env);
+    const sourceDir = queuePartition(paths.queueDir, 'tok-machine');
+    const queue = new EventQueue({ queueDir: sourceDir, locksDir: paths.locksDir, maxEvents: 100, maxAttempts: 3, maxEventAgeDays: 7 });
+
+    await queue.enqueue([{ id: 'owned', event: { type: 'turn.summary' } } as unknown as Parameters<EventQueue['enqueue']>[0][number]], 'https://backend.example.com/v1/events');
+
+    const questions: string[] = [];
+    const { result } = await captureStdout(() => rootSetup({ endpoint: 'https://new.example.com', token: '', yes: false, ask: async (question) => {
+      questions.push(question);
+
+      return 'y';
+    } }));
+
+    expect(result).toBe(0);
+    expect((await readJson(paths.configFile)).token).toBe('tok-machine');
+    expect(await queueOwnership(paths.queueDir)).toEqual({ [path.basename(sourceDir)]: 1 });
+    expect((await readJson(path.join(sourceDir, 'owned.json'))).destination).toBe('https://new.example.com/v1/events');
+    expect(questions).toEqual([expect.stringContaining('Deliver them to https://new.example.com/v1/events')]);
+  });
+
+  it('does not claim a tokenless previous identity owns a backlog to migrate', async () => {
+    const paths = resolvePaths(world.env);
+
+    await writeJson(paths.configFile, { ...defaultConfig(), endpoint: 'https://old.example.com', developerEmail: 'dev@company.com' });
+
+    const queue = new EventQueue({ queueDir: path.join(paths.queueDir, 'unconfigured'), locksDir: paths.locksDir, maxEvents: 100, maxAttempts: 3, maxEventAgeDays: 7 });
+
+    await queue.enqueue([{ id: 'unconfigured-event', event: { type: 'turn.summary' } } as unknown as Parameters<EventQueue['enqueue']>[0][number]], 'https://old.example.com/v1/events');
+
+    const questions: string[] = [];
+    const { result } = await captureStdout(() => rootSetup({ endpoint: 'https://new.example.com', token: 'new-owner', yes: false, ask: async (question) => {
+      questions.push(question);
+
+      return 'y';
+    } }));
+
+    expect(result).toBe(0);
+    expect(questions).toEqual([]);
+    expect(await queueOwnership(paths.queueDir)).toEqual({ unconfigured: 1 });
+  });
+
+  it.each([false, true])('inspects an empty shared partition without adopting unrelated legacy records: %s', async (legacy) => {
+    await machineSetup();
+
+    const paths = resolvePaths(world.env);
+    const repo = await rootDir('shared-empty');
+
+    await writeJson(paths.configFile, { ...(await readJson(paths.configFile)), roots: { [repo]: { token: 'tok-machine' } } });
+
+    if (legacy) {
+      const unconfigured = new EventQueue({ queueDir: path.join(paths.queueDir, 'unconfigured'), locksDir: paths.locksDir, maxEvents: 100, maxAttempts: 3, maxEventAgeDays: 7 });
+
+      await unconfigured.enqueue([{ id: 'legacy-unowned', event: { type: 'turn.summary' } } as unknown as Parameters<EventQueue['enqueue']>[0][number]], 'https://backend.example.com/v1/events');
+    }
+
+    const { result, stdout } = await captureStdout(() => rootSetup({ endpoint: 'https://new.example.com', token: 'tok-machine' }));
+
+    expect(result).toBe(0);
+    expect(stdout).not.toContain('automatic migration skipped');
+    expect(stdout).not.toContain('expires under retention');
+    expect(await queueOwnership(paths.queueDir)).toEqual(legacy ? { unconfigured: 1 } : {});
+  });
+
+  it.each([
+    { kind: 'token-only', policy: 'https://policy.example.com/decision', route: undefined, level: 'warn' },
+    { kind: 'same-host-route', policy: undefined, route: 'https://backend.example.com/v2/events', level: 'ok' },
+    { kind: 'foreign-route', policy: undefined, route: 'https://vendor.example.com/events', level: 'warn' },
+    { kind: 'shared-token-only', policy: undefined, route: undefined, level: 'ok' }
+  ])('checks actual policy hosts for $kind roots', async ({ policy, route, level }) => {
+    await machineSetup();
+
+    const paths = resolvePaths(world.env);
+    const repo = await rootDir('policy-hosts');
+
+    await writeJson(paths.configFile, { ...(await readJson(paths.configFile)), enforcementUrl: policy, roots: { [repo]: { token: 'root-secret', eventsUrl: route } } });
+
+    const report = JSON.parse((await captureStdout(() => runDoctor({ ...world.env, cwd: repo }, { json: true }))).stdout);
+    const check = report.checks.find((entry: { name: string }) => entry.name === 'budget enforcement');
+
+    expect(check.level).toBe(level);
+    expect(check.detail).toContain(policy ? 'policy.example.com' : 'backend.example.com');
+    expect(JSON.stringify(report)).not.toContain('root-secret');
   });
 
   it('updates an existing symlink root in place so runtime selects the new identity', async () => {

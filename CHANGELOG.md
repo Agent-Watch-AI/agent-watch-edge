@@ -60,14 +60,23 @@ items before upgrading a fleet.
   existing backlog under a partition nothing would drain again, and one bad URL
   in one `roots[]` entry would have stopped delivery for every other project on
   the machine. A refused field reads as "configured but unusable" and never as
-  absent — through `endpoint`, `eventsUrl` and `otlpUrl` alike — so a `roots[]`
-  entry cannot inherit the machine-global backend and send one tenant's prompts
-  to another's collector under the first tenant's bearer, and `otel-headers`
-  hands no bearer to an exporter pointed at a backend the root did not choose.
+  absent — through `endpoint`, `eventsUrl` and `otlpUrl` alike. A `roots[]`
+  entry that names any backend URL now takes its routes from its own fields or
+  from none: the machine's `eventsUrl` and `otlpUrl` are explicit strings that
+  used to win before a root's own `endpoint` was ever consulted, so one tenant's
+  prompts reached the other's ingest under the first tenant's bearer whether or
+  not a refusal was involved, and `otel-headers` handed that bearer to the
+  machine-wide collector. An entry that names no URL — a second seat on the same
+  backend — still inherits the machine's destination. `enforcementUrl` is the one
+  accessor a refusal deliberately does *not* make unusable: no decision URL means
+  `ALLOW`, so a typo there would switch every `block` cap off silently, and the
+  derived route is a path on an already-validated `https:` endpoint.
   `setup` names a refused URL and leaves the line the developer wrote exactly
   where it is: the value is carried over the write from the file rather than
-  replaced by the parse, so no run erases it and no run is blocked by another
-  tenant's typo. `setup` still refuses a non-deliverable `--endpoint` outright.
+  replaced by the parse, re-enrolling a root merges into that root's entry
+  instead of replacing it, so no run erases a field it does not set and no run
+  is blocked by another tenant's typo. `setup` still refuses a non-deliverable
+  `--endpoint` outright.
   Response bodies the hook decodes are capped, and neither the batch send nor
   the enforcement check follows a redirect — both carry a bearer.
 - **`status` and `doctor` act as the identity of the directory they run in.**

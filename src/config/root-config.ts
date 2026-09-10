@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { compact } from '../core/object.js';
+import { ROOT_URL_FIELDS } from './constants/config.constants.js';
 import type { AgentWatchConfig, RootedConfig, RootOverride } from './types/config.types.js';
 
 /**
@@ -82,7 +83,35 @@ export function applyRootOverride(config: AgentWatchConfig, cwd: string): Rooted
 
   // Undefined-valued keys in the override would erase the global value, so
   // only the keys actually present are laid over it.
-  return { config: { ...withoutRoots, ...compact(selected.override) }, root: selected };
+  return { config: { ...withoutDestination(withoutRoots, selected.override), ...compact(selected.override) }, root: selected };
+}
+
+/**
+ * The global config with its destination cleared, when the root names one.
+ *
+ * The three URL fields move as a set. Per field they do not: `eventsUrl()` and
+ * `otlpBaseUrl()` prefer their own field and fall back to `endpoint`, so a root
+ * that names `endpoint` alone still had the machine's *explicit* `eventsUrl`
+ * and `otlpUrl` laid under it — those are strings, they win before the fallback
+ * is reached, and the root sent to them under its own bearer. A refusal does
+ * not help, because the value that has to stop being read is on the global side
+ * of the merge. `otel-headers` compares the two OTLP bases to decide whether the
+ * agent's exporter may carry the root's bearer, and they compared equal for the
+ * same reason, so the credential crossed the tenant boundary too.
+ *
+ * A `roots[]` entry that names any URL field is claiming a backend of its own,
+ * so the root's routes come from the root's own fields or from nothing. An entry
+ * that names none — a second seat on the same backend, a developer email — still
+ * inherits the machine's destination, which is what those entries are for.
+ *
+ * @param config - The machine's global config, roots already stripped.
+ * @param override - The winning root's overrides.
+ * @returns The config to lay the override over.
+ */
+function withoutDestination<T extends AgentWatchConfig>(config: Omit<T, 'roots'>, override: RootOverride): Omit<T, 'roots'> {
+  if (!ROOT_URL_FIELDS.some((field) => field in override)) return config;
+
+  return { ...config, endpoint: undefined, eventsUrl: undefined, otlpUrl: undefined };
 }
 
 /**

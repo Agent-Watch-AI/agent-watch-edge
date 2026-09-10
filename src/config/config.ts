@@ -88,8 +88,9 @@ export function parseOtelSignals(value: string): OtelConfig | undefined {
  * would have had every prompt, response and branch name under that directory
  * POSTed to their corporate backend under clientA's bearer.
  *
- * So a refusal is sticky where an absence is derivable. `otlpBaseUrl` and
- * `enforcementUrl` hold the same rule for the same reason.
+ * So a refusal is sticky where an absence is derivable. `otlpBaseUrl` holds the
+ * same rule for the same reason; `enforcementUrl` deliberately does not, and
+ * says why.
  *
  * @param config - Effective configuration.
  * @returns The events URL, or undefined when no backend is configured or the
@@ -136,15 +137,22 @@ export function otlpBaseUrl(config: AgentWatchConfig): string | undefined {
  * endpoint; the override exists for the same reason the other two do — a
  * deployment that does not put every route behind one host.
  *
+ * The one accessor that does *not* hold `eventsUrl`'s rule, and deliberately.
+ * There, refusing to derive is fail-safe: nothing leaves. Here it is fail-open
+ * — `resolveEnforcement` answers `ALLOW` when there is no URL to ask, and
+ * `enforcementWouldAsk` stops the caller even paying for the identity lookup —
+ * so one `http:` line in a field nobody uses would switch every `block` cap on
+ * the machine off silently. The security argument does not carry either: the
+ * derived URL is a path on an `endpoint` already validated as `https:`, so
+ * deriving sends the bearer nowhere it was not already going. `doctor` reports
+ * the refused field as `configuration: fail` regardless. This is also not a
+ * `roots[]` field, so the cross-tenant inheritance the rule exists to stop
+ * cannot happen through it.
+ *
  * @param config - Effective configuration.
- * @returns The decision URL, or undefined when no backend is configured or the
- *   one configured here was refused.
+ * @returns The decision URL, or undefined when no backend is configured.
  */
 export function enforcementUrl(config: AgentWatchConfig): string | undefined {
-  // Refused, not absent — see `eventsUrl`. Not a `roots[]` field today, held to
-  // the same rule so a fourth URL field cannot be added without it.
-  if (config.enforcementUrl === null) return undefined;
-
   if (config.enforcementUrl) return config.enforcementUrl;
 
   if (!config.endpoint) return undefined;

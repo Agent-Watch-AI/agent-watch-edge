@@ -9,7 +9,7 @@ import { runHook } from '../src/cli/hook.js';
 import { runOtelHeaders } from '../src/cli/misc.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { EventQueue } from '../src/transport/queue.js';
-import { saveConfig } from '../src/config/config-store.js';
+import { loadConfig, saveConfig } from '../src/config/config-store.js';
 import { defaultConfig } from '../src/config/config.js';
 import { queuePartition } from '../src/transport/queue-partition.js';
 import { CONTENT_CAPTURE_ON, captureStdout, makeTempEnv, queueEntryFiles, readJson, readQueueEntries, writeJson, type TempWorld } from './helpers.js';
@@ -808,6 +808,42 @@ describe('setup --root: a second tenant on one machine', () => {
     // foreign tenant's credential.
     expect(await headersIn(foreign)).toEqual({});
     expect(await headersIn(world.env.cwd)).toEqual({ Authorization: 'Bearer tok-machine' });
+  });
+
+  // Re-enrolling a root replaced its whole override, so every key the run does
+  // not set went with it: the root's own `installationId`, and a refused sibling
+  // URL — which ends up *absent* rather than `null` and is therefore invisible
+  // to the carry-over in `saveConfig`, so the line the developer wrote is gone
+  // and `doctor` reports `configuration: ok` for a machine that just lost it.
+  it('re-enrolling a root keeps the keys the run does not set', async () => {
+    await machineSetup();
+
+    const repo = await rootDir('clientA');
+    const paths = resolvePaths(world.env);
+    const stored = await readJson(paths.configFile);
+
+    await writeJson(paths.configFile, {
+      ...stored,
+      roots: {
+        [repo]: {
+          endpoint: 'https://clienta.example.com',
+          eventsUrl: 'http://collector.clienta.internal/v1/events',
+          token: 'tok-client-a',
+          installationId: 'inst-root'
+        }
+      }
+    });
+
+    const { result } = await captureStdout(() => rootSetup({ root: repo, token: 'tok-client-a' }));
+
+    expect(result).toBe(0);
+
+    const onDisk = await readJson(paths.configFile);
+
+    expect(onDisk.roots[repo].eventsUrl).toBe('http://collector.clienta.internal/v1/events');
+    expect(onDisk.roots[repo].installationId).toBe('inst-root');
+    // And the field is still reported, which is what the erasure took with it.
+    expect((await loadConfig(paths)).warnings).toEqual([expect.stringContaining(`roots.${repo}.eventsUrl`)]);
   });
 
   // A root whose own OTLP URL was refused is a foreign tenant too. Read by

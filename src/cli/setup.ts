@@ -134,7 +134,14 @@ export async function runSetup(options: SetupOptions): Promise<number> {
   }
 
   const identity: RootOverride = { endpoint: enrolled.endpoint, token: enrolled.token, developerEmail };
-  const withIdentity = rootPath === undefined ? { ...baseConfig, ...identity } : { ...baseConfig, roots: { ...baseConfig.roots, [rootPath]: identity } };
+  // Merged into the entry, not written over it. Replacing it dropped every key
+  // this run does not set — the root's `installationId`, so the next delivery
+  // presents a different install to the backend, and a refused sibling URL,
+  // which ends up *absent* rather than `null` and so is invisible to the
+  // carry-over in `saveConfig`. That is the erasure this release removed,
+  // surviving in the one root an operator repairing a URL is likeliest to name.
+  const rootIdentity: RootOverride = rootPath === undefined ? identity : { ...baseConfig.roots?.[rootPath], ...identity };
+  const withIdentity = rootPath === undefined ? { ...baseConfig, ...identity } : { ...baseConfig, roots: { ...baseConfig.roots, [rootPath]: rootIdentity } };
   const config = ensureInstallationId({ ...withIdentity, otel, emit: { ...baseConfig.emit, llmCalls: true } });
 
   await reportContentDowngrade(context, config);

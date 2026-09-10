@@ -2,8 +2,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { applyRootOverride, selectRoot, servesMultipleIdentities } from '../src/config/root-config.js';
+import { configSchema } from '../src/config/schemas/config.schema.js';
 import { loadEffectiveConfig } from '../src/config/repo-config.js';
-import { defaultConfig } from '../src/config/config.js';
+import { defaultConfig, enforcementUrl, eventsUrl, otlpBaseUrl } from '../src/config/config.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { makeTempEnv, writeJson, type TempWorld } from './helpers.js';
 
@@ -142,5 +143,72 @@ describe('effective config for two tenants on one machine', () => {
     // Both tenants share one backend; only the bearer differs.
     expect(fromTrip.config.endpoint).toBe('https://backend.example.com');
     expect(fromWatch.config.endpoint).toBe('https://backend.example.com');
+  });
+});
+
+// The three URL fields have to move as a set. `eventsUrl()` and `otlpBaseUrl()`
+// prefer their own field and only fall back to `endpoint`, so a machine that
+// splits its routes across hosts — the deployment the overrides exist for — laid
+// two explicit strings under every root, and they won before the root's own
+// endpoint was ever consulted. Every prompt, response and branch name under that
+// root went to the machine's ingest under the root's own bearer, and the
+// `otel-headers` guard (which withholds the bearer when the two OTLP bases
+// differ) compared equal, so the credential crossed too.
+describe('a root that names a backend does not inherit the machine\'s routes', () => {
+  const REPO = '/Users/dev/clientA';
+
+  function rooted(override: Record<string, unknown>) {
+    const config = configSchema.parse({
+      endpoint: 'https://mycorp.example.com',
+      eventsUrl: 'https://ingest.mycorp.example.com/v1/events',
+      otlpUrl: 'https://otlp.mycorp.example.com',
+      token: 'tok-machine',
+      roots: { [REPO]: override }
+    });
+
+    return { global: config, config: applyRootOverride(config, REPO).config };
+  }
+
+  it('sends nowhere when the root\'s own endpoint was refused', () => {
+    const { global, config } = rooted({ endpoint: 'http://collector.clienta.internal', token: 'tok-client-a' });
+
+    expect(config.token).toBe('tok-client-a');
+    expect(eventsUrl(config)).toBeUndefined();
+    expect(otlpBaseUrl(config)).toBeUndefined();
+    expect(otlpBaseUrl(config)).not.toBe(otlpBaseUrl(global));
+  });
+
+  // The same leak with no refusal involved: a root with a perfectly good
+  // endpoint of its own still shipped to the machine's explicit routes.
+  it('derives from the root\'s own endpoint, not the machine\'s routes', () => {
+    const { global, config } = rooted({ endpoint: 'https://clienta.example.com', token: 'tok-client-a' });
+
+    expect(eventsUrl(config)).toBe('https://clienta.example.com/v1/events');
+    expect(otlpBaseUrl(config)).not.toBe(otlpBaseUrl(global));
+  });
+
+  // A root that names no URL is a second seat on the same backend, which is
+  // what most `roots[]` entries are. It must still inherit the destination.
+  it('leaves the machine\'s routes alone for a root that names no backend', () => {
+    const { global, config } = rooted({ token: 'tok-second-seat' });
+
+    expect(eventsUrl(config)).toBe(eventsUrl(global));
+    expect(otlpBaseUrl(config)).toBe(otlpBaseUrl(global));
+  });
+});
+
+// `enforcementUrl` is the one accessor a refusal must not make sticky: no URL
+// to ask means `resolveEnforcement` answers ALLOW, so one `http:` line in a
+// field nobody uses would switch every `block` cap on the machine off silently.
+describe('a refused enforcement URL does not switch enforcement off', () => {
+  it('derives the decision route from the validated endpoint', () => {
+    const config = configSchema.parse({
+      endpoint: 'https://backend.example.com',
+      enforcementUrl: 'http://enforcement.corp/v1/decision',
+      token: 'tok'
+    });
+
+    expect(config.enforcementUrl).toBeNull();
+    expect(enforcementUrl(config)).toContain('https://backend.example.com');
   });
 });

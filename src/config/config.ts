@@ -131,6 +131,19 @@ export function otlpBaseUrl(config: AgentWatchConfig): string | undefined {
 }
 
 /**
+ * Use the same collector check for exporter credentials and setup diagnostics.
+ * Missing collectors cannot establish permission to expose a root's bearer.
+ * @param machine - Configuration used by the machine-wide exporter.
+ * @param identity - Effective configuration for the selected directory.
+ * @returns Whether the exporter can use this identity's credential.
+ */
+export function sharesOtlpCollector(machine: AgentWatchConfig, identity: AgentWatchConfig): boolean {
+  const base = otlpBaseUrl(identity);
+
+  return base !== undefined && base === otlpBaseUrl(machine);
+}
+
+/**
  * Where the pre-turn budget check asks its question.
  *
  * Derived from the same base as everything else, so a tenant configures one

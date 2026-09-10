@@ -2,6 +2,12 @@
 
 ## 0.3.0
 
+- **Backlog migration requires an existing exclusive identity.** A new root
+  inherits no machine/parent backlog; a shared token's queue stays in place.
+  Collector warnings use the same effective-route check as the credential
+  helper. Doctor explicitly fails when a configured identity has no budget
+  decision route, including a refused root endpoint.
+
 - **Delivery follows one ordered flow:** choose whether to send, attempt,
   preserve unsent records, update diagnostics, then drain or sweep the queue.
   A thrown transport error or 2xx response with failed events keeps the records

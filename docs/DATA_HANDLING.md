@@ -258,7 +258,9 @@ it redacts known credential patterns/sensitive keys and bounds string/depth size
 Pattern matching cannot guarantee discovery of every possible secret.
 
 Enforcement is fail-open on unexpected errors, timeouts, invalid responses and
-unreachable services. A supported hook blocks only on an explicit backend block
+unreachable services. A refused root base has no usable decision route; doctor
+reports that budget caps are not enforced, with a failure and a repair instruction.
+It does not send that root's bearer to machine enforcement as a fallback. A supported hook blocks only on an explicit backend block
 decision. Defaults are a 300 ms request timeout and 60-second local decision
 cache. Antigravity has no verified blocking response. This is not a local signed
 enforcement policy or tamper-resistant control.

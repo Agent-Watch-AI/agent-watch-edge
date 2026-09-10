@@ -1,5 +1,5 @@
 import process from 'node:process';
-import { eventsUrl, otlpBaseUrl } from '../config/config.js';
+import { eventsUrl, otlpBaseUrl, sharesOtlpCollector } from '../config/config.js';
 import { loadEffectiveConfig } from '../config/repo-config.js';
 import { applyRootOverride } from '../config/root-config.js';
 import type { Env } from '../core/types/core.types.js';
@@ -84,12 +84,7 @@ export async function runOtelHeaders(env: Env): Promise<number> {
   // collector, so a root enrolled against a different backend gets no bearer
   // at all rather than presenting its credential to the other tenant's collector.
   const rooted = applyRootOverride(context.config, env.cwd).config;
-  // `Boolean(base)`: two undefined bases compare equal, so the guard used to
-  // open precisely when neither side has a collector to export to — a refused
-  // machine endpoint and a root with one of its own printed the root's bearer
-  // for nobody.
-  const base = otlpBaseUrl(rooted);
-  const token = Boolean(base) && base === otlpBaseUrl(context.config) ? rooted.token : undefined;
+  const token = sharesOtlpCollector(context.config, rooted) ? rooted.token : undefined;
   const headers = !context.disabled && token ? { Authorization: `Bearer ${token}` } : {};
 
   process.stdout.write(JSON.stringify(headers));

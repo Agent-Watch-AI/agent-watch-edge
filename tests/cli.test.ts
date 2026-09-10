@@ -819,6 +819,67 @@ describe('setup --root: a second tenant on one machine', () => {
     expect(await queueEntryFiles(queuePartition(paths.queueDir, 'tok-machine'))).toHaveLength(0);
   });
 
+  it.each([
+    { kind: 'new', backend: 'https://backend.example.com' },
+    { kind: 'new', backend: 'https://other.example.com' },
+    { kind: 'nested', backend: 'https://other.example.com' },
+    { kind: 'inherited-token', backend: 'https://other.example.com' },
+    { kind: 'machine-token', backend: 'https://other.example.com' },
+    { kind: 'sibling-token', backend: 'https://other.example.com' },
+    { kind: 'machine-with-shared-root', backend: 'https://other.example.com' }
+  ])('never offers a non-exclusive backlog during $kind enrollment to $backend', async ({ kind, backend }) => {
+    await machineSetup();
+
+    const paths = resolvePaths(world.env);
+    const parent = await rootDir('parent');
+    const repo = await rootDir(kind === 'nested' ? 'parent/child' : 'new-root');
+    const sibling = await rootDir('sibling');
+    const stored = await readJson(paths.configFile);
+    const sourceToken = kind === 'nested' || kind === 'sibling-token' ? 'tok-shared' : 'tok-machine';
+    const roots = {
+      ...(kind === 'nested' ? { [parent]: { token: sourceToken } } : {}),
+      ...(kind === 'inherited-token' ? { [repo]: { developerEmail: 'root@example.com' } } : {}),
+      ...(kind === 'machine-token' || kind === 'sibling-token' ? { [repo]: { token: sourceToken } } : {}),
+      ...(kind === 'sibling-token' || kind === 'machine-with-shared-root' ? { [sibling]: { token: sourceToken } } : {})
+    };
+
+    await writeJson(paths.configFile, { ...stored, roots });
+
+    const sourceDir = queuePartition(paths.queueDir, sourceToken);
+    const source = new EventQueue({ queueDir: sourceDir, locksDir: paths.locksDir, maxEvents: 100, maxAttempts: 3, maxEventAgeDays: 7 });
+
+    await source.enqueue([{ id: 'unrelated-record', event: { type: 'turn.summary' } } as unknown as Parameters<EventQueue['enqueue']>[0][number]], 'https://backend.example.com/v1/events');
+
+    const before = await fs.readFile(path.join(sourceDir, 'unrelated-record.json'), 'utf8');
+    const questions: string[] = [];
+    const { result } = await captureStdout(() => rootSetup({ root: kind === 'machine-with-shared-root' ? undefined : repo, endpoint: backend, token: 'tok-new', yes: false, ask: async (question) => {
+      questions.push(question);
+
+      return 'y';
+    } }));
+
+    expect(result).toBe(0);
+    expect(questions).toEqual([]);
+    expect(await fs.readFile(path.join(sourceDir, 'unrelated-record.json'), 'utf8')).toBe(before);
+    expect(await queueEntryFiles(queuePartition(paths.queueDir, 'tok-new'))).toHaveLength(0);
+  });
+
+  it('reports collector sharing consistently with otel-headers for a trailing-slash machine base', async () => {
+    await machineSetup();
+
+    const paths = resolvePaths(world.env);
+    const repo = await rootDir('shared-slash');
+    const stored = await readJson(paths.configFile);
+
+    await writeJson(paths.configFile, { ...stored, endpoint: 'https://backend.example.com/' });
+
+    const { result, stdout } = await captureStdout(() => rootSetup({ root: repo, endpoint: undefined, token: 'tok-seat' }));
+
+    expect(result).toBe(0);
+    expect(stdout).not.toContain('native OTLP');
+    expect(JSON.parse((await captureStdout(() => runOtelHeaders({ ...world.env, cwd: repo }))).stdout)).toEqual({ Authorization: 'Bearer tok-seat' });
+  });
+
   it('otel-headers signs with the root token on the shared collector, and with nothing for a foreign one', async () => {
     await machineSetup();
 
@@ -1141,6 +1202,13 @@ describe('setup --root: a second tenant on one machine', () => {
 
     expect(check.detail).toContain('fix the refused endpoint');
     expect(check.detail).not.toContain('remove its other URL');
+    expect(report.checks.find((entry: { name: string }) => entry.name === 'budget enforcement')).toMatchObject({ level: 'fail', detail: expect.stringContaining('budget caps are not enforced') });
+
+    const refusedConfig = (await captureStdout(() => runConfig({ ...world.env, cwd: repo }))).stdout;
+
+    expect(refusedConfig).toContain(`# warning: roots.${repo}.endpoint`);
+    expect(refusedConfig).toContain('# warning: this project root has no usable OTLP route');
+    expect(refusedConfig).not.toContain('root-secret');
 
     await writeJson(paths.configFile, { ...stored, roots: { [repo]: { otlpUrl: 'https://root.example.com/otel', token: 'root-secret' } } });
 

@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import readline from 'node:readline/promises';
-import { defaultConfig, enabledSignalNames, eventsUrl, parseOtelSignals } from '../config/config.js';
+import { defaultConfig, enabledSignalNames, eventsUrl, parseOtelSignals, sharesOtlpCollector } from '../config/config.js';
 import { ensureInstallationId, saveConfig } from '../config/config-store.js';
 import { CONTENT_CAPTURE_KEYS } from '../config/constants/config.constants.js';
 import type { Destination } from '../config/types/destination.types.js';
@@ -154,19 +154,22 @@ export async function runSetup(options: SetupOptions): Promise<number> {
 
   await reportContentDowngrade(context, config);
   await saveConfig(context.paths, config);
-  await offerBacklogRetarget(
-    context,
-    rootPath === undefined ? baseConfig : applyRootOverride(baseConfig, rootPath).config,
-    rootPath === undefined ? config : applyRootOverride(config, rootPath).config,
-    ask
-  );
+  const previousIdentity = previousQueueIdentity(baseConfig, rootPath);
+
+  if (previousIdentity) {
+    await offerBacklogRetarget(context, previousIdentity, rootPath === undefined ? config : applyRootOverride(config, rootPath).config, ask);
+  }
+
+  if (!previousIdentity && stored?.token && stored.token !== identity.token) {
+    println(`${symbols.warn} offline backlog is shared with another identity and stays in its original queue; automatic migration skipped`);
+  }
 
   if (rootPath !== undefined) println(`${symbols.ok} project root: ${rootPath}`);
 
   println(`${symbols.ok} backend: ${identity.endpoint}`);
 
-  if (rootPath !== undefined && identity.endpoint !== baseConfig.endpoint) {
-    println(`${symbols.warn} native OTLP export stays machine-wide at ${baseConfig.endpoint} and sends no bearer under this root; only hook-path events reach ${identity.endpoint}`);
+  if (rootPath !== undefined && !sharesOtlpCollector(config, applyRootOverride(config, rootPath).config)) {
+    println(`${symbols.warn} native OTLP cannot use this root's bearer with the machine-wide collector; only hook-path events use the root identity`);
   }
 
   println(`${symbols.ok} developer: ${developerEmail}`);
@@ -180,6 +183,27 @@ export async function runSetup(options: SetupOptions): Promise<number> {
   println(dim('  run `agentwatch status` anytime, `agentwatch doctor` to diagnose'));
 
   return failures === 0 ? 0 : 1;
+}
+
+// A partition is keyed by token, not by checkout. Only an existing, exclusive
+// identity owns a backlog we can offer to migrate. A new/nested root never
+// adopts its parent's queue, and changing a shared token cannot move siblings.
+function previousQueueIdentity(config: AgentWatchConfig, rootPath: string | undefined): AgentWatchConfig | undefined {
+  const roots = config.roots ?? {};
+
+  if (rootPath === undefined) {
+    if (Object.values(roots).some((root) => root.token !== undefined && root.token === config.token)) return undefined;
+
+    return config;
+  }
+
+  const stored = roots[rootPath];
+
+  if (!stored?.token || stored.token === config.token) return undefined;
+
+  if (Object.entries(roots).some(([key, root]) => key !== rootPath && root.token === stored.token)) return undefined;
+
+  return applyRootOverride(config, rootPath).config;
 }
 
 /**

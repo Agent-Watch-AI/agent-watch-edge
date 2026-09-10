@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { enabledSignalNames, eventsUrl, otlpBaseUrl } from '../config/config.js';
+import { enabledSignalNames, enforcementUrl, eventsUrl, otlpBaseUrl } from '../config/config.js';
 import { loadEffectiveConfig } from '../config/repo-config.js';
 import { CONTENT_CAPTURE_KEYS } from '../config/constants/config.constants.js';
 import type { AgentWatchConfig, CaptureConfig, OtelConfig, OtelSignalName } from '../config/types/config.types.js';
@@ -57,6 +57,7 @@ export async function runDoctor(env: Env, options: DoctorOptions = {}): Promise<
     nodeVersionCheck(),
     configurationCheck(context),
     ...endpointChecks(context),
+    enforcementCheck(context),
     await developerIdentityCheck(env, context, options),
     ...(await connectivityChecks(context)),
     await gitCheck(),
@@ -195,6 +196,24 @@ function endpointChecks(context: CliContext): Check[] {
     { name: 'backend endpoint', level: config.endpoint ? 'ok' : 'warn', detail: endpointDetail(config.endpoint, via) },
     { name: 'auth token', level: 'ok', detail: config.token ? `present (hidden)${via}` : 'none configured' }
   ];
+}
+
+// A refused root must never expose its bearer to machine enforcement, but the
+// resulting lack of budget checks must be an explicit failure in diagnostics.
+function enforcementCheck(context: CliContext): Check {
+  const name = 'budget enforcement';
+  const config = context.identityConfig;
+  const via = context.identityRoot === undefined ? '' : ` under root ${context.identityRoot}`;
+
+  if (context.disabled || !config.enforcement.enabled) return { name, level: 'warn', detail: 'disabled; budget caps are not enforced' };
+
+  if (!config.token) return { name, level: 'warn', detail: 'no credential configured; budget caps are not enforced' };
+
+  const url = enforcementUrl(config);
+
+  if (!url) return { name, level: 'fail', detail: `budget caps are not enforced${via}: no usable decision URL; fix the endpoint reported by the configuration check` };
+
+  return { name, level: 'ok', detail: `decision route configured${via}; request failures allow turns` };
 }
 
 /**

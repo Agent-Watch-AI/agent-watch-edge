@@ -130,7 +130,13 @@ enforcement routes. A root naming only one telemetry route cannot inherit the
 other telemetry route; it still uses machine enforcement. Configure `endpoint`
 on that root if its budget checks belong to a separate backend. `agentwatch config`
 and `doctor` explain unavailable routes. Backlog moves remain opt-in and target
-the identity being enrolled, regardless of the directory setup is run from.
+an existing identity with an exclusive token, regardless of the directory setup
+is run from. New roots inherit no backlog. If another configured identity shares
+the source token, setup keeps the queue in place instead of offering a migration.
+A refused root base has no usable enforcement route: budget checks allow turns,
+and doctor reports this as an explicit budget-enforcement failure. Repair the
+root endpoint to restore checks; the root bearer is never sent to machine policy
+as a fallback.
 
 ## Verification scope and performance
 

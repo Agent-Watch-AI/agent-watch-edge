@@ -190,6 +190,21 @@ describe('a root that names a backend does not inherit the machine\'s routes', (
     expect(otlpBaseUrl(config)).toBe(otlpBaseUrl(global));
   });
 
+  it.each(['https://mycorp.example.com', 'https://mycorp.example.com/'])('shares split routes for equivalent base %s', (endpoint) => {
+    const { global, config } = rooted({ endpoint, token: 'tok-seat2' });
+
+    expect(eventsUrl(config)).toBe(eventsUrl(global));
+    expect(otlpBaseUrl(config)).toBe(otlpBaseUrl(global));
+  });
+
+  it.each(['https://clienta.example.com', 'http://refused.internal'])('does not send a foreign root bearer to machine enforcement for %s', (endpoint) => {
+    const global = configSchema.parse({ endpoint: 'https://machine.example.com', enforcementUrl: 'https://policy.machine.example.com/decision', token: 'machine', roots: { [REPO]: { endpoint, token: 'foreign' } } });
+    const config = applyRootOverride(global, REPO).config;
+
+    expect(enforcementUrl(config)).not.toBe(enforcementUrl(global));
+    expect(enforcementUrl(config)).toBe(endpoint.startsWith('https:') ? 'https://clienta.example.com/v1/enforcement/decision' : undefined);
+  });
+
   // With `endpoint` left standing, clearing the routes to `undefined` was a
   // no-op: both accessors fall back to it, so whichever field the root did not
   // name came straight back from the machine's backend under the root's bearer.

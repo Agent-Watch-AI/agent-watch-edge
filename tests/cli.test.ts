@@ -6,12 +6,12 @@ import { runStatus } from '../src/cli/status.js';
 import { runDoctor } from '../src/cli/doctor.js';
 import { runUninstall } from '../src/cli/uninstall.js';
 import { runHook } from '../src/cli/hook.js';
-import { runOtelHeaders } from '../src/cli/misc.js';
+import { runConfig, runOtelHeaders } from '../src/cli/misc.js';
 import { loadEffectiveConfig } from '../src/config/repo-config.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { EventQueue } from '../src/transport/queue.js';
 import { loadConfig, saveConfig } from '../src/config/config-store.js';
-import { defaultConfig, eventsUrl } from '../src/config/config.js';
+import { defaultConfig, enforcementUrl, eventsUrl, otlpBaseUrl } from '../src/config/config.js';
 import { queuePartition } from '../src/transport/queue-partition.js';
 import { CONTENT_CAPTURE_ON, captureStdout, makeTempEnv, queueEntryFiles, readJson, readQueueEntries, writeJson, type TempWorld } from './helpers.js';
 import { claudePostToolUseEdit, claudeUserPromptSubmit } from './fixtures/claude.js';
@@ -793,6 +793,32 @@ describe('setup --root: a second tenant on one machine', () => {
     expect(await queueEntryFiles(queuePartition(paths.queueDir, 'tok-rotated'))).toHaveLength(1);
   });
 
+  it('retargets the selected root backlog even when setup runs outside that root', async () => {
+    await machineSetup();
+
+    const repo = await rootDir('queued-root');
+    const paths = resolvePaths(world.env);
+
+    await rootSetup({ root: repo, endpoint: 'https://old.example.com', token: 'root-old' });
+
+    const before = new EventQueue({ queueDir: queuePartition(paths.queueDir, 'root-old'), locksDir: paths.locksDir, maxEvents: 100, maxAttempts: 3, maxEventAgeDays: 7 });
+
+    await before.enqueue([{ id: 'root-event', event: { type: 'turn.summary' } } as unknown as Parameters<EventQueue['enqueue']>[0][number]], 'https://old.example.com/v1/events');
+
+    const questions: string[] = [];
+    const { result } = await captureStdout(() => rootSetup({ root: repo, endpoint: 'https://new.example.com', token: 'root-new', yes: false, ask: async (question) => {
+      questions.push(question);
+
+      return 'y';
+    } }));
+
+    expect(result).toBe(0);
+    expect(questions).toEqual([expect.stringContaining('previous backend (https://old.example.com/v1/events)')]);
+    expect(await queueEntryFiles(queuePartition(paths.queueDir, 'root-old'))).toHaveLength(0);
+    expect(await queueEntryFiles(queuePartition(paths.queueDir, 'root-new'))).toHaveLength(1);
+    expect(await queueEntryFiles(queuePartition(paths.queueDir, 'tok-machine'))).toHaveLength(0);
+  });
+
   it('otel-headers signs with the root token on the shared collector, and with nothing for a foreign one', async () => {
     await machineSetup();
 
@@ -1020,6 +1046,109 @@ describe('setup --root: a second tenant on one machine', () => {
 
     expect(onDisk.eventsUrl).toBeUndefined();
     expect(eventsUrl((await loadConfig(paths)).config)).toBe('https://clientb.example.com/v1/events');
+  });
+
+  it.each([
+    { scope: 'machine', slash: '' },
+    { scope: 'machine', slash: '/' },
+    { scope: 'root', slash: '' },
+    { scope: 'root', slash: '/' }
+  ])('keeps split routes on $scope token rotation with stored suffix "$slash"', async ({ scope, slash }) => {
+    await machineSetup();
+
+    const paths = resolvePaths(world.env);
+    const repo = await rootDir('rotation');
+    const stored = await readJson(paths.configFile);
+    const routes = { eventsUrl: 'https://ingest-eu.example.com/v1/events', otlpUrl: 'https://otlp-eu.example.com' };
+    const identity = { ...routes, endpoint: `https://clienta.example.com${slash}`, token: 'tok-old' };
+    const before = scope === 'machine'
+      ? { ...stored, ...identity, enforcementUrl: 'https://policy.clienta.example.com/decision' }
+      : { ...stored, roots: { [repo]: identity } };
+
+    await writeJson(paths.configFile, before);
+
+    const { result, stdout } = await captureStdout(() => rootSetup({ endpoint: undefined, root: scope === 'root' ? repo : undefined, token: 'tok-new' }));
+
+    expect(result).toBe(0);
+    expect(stdout).not.toContain('cleared');
+
+    const disk = await readJson(paths.configFile);
+    const updated = scope === 'machine' ? disk : disk.roots[repo];
+    const config = (await loadEffectiveConfig(paths, scope === 'root' ? repo : world.env.cwd)).config;
+
+    expect(updated).toMatchObject({ ...routes, endpoint: 'https://clienta.example.com', token: 'tok-new' });
+    expect(eventsUrl(config)).toBe(routes.eventsUrl);
+    expect(otlpBaseUrl(config)).toBe(routes.otlpUrl);
+
+    if (scope === 'machine') expect(enforcementUrl(config)).toBe('https://policy.clienta.example.com/decision');
+  });
+
+  it.each([
+    { scope: 'machine', endpoint: undefined },
+    { scope: 'machine', endpoint: 'http://refused.internal' },
+    { scope: 'root', endpoint: 'http://refused.internal' },
+    { scope: 'root', endpoint: 'https://previous.example.com' }
+  ])('reports every cleared route on $scope repair/reroute from $endpoint', async ({ scope, endpoint }) => {
+    await machineSetup();
+
+    const paths = resolvePaths(world.env);
+    const repo = await rootDir('repair');
+    const stored = await readJson(paths.configFile);
+    const identity = { endpoint, eventsUrl: 'https://old.example.com/events', otlpUrl: 'https://old.example.com/otel', token: 'tok-old' };
+
+    await writeJson(paths.configFile, scope === 'machine' ? { ...stored, ...identity } : { ...stored, roots: { [repo]: identity } });
+
+    const { result, stdout } = await captureStdout(() => rootSetup({ root: scope === 'root' ? repo : undefined, endpoint: 'https://new.example.com', token: 'tok-new' }));
+
+    expect(result).toBe(0);
+    expect(stdout).toContain('cleared eventsUrl (https://old.example.com/events)');
+    expect(stdout).toContain('cleared otlpUrl (https://old.example.com/otel)');
+
+    const disk = await readJson(paths.configFile);
+    const updated = scope === 'machine' ? disk : disk.roots[repo];
+    const config = (await loadEffectiveConfig(paths, scope === 'root' ? repo : world.env.cwd)).config;
+
+    expect(updated.eventsUrl).toBeUndefined();
+    expect(updated.otlpUrl).toBeUndefined();
+    expect(eventsUrl(config)).toBe('https://new.example.com/v1/events');
+    expect(otlpBaseUrl(config)).toBe('https://new.example.com/v1/otlp');
+  });
+
+  it('moves an explicit machine enforcement route with its backend', async () => {
+    const paths = resolvePaths(world.env);
+
+    await writeJson(paths.configFile, { ...defaultConfig(), endpoint: 'https://old.example.com', enforcementUrl: 'https://policy.old.example.com/decision', token: 'tok-old' });
+
+    const { result, stdout } = await captureStdout(() => rootSetup({ endpoint: 'https://new.example.com', token: 'tok-new' }));
+
+    expect(result).toBe(0);
+    expect(stdout).toContain('cleared enforcementUrl');
+    expect((await readJson(paths.configFile)).enforcementUrl).toBeUndefined();
+    expect(enforcementUrl((await loadConfig(paths)).config)).toBe('https://new.example.com/v1/enforcement/decision');
+  });
+
+  it('explains refused endpoints and absent root routes in doctor and config', async () => {
+    await machineSetup();
+
+    const paths = resolvePaths(world.env);
+    const repo = await rootDir('refused');
+    const stored = await readJson(paths.configFile);
+
+    await writeJson(paths.configFile, { ...stored, roots: { [repo]: { endpoint: 'http://refused.internal', token: 'root-secret' } } });
+
+    const report = JSON.parse((await captureStdout(() => runDoctor({ ...world.env, cwd: repo }, { json: true }))).stdout);
+    const check = report.checks.find((entry: { name: string }) => entry.name === 'backend connectivity');
+
+    expect(check.detail).toContain('fix the refused endpoint');
+    expect(check.detail).not.toContain('remove its other URL');
+
+    await writeJson(paths.configFile, { ...stored, roots: { [repo]: { otlpUrl: 'https://root.example.com/otel', token: 'root-secret' } } });
+
+    const { stdout } = await captureStdout(() => runConfig({ ...world.env, cwd: repo }));
+
+    expect(stdout).toContain('# warning: this project root has no usable events route');
+    expect(stdout).not.toContain('root-secret');
+    expect(stdout).toContain('"eventsUrl": null');
   });
 
   // The cleared route is a deliberate stop, and it read as an unconfigured

@@ -5,6 +5,9 @@ import readline from 'node:readline/promises';
 import { defaultConfig, enabledSignalNames, eventsUrl, parseOtelSignals } from '../config/config.js';
 import { ensureInstallationId, saveConfig } from '../config/config-store.js';
 import { CONTENT_CAPTURE_KEYS } from '../config/constants/config.constants.js';
+import type { Destination } from '../config/types/destination.types.js';
+import { applyRootOverride } from '../config/root-config.js';
+import { transitionDestination } from '../config/destination.js';
 import { asRecord, compact } from '../core/object.js';
 import type { AgentWatchConfig, OtelConfig, RootOverride } from '../config/types/config.types.js';
 import { collectGitContext, developerIdentity } from '../git/git-context.js';
@@ -107,9 +110,10 @@ export async function runSetup(options: SetupOptions): Promise<number> {
   }
 
   const rootPath = resolved.root;
-  // A root inherits nothing from the machine identity; the machine re-enrolls
-  // on top of what it already has.
-  const inherited: RootOverride = rootPath === undefined ? baseConfig : { endpoint: baseConfig.endpoint };
+  // Re-running a root keeps its chosen backend. Only a missing base inherits;
+  // a refused one requires repair, and the machine token is never inherited.
+  const existingRoot = rootPath === undefined ? undefined : baseConfig.roots?.[rootPath];
+  const inherited: RootOverride = rootPath === undefined ? baseConfig : { endpoint: existingRoot?.endpoint === undefined ? baseConfig.endpoint : existingRoot.endpoint };
   const ask = interactivePrompt(options);
   const enrolled = await enroll(options, inherited, ask);
 
@@ -134,43 +138,28 @@ export async function runSetup(options: SetupOptions): Promise<number> {
   }
 
   const identity: RootOverride = { endpoint: enrolled.endpoint, token: enrolled.token, developerEmail };
-  // Merged into the entry, not written over it — but only the keys this run
-  // cannot supply. Replacing wholesale dropped the root's `installationId`, so
-  // the next delivery presented a different install to the backend, and dropped
-  // a *refused* sibling URL, which ends up absent rather than `null` and so is
-  // invisible to the carry-over in `saveConfig` — the erasure this release
-  // removed, surviving in the one root an operator repairing a URL would name.
-  //
-  // Carrying the entry wholesale is not the answer either: a sibling naming a
-  // *live* host out-ranks `identity.endpoint` in `eventsUrl()`, so re-enrolling
-  // a root against another backend would keep POSTing that root's prompts to
-  // the previous engagement's ingest under the new tenant's bearer, while setup
-  // printed the new backend.
-  //
-  // A refused sibling is always carried; a live one only while this run leaves
-  // the destination where it was. Dropping it unconditionally deleted a route
-  // override an operator had written — a seat's regional ingest, say — on a run
-  // that only rotated its token, with nothing printed and nothing to restore it
-  // from: `storedRefusedUrls` rescues `null`, not a live string.
-  const stored = rootPath === undefined ? undefined : baseConfig.roots?.[rootPath];
-  const carried: RootOverride = {
-    installationId: stored?.installationId,
-    ...carriedRoutes(stored, previousEndpoint(stored, baseConfig), identity.endpoint)
-  };
-  const rootIdentity: RootOverride = rootPath === undefined ? identity : { ...compact(carried), ...identity };
-  // The machine identity is held to the same rule. Spreading `identity` over
-  // `baseConfig` left the global `eventsUrl` standing, so a consultant winding
-  // one engagement down and starting the next on the same laptop — the flow of
-  // someone who never learned about `--root` — kept POSTing to the previous
-  // tenant's ingest under the new tenant's bearer, with setup printing the new
-  // backend.
-  const machine = { ...identity, ...carriedRoutes(baseConfig, baseConfig.endpoint, identity.endpoint) };
-  const withIdentity = rootPath === undefined ? { ...baseConfig, ...machine } : { ...baseConfig, roots: { ...baseConfig.roots, [rootPath]: rootIdentity } };
+  const stored: (RootOverride & Destination) | undefined = rootPath === undefined ? baseConfig : baseConfig.roots?.[rootPath];
+  const previous = rootPath === undefined ? baseConfig.endpoint : previousEndpoint(stored, baseConfig);
+  const transition = transitionDestination(stored ?? {}, previous, enrolled.endpoint);
+  const updated = { ...stored, ...identity, ...transition.routes };
+  const withIdentity = rootPath === undefined
+    ? { ...baseConfig, ...updated }
+    : { ...baseConfig, roots: { ...baseConfig.roots, [rootPath]: compact(updated) } };
+
+  for (const field of transition.cleared) {
+    println(`${symbols.warn} cleared ${field} (${stored?.[field]}) for ${rootPath ?? 'machine'}; backend is now ${identity.endpoint}; reconfigure this route if it is still required`);
+  }
+
   const config = ensureInstallationId({ ...withIdentity, otel, emit: { ...baseConfig.emit, llmCalls: true } });
 
   await reportContentDowngrade(context, config);
   await saveConfig(context.paths, config);
-  await offerBacklogRetarget(context, baseConfig, config, ask);
+  await offerBacklogRetarget(
+    context,
+    rootPath === undefined ? baseConfig : applyRootOverride(baseConfig, rootPath).config,
+    rootPath === undefined ? config : applyRootOverride(config, rootPath).config,
+    ask
+  );
 
   if (rootPath !== undefined) println(`${symbols.ok} project root: ${rootPath}`);
 
@@ -211,35 +200,6 @@ function previousEndpoint(stored: RootOverride | undefined, baseConfig: AgentWat
   if (stored === undefined) return undefined;
 
   return stored.endpoint === undefined ? baseConfig.endpoint : stored.endpoint;
-}
-
-/**
- * The route overrides this run keeps.
- *
- * A refused route is the developer's own line, kept as `null` so the carry-over
- * in `saveConfig` can lay the raw value back. A live one is kept only while the
- * destination is unchanged: it out-ranks `endpoint` in `eventsUrl()`, so
- * carrying it across a reroute sends the new tenant's prompts to the old
- * tenant's host. A refused previous destination is therefore never "unchanged",
- * and the carry is refused — the direction an operator can recover from, unlike
- * a cross-tenant POST.
- *
- * @param stored - The entry, or the whole config for the machine identity.
- * @param previous - Where it was sending before this run.
- * @param next - Where this run says it sends.
- * @returns The two route fields, each kept, refused or cleared.
- */
-function carriedRoutes(
-  stored: Pick<RootOverride, 'eventsUrl' | 'otlpUrl'> | undefined,
-  previous: string | null | undefined,
-  next: string | null | undefined
-): Pick<RootOverride, 'eventsUrl' | 'otlpUrl'> {
-  // `next != null` pins the argument rather than trusting `resolveEnrollment`
-  // to keep making it: two refusals must never compare equal here.
-  const unchanged = next != null && previous === next;
-  const keep = (value: string | null | undefined): string | null | undefined => (value === null || unchanged ? value : undefined);
-
-  return { eventsUrl: keep(stored?.eventsUrl), otlpUrl: keep(stored?.otlpUrl) };
 }
 
 /**
@@ -468,7 +428,7 @@ async function offerBacklogRetarget(
 
   if (previousUrl === configuredUrl && previousConfig.token === config.token) return;
 
-  const queue = await buildQueue({ ...context, config: previousConfig });
+  const queue = await buildQueue({ ...context, identityConfig: previousConfig });
   const stranded = await queue.pendingFor(previousUrl);
 
   if (stranded === 0) return;

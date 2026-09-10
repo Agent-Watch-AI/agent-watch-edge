@@ -281,6 +281,10 @@ async function connectivityChecks(context: CliContext): Promise<Check[]> {
 function noBackendDetail(context: CliContext): string {
   if (context.identityRoot === undefined) return 'no backend configured yet — run `agentwatch setup`';
 
+  if (context.identityConfig.endpoint === null) return `root ${context.identityRoot} has a refused endpoint and no events route — fix the refused endpoint, see the configuration check`;
+
+  if (context.identityConfig.eventsUrl === null) return `root ${context.identityRoot} has no usable eventsUrl — check the configuration warnings or set an events route on this root`;
+
   return `root ${context.identityRoot} names a backend of its own and no events route to it — set "eventsUrl" or "endpoint" on that root, or remove its other URL to inherit the machine's`;
 }
 

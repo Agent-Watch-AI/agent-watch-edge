@@ -131,3 +131,6 @@ export const MERGE_BLOCKS = [CAPTURE_KEY, 'emit'] as const;
 export const MAX_WALK_DEPTH = 32;
 
 export const RE_TRAILING_SLASHES = /\/+$/;
+
+/** Explicit routes belong to the backend selected at enrollment. */
+export const ROUTE_FIELDS = ['eventsUrl', 'otlpUrl', 'enforcementUrl'] as const;

@@ -10,8 +10,8 @@ items before upgrading a fleet.
   or 403 from the events endpoint, a block is persisted per (destination,
   credential fingerprint) — the fingerprint is the token digest the queue
   already uses to name its partition, never the token — and automatic sends for
-  that pair stop. **No queued record is lost or aged out by it**: what stops is
-  the retrying, not the queueing, and no attempt is spent against an entry for a
+  that pair stop. **The refusal does not discard queued records**: normal age and size
+  retention limits still apply; what stops is the retrying, not the queueing, and no attempt is spent against an entry for a
   refusal that is not its fault. The block never expires on a timer. It is
   lifted by configuring a different token, or by `agentwatch doctor` proving the
   current one good. `agentwatch status` reports the refusing status and when the
@@ -74,12 +74,18 @@ items before upgrading a fleet.
   `setup` names a refused URL and leaves the line the developer wrote exactly
   where it is: the value is carried over the write from the file rather than
   replaced by the parse, re-enrolling merges into the entry instead of replacing
-  it, so no run erases a field it does not set and no run is blocked by another
-  tenant's typo. A route override survives a run that leaves the destination
-  where it was and is dropped by one that moves it — for a `roots[]` entry and
+  it, so refused fields survive until repaired and another tenant's typo does
+  not block setup. A route override survives a run that leaves the destination
+  where it was (including trailing-slash normalization) and is dropped by one
+  that moves it or cannot establish the previous destination — for a `roots[]` entry and
   for the machine identity alike, so winding one engagement down and enrolling
   the next no longer keeps POSTing to the first one's ingest under the second
-  one's bearer. `setup` still refuses a non-deliverable `--endpoint` outright.
+  one's bearer. Every cleared live route is printed before the write, including
+  during endpoint repair. The same rule includes machine `enforcementUrl`; a
+  foreign root derives enforcement from its own base. Root token rotation keeps
+  its stored backend when `--endpoint` is omitted, and backlog migration asks
+  about the selected identity's queue. `config` warns about unavailable root
+  routes and `doctor` names refused endpoints explicitly. `setup` still refuses a non-deliverable `--endpoint` outright.
   Response bodies the hook decodes are capped, and neither the batch send nor
   the enforcement check follows a redirect — both carry a bearer.
 - **`status` and `doctor` act as the identity of the directory they run in.**

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { compact } from '../core/object.js';
+import { sameEndpoint } from './destination.js';
 import { ROOT_URL_FIELDS } from './constants/config.constants.js';
 import type { AgentWatchConfig, RootedConfig, RootOverride } from './types/config.types.js';
 
@@ -87,63 +88,30 @@ export function applyRootOverride(config: AgentWatchConfig, cwd: string): Rooted
 }
 
 /**
- * The global config with its derived routes cleared, when the root names a
- * destination of its own.
- *
- * `eventsUrl()` and `otlpBaseUrl()` prefer their own field and only fall back
- * to `endpoint`, so a machine that splits its routes across hosts laid two
- * explicit strings under every root, and they won before the root's own
- * `endpoint` was consulted: that root's prompts went to the machine's ingest
- * under the root's own bearer, refused or not. `otel-headers` compares the two
- * OTLP bases to decide whether the agent's exporter may carry the root's
- * bearer, and they compared equal for the same reason. The value that has to
- * stop being read is on the global side of the merge, which is why no accessor
- * can fix it.
- *
- * Only the two route fields are cleared, never `endpoint`. `enforcementUrl` has
- * no `roots[]` field of its own and derives from `endpoint`, and no decision
- * URL means `ALLOW` — so clearing `endpoint` would silently switch every
- * `block` cap off under a root that named nothing but its own ingest. They are
- * cleared to `null` rather than absent when the root names no `endpoint` of its
- * own, so "from nothing" survives the fallback to the machine's.
- *
- * "Names a destination of its own" is a *different* value, not merely a present
- * key: `setup --root` always writes `endpoint`, the machine's own unless
- * `--endpoint` says otherwise, so every root enrolled through the CLI names one.
- * Keying on presence took the machine's split routes away from an existing
- * second seat on upgrade — its events to a host that is not an ingest route,
- * its exporter unauthenticated — with nothing in the file changed to explain it.
- *
- * @param config - The machine's global config, roots already stripped.
- * @param override - The winning root's overrides.
- * @returns The config to lay the override over.
+ * A root shares telemetry routes only when it names no different destination.
+ * Refusal never establishes sharing. Route-only roots retain the machine base
+ * for enforcement, but cannot derive an unnamed telemetry route from it.
+ * A root with its own base derives enforcement there instead of leaking its
+ * bearer to an explicit machine enforcement service.
  */
 function withoutDestination<T extends AgentWatchConfig>(config: Omit<T, 'roots'>, override: RootOverride): Omit<T, 'roots'> {
   const named = ROOT_URL_FIELDS.some((field) => {
     const key = field as keyof RootOverride & keyof typeof config;
+    const value = override[key];
 
-    // A refusal is never "the same destination as the machine's", and two
-    // refusals compare equal: with the machine's own endpoint refused as well
-    // — the state these releases made survivable rather than fatal — a value
-    // comparison alone read the root as a second seat and handed it every
-    // global route. A field the developer wrote that the edge will not send to
-    // is the strongest statement there is that this root has a backend of its
-    // own.
-    return key in override && (override[key] === null || override[key] !== config[key]);
+    if (value === undefined) return false;
+
+    if (key === 'endpoint') return !sameEndpoint(value, config[key]);
+
+    return value === null || value !== config[key];
   });
 
   if (!named) return config;
 
-  // `null`, not `undefined`, unless the root names an `endpoint` to derive
-  // from. `endpoint` stays — enforcement has nothing else to derive from — and
-  // both route accessors fall back to it, so clearing to `undefined` was a
-  // no-op for whichever of the two fields the root did not name: its events
-  // went to the machine's ingest, or its bearer to the machine's collector,
-  // under the root's own token. `null` is the refused sentinel every accessor
-  // already honours, and `compact` still lays the root's own field over it.
-  const own = 'endpoint' in override ? undefined : null;
+  const ownBase = override.endpoint !== undefined;
+  const route = ownBase ? undefined : null;
 
-  return { ...config, eventsUrl: own, otlpUrl: own };
+  return { ...config, eventsUrl: route, otlpUrl: route, enforcementUrl: ownBase && !sameEndpoint(override.endpoint, config.endpoint) ? undefined : config.enforcementUrl };
 }
 
 /**

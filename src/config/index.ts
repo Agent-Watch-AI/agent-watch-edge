@@ -20,3 +20,6 @@ export { defaultConfig, enabledSignalNames, eventsUrl, joinUrl, otelEnabled, otl
 export { ensureInstallationId, loadConfig, saveConfig } from './config-store.js';
 export { findRepoConfigFile, loadEffectiveConfig, mergeRepoConfig } from './repo-config.js';
 export { applyRootOverride, selectRoot, servesMultipleIdentities } from './root-config.js';
+
+export { normalizeEndpoint, sameEndpoint, transitionDestination } from './destination.js';
+export type { Destination, DestinationTransition } from './types/destination.types.js';

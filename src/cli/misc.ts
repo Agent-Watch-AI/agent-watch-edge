@@ -1,5 +1,5 @@
 import process from 'node:process';
-import { otlpBaseUrl } from '../config/config.js';
+import { eventsUrl, otlpBaseUrl } from '../config/config.js';
 import { loadEffectiveConfig } from '../config/repo-config.js';
 import { applyRootOverride } from '../config/root-config.js';
 import type { Env } from '../core/types/core.types.js';
@@ -54,7 +54,11 @@ export async function runConfig(env: Env): Promise<number> {
 
   if (effective.repoConfigFile) println(dim(`# repo overrides: ${effective.repoConfigFile}`));
 
-  for (const warning of effective.warnings) println(dim(`# warning: ${warning}`));
+  if (effective.rootPath && !eventsUrl(effective.config)) println(dim('# warning: this project root has no usable events route; events stay queued — configure its endpoint/eventsUrl or fix the refused URL'));
+
+  if (effective.rootPath && !otlpBaseUrl(effective.config)) println(dim('# warning: this project root has no usable OTLP route; the machine collector is not inherited'));
+
+  for (const warning of [...context.configWarnings, ...effective.warnings]) println(dim(`# warning: ${warning}`));
 
   println(JSON.stringify({ ...effective.config, token: effective.config.token ? REDACTED_TOKEN : undefined }, null, 2));
 

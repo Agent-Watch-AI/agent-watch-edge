@@ -1,6 +1,7 @@
 import { isDeliverableUrl } from '../config/schemas/config.schema.js';
 import { DELIVERABLE_URL_MESSAGE } from '../config/constants/config.constants.js';
-import { ENDPOINT_PROMPT, RE_TRAILING_SLASHES, TOKEN_PROMPT } from './constants/enrollment.constants.js';
+import { normalizeEndpoint } from '../config/destination.js';
+import { ENDPOINT_PROMPT, TOKEN_PROMPT } from './constants/enrollment.constants.js';
 import type { EnrollmentInput, EnrollmentResult } from './types/enrollment.types.js';
 
 /**
@@ -28,7 +29,7 @@ export async function resolveEnrollment(input: EnrollmentInput): Promise<Enrollm
     throw new Error('no backend endpoint provided (use --endpoint or run interactively)');
   }
 
-  const trimmed = endpoint.replace(RE_TRAILING_SLASHES, '');
+  const trimmed = normalizeEndpoint(endpoint);
 
   if (!isDeliverableUrl(trimmed)) {
     throw new Error(`backend URL ${DELIVERABLE_URL_MESSAGE}, got ${endpoint}`);

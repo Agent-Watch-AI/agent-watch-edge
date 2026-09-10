@@ -106,3 +106,28 @@ opens grouped weekly updates for both npm and the pinned actions. Package verifi
 documentation only, with a 2 MB unpacked review ceiling. Hundreds of small files
 are expected from the existing module layout and declarations; bundling solely
 to reduce the file count is deferred.
+
+## Destination changes and project roots
+
+Setup treats `endpoint` as the backend identity and explicit `eventsUrl`,
+`otlpUrl`, and machine `enforcementUrl` as routes belonging to it. The same
+transition applies to machine setup and `setup --root`:
+
+| Previous base | Selected base | Existing live routes |
+| --- | --- | --- |
+| Usable, equal after removing trailing slashes | Same backend | Preserved, including token rotation |
+| Usable, different | Another backend | Cleared and each old URL printed before saving |
+| Missing or refused | Usable replacement | Cleared and each old URL printed before saving |
+
+Refused routes remain on disk and continue to produce warnings until repaired.
+For an existing root, omitting `--endpoint` keeps its stored base. Only an absent
+root base inherits the machine base; a refused base requires an explicit repair.
+The root's token is never inherited from the machine during enrollment.
+
+At runtime a root naming no different destination shares the machine's routes.
+A root naming a different or refused base never inherits its telemetry or explicit
+enforcement routes. A root naming only one telemetry route cannot inherit the
+other telemetry route; it still uses machine enforcement. Configure `endpoint`
+on that root if its budget checks belong to a separate backend. `agentwatch config`
+and `doctor` explain unavailable routes. Backlog moves remain opt-in and target
+the identity being enrolled, regardless of the directory setup is run from.

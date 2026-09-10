@@ -60,23 +60,20 @@ export async function runSetup(options: SetupOptions): Promise<number> {
     return 1;
   }
 
-  // A refused URL is not written back, so setup must not write over the file
-  // that holds it. `saveConfig` replaces the file with the *parsed* config, and
-  // a refused field is not in that — so the first unrelated setup run (a second
-  // agent, another root) would delete the URL the developer hand-wrote, and with
-  // it the only thing still reporting the problem: `nonDeliverableUrlFields`
-  // reads the raw file, so afterwards `doctor` says `configuration: ok` while
-  // that root's telemetry goes on being refused, or worse, inherited. Refusing
-  // here keeps the field, keeps the warning, and names what to fix — the same
-  // answer as `invalid` above.
+  // Named, not fatal. `saveConfig` carries a refused URL over from the raw file
+  // rather than writing the parsed `null` back, so this run cannot erase the
+  // line the developer wrote or the warning that reports it — and refusing the
+  // run instead left the machine with no CLI repair path at all, including
+  // `agentwatch setup --endpoint https://…`, which supplies a replacement for
+  // the very field it would have been refused over. One tenant's typo also
+  // stopped every other tenant's install, which is the blast radius this
+  // release removed from `loadConfig`.
   if (context.configWarnings.length > 0) {
-    println(`${symbols.fail} existing config at ${context.paths.configFile} holds a URL the edge will not send to:`);
+    println(`${symbols.warn} existing config at ${context.paths.configFile} holds a URL the edge will not send to:`);
 
     for (const warning of context.configWarnings) println(`  ${warning}`);
 
-    println('  fix or remove it, then re-run setup; setup would otherwise overwrite the file without it');
-
-    return 1;
+    println('  it is kept as written; nothing is sent there until it is fixed');
   }
 
   // A fresh install starts from the schema defaults: metadata on, content off.
@@ -290,8 +287,9 @@ async function enroll(
       setupUrl: options.setupUrl,
       // `?? undefined` last, so a *refused* stored endpoint — `null`, a URL the
       // edge will not talk to — is nothing to inherit rather than a value to
-      // carry forward. `setup` refuses to run at all while the file holds one,
-      // so this is the belt to that brace.
+      // carry forward. Load-bearing: setup runs on a file that holds one, so
+      // without this a re-run would carry the refusal into enrollment instead
+      // of asking for a URL that works.
       endpoint: options.endpoint ?? inherited.endpoint ?? undefined,
       // Flag, then environment, then what is already stored. An MDM policy runs
       // with no terminal and has to get the token in somehow; `--token` puts it

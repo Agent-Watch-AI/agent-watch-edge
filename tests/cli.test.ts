@@ -41,13 +41,13 @@ describe('CLI commands', () => {
   }
 
   describe('setup', () => {
-    // `saveConfig` replaces the file with the *parsed* config, and a refused URL
-    // is not in that. So the first unrelated setup run would delete the URL the
-    // developer hand-wrote — and with it the only thing still reporting the
-    // problem, since `nonDeliverableUrlFields` reads the raw file. Afterwards
-    // `doctor` says `configuration: ok` while that destination goes on receiving
-    // nothing, and the hand-written line is unrecoverable except from a backup.
-    it('refuses to overwrite a config holding a URL the edge will not send to', async () => {
+    // The run has to say so and still leave the line alone. Writing the parsed
+    // config back would delete the URL the developer hand-wrote — and with it
+    // the only thing still reporting the problem, since
+    // `nonDeliverableUrlFields` reads the raw file. Refusing the run instead
+    // left one tenant's typo blocking every other tenant's install, and left
+    // the machine with no CLI repair path at all.
+    it('names a URL the edge will not send to, and leaves it exactly as written', async () => {
       const repo = path.join(world.home, 'work', 'clientA');
 
       await writeJson(resolvePaths(world.env).configFile, {
@@ -59,15 +59,35 @@ describe('CLI commands', () => {
 
       const { result, stdout } = await captureStdout(setupOnce);
 
-      expect(result).toBe(1);
+      expect(result).toBe(0);
       expect(stdout).toContain('will not send to');
       expect(stdout).toContain(`roots.${repo}.endpoint`);
 
-      // And the file is exactly as the developer left it.
       const onDisk = await readJson(resolvePaths(world.env).configFile);
 
       expect(onDisk.roots[repo].endpoint).toBe('http://collector.clienta.internal');
-      expect(onDisk.token).toBe('tok-global');
+      expect(onDisk.roots[repo].token).toBe('tok-client-a');
+      // The unrelated half of the run still landed.
+      expect(onDisk.endpoint).toBe('https://backend.example.com');
+      expect(onDisk.token).toBe('tok-1');
+    });
+
+    // The invocation that supplies a replacement for the very field that is
+    // refused has to be the one that works: `setup` is the only command in
+    // `cli.ts` that writes the file, so refusing it left hand-editing JSON or
+    // an MDM re-push as the only remedy.
+    it('repairs a refused endpoint from the flag that replaces it', async () => {
+      await writeJson(resolvePaths(world.env).configFile, {
+        ...defaultConfig(),
+        endpoint: 'http://collector.corp:4318',
+        token: 'tok-global'
+      });
+
+      expect(await captureStdout(setupOnce).then((run) => run.result)).toBe(0);
+
+      const onDisk = await readJson(resolvePaths(world.env).configFile);
+
+      expect(onDisk.endpoint).toBe('https://backend.example.com');
     });
 
     it('takes the token from the environment when no flag carries it', async () => {
@@ -788,5 +808,25 @@ describe('setup --root: a second tenant on one machine', () => {
     // foreign tenant's credential.
     expect(await headersIn(foreign)).toEqual({});
     expect(await headersIn(world.env.cwd)).toEqual({ Authorization: 'Bearer tok-machine' });
+  });
+
+  // A root whose own OTLP URL was refused is a foreign tenant too. Read by
+  // truthiness the refusal fell through to the machine's base, which made the
+  // two bases equal and handed that root's bearer to the machine's collector.
+  it('otel-headers signs with nothing for a root whose otlpUrl was refused', async () => {
+    await machineSetup();
+
+    const repo = await rootDir('clientA');
+    const paths = resolvePaths(world.env);
+    const stored = await readJson(paths.configFile);
+
+    await writeJson(paths.configFile, {
+      ...stored,
+      roots: { [repo]: { otlpUrl: 'http://collector.clienta.internal:4318', token: 'tok-client-a' } }
+    });
+
+    const { stdout } = await captureStdout(() => runOtelHeaders({ ...world.env, cwd: repo }));
+
+    expect(JSON.parse(stdout)).toEqual({});
   });
 });

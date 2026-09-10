@@ -191,9 +191,29 @@ function endpointChecks(context: CliContext): Check[] {
   const via = context.identityRoot === undefined ? '' : ` (root ${context.identityRoot})`;
 
   return [
-    { name: 'backend endpoint', level: config.endpoint ? 'ok' : 'warn', detail: config.endpoint === undefined ? 'not configured' : `${config.endpoint}${via}` },
+    { name: 'backend endpoint', level: config.endpoint ? 'ok' : 'warn', detail: endpointDetail(config.endpoint, via) },
     { name: 'auth token', level: 'ok', detail: config.token ? `present (hidden)${via}` : 'none configured' }
   ];
+}
+
+/**
+ * How the endpoint reads in the report when there is no URL to print.
+ *
+ * Three states, not two: `undefined` is "nothing was ever configured", `null`
+ * is "a URL was written here and the edge refuses to talk to it". Printing the
+ * latter through the same branch as a real URL interpolated the literal string
+ * `null` into a report an install script parses.
+ *
+ * @param endpoint - The rooted identity's endpoint, as parsed.
+ * @param via - Suffix naming the root, empty for the machine identity.
+ * @returns The detail line.
+ */
+function endpointDetail(endpoint: string | null | undefined, via: string): string {
+  if (endpoint === undefined) return 'not configured';
+
+  if (endpoint === null) return `refused — see the configuration check${via}`;
+
+  return `${endpoint}${via}`;
 }
 
 /**

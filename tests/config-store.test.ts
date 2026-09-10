@@ -1,11 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { loadConfig } from '../src/config/config-store.js';
+import { loadConfig, saveConfig } from '../src/config/config-store.js';
 import { resolvePaths } from '../src/storage/paths.js';
-import { defaultConfig, eventsUrl, parseOtelSignals } from '../src/config/config.js';
+import { defaultConfig, eventsUrl, otlpBaseUrl, parseOtelSignals } from '../src/config/config.js';
 import { applyRootOverride } from '../src/config/root-config.js';
-import { makeTempEnv, writeJson, type TempWorld } from './helpers.js';
+import { makeTempEnv, readJson, writeJson, type TempWorld } from './helpers.js';
 
 describe('config load fallback', () => {
   let world: TempWorld;
@@ -190,6 +190,74 @@ describe('a bearer may only travel over a URL that cannot leak it', () => {
     expect(rooted.token).toBe('aw_edge_client_a');
     expect(rooted.endpoint).not.toBe('https://mycorp.example.com');
     expect(eventsUrl(rooted)).toBeUndefined();
+  });
+
+  // `endpoint` is not the only URL a `roots[]` entry may carry, and the two
+  // siblings are read through `eventsUrl()`/`otlpBaseUrl()`, which fell back to
+  // `endpoint` on any falsy value — so `null` ("refused") read as "not
+  // overridden" and the root inherited the machine's backend through a sibling
+  // key. The OTLP case is worse than the events one: `otel-headers` hands the
+  // root's bearer to the agent's exporter only when the root's OTLP base equals
+  // the machine's, so the fallback made them equal and opened that guard.
+  it('does not let a refused eventsUrl or otlpUrl inherit the machine\'s backend either', async () => {
+    const repo = path.join(world.home, 'work', 'clientA');
+    const events = await loadWith({
+      endpoint: 'https://mycorp.example.com',
+      roots: { [repo]: { eventsUrl: 'http://collector.clienta.internal/v1/events', token: 'aw_edge_client_a' } }
+    });
+
+    expect(eventsUrl(applyRootOverride(events.config, repo).config)).toBeUndefined();
+
+    const otlp = await loadWith({
+      endpoint: 'https://mycorp.example.com',
+      roots: { [repo]: { otlpUrl: 'http://collector.clienta.internal:4318', token: 'aw_edge_client_a' } }
+    });
+    const rooted = applyRootOverride(otlp.config, repo).config;
+
+    expect(otlpBaseUrl(rooted)).toBeUndefined();
+    expect(otlpBaseUrl(rooted)).not.toBe(otlpBaseUrl(otlp.config));
+  });
+
+  // A save must not answer a refusal by deleting it. The parsed config holds
+  // `null` where the file holds the URL the developer typed, so writing the
+  // parsed shape back is data loss — and it deletes the report with it, because
+  // `nonDeliverableUrlFields` reads the raw file.
+  it('carries a refused URL over a save instead of writing the parse back', async () => {
+    const paths = resolvePaths(world.env);
+    const repo = path.join(world.home, 'work', 'clientA');
+
+    await writeJson(paths.configFile, {
+      ...defaultConfig(),
+      endpoint: 'https://mycorp.example.com',
+      token: 'tok-global',
+      roots: { [repo]: { endpoint: 'http://collector.clienta.internal', token: 'tok-client-a' } }
+    });
+
+    const loaded = await loadConfig(paths);
+
+    await saveConfig(paths, { ...loaded.config, installationId: 'inst-1' });
+
+    const onDisk = await readJson(paths.configFile);
+
+    expect(onDisk.roots[repo].endpoint).toBe('http://collector.clienta.internal');
+    expect(onDisk.roots[repo].token).toBe('tok-client-a');
+    expect(onDisk.installationId).toBe('inst-1');
+    expect((await loadConfig(paths)).warnings).toEqual([expect.stringContaining(`roots.${repo}.endpoint`)]);
+  });
+
+  // The other half of the same rule: a run that supplies a working URL is a
+  // repair, not something to preserve the old value against.
+  it('lets a replacement URL overwrite the refused one', async () => {
+    const paths = resolvePaths(world.env);
+
+    await writeJson(paths.configFile, { ...defaultConfig(), endpoint: 'http://collector.corp:4318', token: 'tok-global' });
+
+    const loaded = await loadConfig(paths);
+
+    await saveConfig(paths, { ...loaded.config, endpoint: 'https://collector.corp' });
+
+    expect((await readJson(paths.configFile)).endpoint).toBe('https://collector.corp');
+    expect((await loadConfig(paths)).warnings).toEqual([]);
   });
 
   // `.catch(null)` swallows every failure, not only a bad URL string, so the

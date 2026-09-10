@@ -60,11 +60,14 @@ items before upgrading a fleet.
   existing backlog under a partition nothing would drain again, and one bad URL
   in one `roots[]` entry would have stopped delivery for every other project on
   the machine. A refused field reads as "configured but unusable" and never as
-  absent, so a `roots[]` entry cannot inherit the machine-global backend and
-  send one tenant's prompts to another's collector under the first tenant's
-  bearer. `setup` refuses to run while the file holds one, rather than
-  overwriting the file without the line the developer wrote. `setup` still
-  refuses a non-deliverable `--endpoint` outright.
+  absent — through `endpoint`, `eventsUrl` and `otlpUrl` alike — so a `roots[]`
+  entry cannot inherit the machine-global backend and send one tenant's prompts
+  to another's collector under the first tenant's bearer, and `otel-headers`
+  hands no bearer to an exporter pointed at a backend the root did not choose.
+  `setup` names a refused URL and leaves the line the developer wrote exactly
+  where it is: the value is carried over the write from the file rather than
+  replaced by the parse, so no run erases it and no run is blocked by another
+  tenant's typo. `setup` still refuses a non-deliverable `--endpoint` outright.
   Response bodies the hook decodes are capped, and neither the batch send nor
   the enforcement check follows a redirect — both carry a bearer.
 - **`status` and `doctor` act as the identity of the directory they run in.**

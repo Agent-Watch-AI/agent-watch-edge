@@ -151,6 +151,24 @@ describe('doctor tells a rejected credential from a healthy install', () => {
     expect(check.detail).toContain('endpoint');
   });
 
+  // `deliverableUrl` yields `null` for a refused URL, and the endpoint line was
+  // written when a refusal left the field absent — so the ternary took the
+  // other branch and interpolated the literal string `null` into the report an
+  // install script parses.
+  it('says a refused endpoint was refused, rather than printing "null"', async () => {
+    await writeJson(resolvePaths(world.env).configFile, {
+      ...defaultConfig(),
+      endpoint: 'http://collector.corp:4318',
+      token: TOKEN
+    });
+
+    const check = await namedCheck('backend endpoint');
+
+    expect(check.level).toBe('warn');
+    expect(check.detail).toContain('refused');
+    expect(check.detail).not.toBe('null');
+  });
+
   it('probes even while a block stands, and a 2xx lifts it', async () => {
     backend = await backendAnswering(202);
     await configure(backend.url);

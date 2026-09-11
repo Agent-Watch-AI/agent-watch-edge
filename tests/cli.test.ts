@@ -925,6 +925,39 @@ describe('setup --root: a second tenant on one machine', () => {
     expect(questions).toEqual([expect.stringContaining('Deliver them to https://new.example.com/v1/events')]);
   });
 
+  it.each([
+    { kind: 'a trailing newline on the flag', flag: 'tok-machine\n', env: undefined },
+    { kind: 'a trailing newline from the environment', flag: undefined, env: 'tok-machine\n' },
+    { kind: 'surrounding whitespace', flag: '  tok-machine  ', env: undefined }
+  ])('treats $kind as the same credential, not a new exclusive identity', async ({ flag, env }) => {
+    // A partition is keyed by sha(token) and a bearer is the token verbatim, so an
+    // untrimmed value both strands the backlog in a partition no hook will list and
+    // writes a malformed Authorization header - silently, since Request accepts it.
+    // A mounted secret file, `read` and most .env loaders all hand over the newline.
+    await machineSetup();
+
+    const paths = resolvePaths(world.env);
+    const sourceDir = queuePartition(paths.queueDir, 'tok-machine');
+    const queue = new EventQueue({ queueDir: sourceDir, locksDir: paths.locksDir, maxEvents: 100, maxAttempts: 3, maxEventAgeDays: 7 });
+
+    await queue.enqueue([{ id: 'owned', event: { type: 'turn.summary' } } as unknown as Parameters<EventQueue['enqueue']>[0][number]], 'https://backend.example.com/v1/events');
+
+    const questions: string[] = [];
+    const world2 = env === undefined ? world.env : { ...world.env, vars: { ...world.env.vars, AGENTWATCH_TOKEN: env } };
+    // Same endpoint as the machine already has, so the only thing that could move
+    // the backlog is the token. Any question here is setup proposing a migration.
+    const { result } = await captureStdout(() => rootSetup({ token: flag, yes: false, env: world2, ask: async (question) => {
+      questions.push(question);
+
+      return 'y';
+    } }));
+
+    expect(result).toBe(0);
+    expect((await readJson(paths.configFile)).token).toBe('tok-machine');
+    expect(await queueOwnership(paths.queueDir)).toEqual({ [path.basename(sourceDir)]: 1 });
+    expect(questions).toEqual([]);
+  });
+
   it('does not claim a tokenless previous identity owns a backlog to migrate', async () => {
     const paths = resolvePaths(world.env);
 
@@ -986,6 +1019,30 @@ describe('setup --root: a second tenant on one machine', () => {
 
     expect(check.level).toBe(level);
     expect(check.detail).toContain(policy ? 'policy.example.com' : 'backend.example.com');
+    expect(JSON.stringify(report)).not.toContain('root-secret');
+  });
+
+  it('accepts a split-ingest root whose decision host is one of its own routes', async () => {
+    // The four cases above each declare at most one route, so none of them can tell
+    // "any route differs" from "no route matches". A root that sends events to the
+    // backend and OTLP to its own collector is a normal enterprise layout: the
+    // decision host matches the first and not the second, and that is not foreign.
+    await machineSetup();
+
+    const paths = resolvePaths(world.env);
+    const repo = await rootDir('split-ingest');
+
+    await writeJson(paths.configFile, {
+      ...(await readJson(paths.configFile)),
+      enforcementUrl: 'https://backend.example.com/v1/enforcement',
+      roots: { [repo]: { token: 'root-secret', eventsUrl: 'https://backend.example.com/v1/events', otlpUrl: 'https://otlp-collector.example.com/v1/traces' } }
+    });
+
+    const report = JSON.parse((await captureStdout(() => runDoctor({ ...world.env, cwd: repo }, { json: true }))).stdout);
+    const check = report.checks.find((entry: { name: string }) => entry.name === 'budget enforcement');
+
+    expect(check.level).toBe('ok');
+    expect(check.detail).toContain('backend.example.com');
     expect(JSON.stringify(report)).not.toContain('root-secret');
   });
 

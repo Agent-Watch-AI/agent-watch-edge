@@ -222,7 +222,12 @@ function enforcementCheck(context: CliContext): Check {
   // the root's hosts, falling back to the shared machine base for token-only roots.
   const routes = root?.endpoint ? [root.endpoint] : [root?.eventsUrl, root?.otlpUrl].filter((value): value is string => Boolean(value));
   const expected = routes.length > 0 ? routes : [context.config.endpoint];
-  const foreignPolicy = expected.some((value) => value && new URL(value).host !== host);
+  // `none match`, not `any differs`: a root with a split ingest - events to the backend, OTLP
+  // to its own collector - declares two hosts, and the decision host can only be one of them.
+  // Asking whether any route differs calls that layout foreign while the decision host is the
+  // root's own events host, and then advises setting `endpoint`, which would collapse the split.
+  // The credential is somewhere it was never pointed at only when nothing the root declared matches.
+  const foreignPolicy = !expected.some((value) => value && new URL(value).host === host);
 
   if (root && foreignPolicy) {
     return { name, level: 'warn', detail: `budget decisions at ${host} use this root's credential${via}; set this root's endpoint if budget checks belong elsewhere` };

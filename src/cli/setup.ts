@@ -368,7 +368,16 @@ async function enroll(
       // and enrollment treats a defined token as final — so `??` would write an
       // empty token, skip the prompt, and leave an install that authenticates
       // against nothing while reporting success.
-      token: options.token || options.env.vars[TOKEN_VAR] || inherited.token,
+      //
+      // Trimmed here, at the one boundary every non-interactive token crosses.
+      // A partition is keyed by the token's hash and a bearer is the token
+      // verbatim, so `tok\n` is a different exclusive identity from `tok` and a
+      // malformed `Authorization` header — and a trailing newline is what a
+      // mounted secret file, `read`, and most `.env` loaders hand over. The
+      // interactive answer and `--developer-email` already trim; this is the
+      // path that did not. `|| undefined` after it, so whitespace-only stops
+      // being a token here rather than at some later `if`.
+      token: (options.token || options.env.vars[TOKEN_VAR] || inherited.token)?.trim() || undefined,
       ask
     });
   } catch (error) {

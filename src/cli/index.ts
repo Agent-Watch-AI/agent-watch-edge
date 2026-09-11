@@ -5,7 +5,7 @@
 export type { Check, CheckLevel, CliContext, HookRunOptions, ParsedArgs, SetupOptions, UninstallOptions } from './types/cli.types.js';
 
 export { boolFlag, parseArgs, stringFlag } from './args.js';
-export { buildCliContext, buildDeliveryStats, buildHookCommand, buildQueue, buildTransport } from './context.js';
+export { buildCliContext, buildDeliveryStats, buildHookCommand, buildQueue, buildTransport, openIdentityQueue } from './context.js';
 export { runHook } from './hook.js';
 export { runSetup } from './setup.js';
 export { runStatus } from './status.js';

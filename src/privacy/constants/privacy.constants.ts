@@ -17,8 +17,8 @@ export const MAX_DEPTH = 12;
 export const MAX_STRING_LENGTH = 8192;
 
 /** Key names whose values are always redacted regardless of content. */
-export const SENSITIVE_KEY_PATTERN =
-  /(^|[_.-])(authorization|auth|token|secret|password|passwd|pwd|credential|credentials|api[_-]?key|apikey|access[_-]?key|private[_-]?key|session[_-]?key|cookie|bearer)([_.-]|$)/i;
+export const SENSITIVE_KEY_PATTERN
+  = /(^|[_.-])(authorization|auth|token|secret|password|passwd|pwd|credential|credentials|api[_-]?key|apikey|access[_-]?key|private[_-]?key|session[_-]?key|cookie|bearer)([_.-]|$)/i;
 
 /**
  * Content patterns for common credentials, applied to every outgoing string.
@@ -29,7 +29,21 @@ export const SENSITIVE_KEY_PATTERN =
  */
 export const SECRET_PATTERNS: readonly SecretPattern[] = [
   { name: 'private-key-block', pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g },
-  { name: 'url-credentials', pattern: /(\w+:\/\/)([^/\s:@]+)(?::([^/\s@]+))?@/g, replacement: `$1${REDACTED}@` },
+  // The scheme is the only part that was quadratic: `\w+` re-consumed the rest of
+  // the string at every start index before backtracking to look for `://`, which
+  // cost 1.8s on a 64KiB prompt and 17s on a 200_000-character one, on the
+  // agent's hook path. `\w{1,32}` ends that, and no real scheme comes near 32 —
+  // `\w` never matched `mongodb+srv` in the first place. That bound is what makes
+  // scrubbing the *whole* string affordable, which `sanitizeText` needs in order
+  // to redact a credential straddling the length cap.
+  //
+  // The userinfo groups stay unbounded on purpose. A negated class that cannot
+  // cross `@` or whitespace cannot backtrack the same way — measured linear, 21ms
+  // on a 200_000-character run with no `@` in it — while a ceiling there leaks
+  // every credential longer than it: a 300-character URL password went out in the
+  // clear under a `{1,256}` bound, and a signed URL, a service-account secret or
+  // a JWT used as a password is routinely longer than that.
+  { name: 'url-credentials', pattern: /(\w{1,32}:\/\/)([^/\s:@]+)(?::([^/\s@]+))?@/g, replacement: `$1${REDACTED}@` },
   { name: 'aws-access-key', pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
   { name: 'github-token', pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/g },
   { name: 'github-fine-grained', pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g },

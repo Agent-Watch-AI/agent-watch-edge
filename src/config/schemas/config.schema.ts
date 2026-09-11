@@ -1,6 +1,11 @@
 import { z } from 'zod';
+import { asRecord } from '../../core/object.js';
 import type { CONTENT_CAPTURE_KEYS } from '../constants/config.constants.js';
 import {
+  DELIVERABLE_URL_MESSAGE,
+  ROOT_URL_FIELDS,
+  URL_FIELDS,
+  LOOPBACK_HOSTS,
   DEFAULT_DRAIN_BATCH_SIZE,
   DEFAULT_ENFORCEMENT_CACHE_TTL_MS,
   DEFAULT_ENFORCEMENT_TIMEOUT_MS,
@@ -59,7 +64,7 @@ export const captureSchema = z
 /** Tuning for the in-hook send and the machine-global offline queue. */
 export const deliverySchema = z
   .object({
-    /** Budget for the in-hook direct send. Keep small: we are on the agent's critical path. */
+    /** Shared network budget for direct send and backlog retries in one delivery pass. */
     timeoutMs: z.number().int().positive().default(DEFAULT_SEND_TIMEOUT_MS),
     /** How many queued events one drain pass may send. */
     drainBatchSize: z.number().int().positive().default(DEFAULT_DRAIN_BATCH_SIZE),
@@ -120,6 +125,158 @@ export const emitSchema = z
   .strip();
 
 /**
+ * A URL the edge may send a bearer and captured content to.
+ *
+ * `z.string().url()` alone accepts `file:`, `javascript:`, `data:`, `ftp:` and
+ * plain `http:` to anywhere. Hand-editing `~/.agentwatch/config.json` is the
+ * documented way to enable content capture, so one slipped character or one
+ * templating bug in an MDM payload would otherwise ship
+ * `Authorization: Bearer <token>` plus every captured prompt in cleartext, with
+ * nothing in `setup`, `status` or `doctor` saying so.
+ *
+ * The check lives in the schema because the schema is what governs every
+ * subsequent *load* of the file, not just the interactive path that wrote it.
+ * `http:` survives for loopback only, which is what the tests and a local
+ * collector need and is not a network hop anything can intercept.
+ *
+ * @param value - The URL as written in the file.
+ * @returns True when the edge may talk to it.
+ */
+export function isDeliverableUrl(value: string): boolean {
+  const url = parseUrl(value);
+
+  if (!url) return false;
+
+  if (url.protocol === 'https:') return true;
+
+  return url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname);
+}
+
+/**
+ * Parse a URL without throwing.
+ *
+ * @param value - Candidate URL.
+ * @returns The parsed URL, or undefined when it is not one.
+ */
+function parseUrl(value: string): URL | undefined {
+  try {
+    return new URL(value);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Every backend URL in the file, validated the same way. One definition, so a
+ * fifth URL field cannot be added without the rule.
+ *
+ * An offending value becomes `null` — "a URL was written here and refused" —
+ * rather than fatal. Failing the parse instead took the whole file down with it,
+ * and `loadConfig` answers a failed parse with `fallbackConfig()` — no endpoint,
+ * no token, no installation id. Two consequences, both worse than the
+ * misconfiguration:
+ *
+ * - An upgrade of a fleet pointed at an internal `http://collector.corp:4318`
+ *   lost its *token* along with its endpoint, so every hook queued into
+ *   `unconfigured/` under `ANY_DESTINATION` while the existing backlog stayed
+ *   pinned to `sha256(token)` — a partition nothing would ever drain again.
+ * - `roots` is a record of these same fields, so one typo in one project's
+ *   entry stopped delivery for every other project on the machine.
+ *
+ * This keeps the identity, keeps the backlog claimable, and confines the damage
+ * to the field that is actually wrong. Delivery still stops for that destination
+ * — which is the point: the alternative is a bearer token and captured prompts
+ * in cleartext — but it stops loudly, and only there. `loadConfig` reports each
+ * refused field, the hook path warns on stderr, and `doctor` and `status` name
+ * it. New values never take this path: `enrollment` rejects a non-deliverable
+ * `--endpoint` outright, at the moment someone can still fix it.
+ *
+ * `null` and not absent, and that distinction is the whole point for a `roots[]`
+ * entry. `applyRootOverride` lays the override over the global config through
+ * `compact`, which skips undefined-valued keys precisely so an override cannot
+ * erase a global — so an *absent* endpoint made the root inherit the machine's.
+ * A consultant's `roots["/work/clientA"]` on an internal `http:` collector would
+ * have had every prompt, response and branch name in that directory POSTed to
+ * the *other* tenant's backend, authenticated with clientA's own bearer, where
+ * before the file was refused and nothing was sent anywhere. Segregating tenants
+ * is the only reason `roots` exists. `null` survives `compact`, so the root
+ * overrides the global endpoint with "unusable" and its events queue under its
+ * own token instead of leaving.
+ *
+ * `.catch(null)` covers every failure, not only a bad URL string: a number, an
+ * array or a `null` a templating tool emitted for a missing value all land here
+ * rather than being waved through as absent.
+ */
+const deliverableUrl = z
+  .string()
+  .url()
+  .refine(isDeliverableUrl, { message: DELIVERABLE_URL_MESSAGE })
+  .nullish()
+  .catch(null);
+
+/**
+ * Which fields of a config object hold a URL the edge refuses to talk to.
+ *
+ * Read from the *raw* value, because the schema has already dropped them by the
+ * time anything can be said about it. Reported by `loadConfig`, so a dropped
+ * field is a line on stderr and in `doctor` rather than a silent stop.
+ *
+ * @param value - The parsed JSON of the config file, whatever shape it has.
+ * @returns Dotted paths of the offending fields, empty when there are none.
+ */
+export function nonDeliverableUrlFields(value: unknown): string[] {
+  const found: string[] = [];
+  const record = asRecord(value);
+
+  if (!record) return found;
+
+  found.push(...collectNonDeliverable(record, URL_FIELDS, ''));
+
+  for (const [root, override] of Object.entries(asRecord(record['roots']) ?? {})) {
+    const entry = asRecord(override);
+
+    if (entry) found.push(...collectNonDeliverable(entry, ROOT_URL_FIELDS, `roots.${root}.`));
+  }
+
+  return found;
+}
+
+/**
+ * Find the offending URL fields without mutating the caller's accumulator.
+ *
+ * Anything present that is not a deliverable *string* counts, not only a bad
+ * URL string: `deliverableUrl` catches every failure, so a number, an array or
+ * a `null` a config-management tool emitted for a missing value all become
+ * "refused". Testing only strings left those reported by nobody — and for a
+ * `roots[]` entry an unreported refusal is the cross-tenant misroute
+ * `deliverableUrl` describes, arrived at in total silence.
+ *
+ * @param record - The config or one `roots[]` entry.
+ * @param fields - The URL fields that object may carry.
+ * @param prefix - Dotted prefix for the reported path.
+ * @returns The offending field paths.
+ */
+function collectNonDeliverable(
+  record: Record<string, unknown>,
+  fields: readonly string[],
+  prefix: string
+): string[] {
+  const found: string[] = [];
+
+  for (const field of fields) {
+    if (!(field in record)) continue;
+
+    const value = record[field];
+
+    if (value === undefined) continue;
+
+    if (typeof value !== 'string' || !isDeliverableUrl(value)) found.push(`${prefix}${field}`);
+  }
+
+  return found;
+}
+
+/**
  * One project root's identity. Only the fields that decide *who* the events
  * belong to and *where* they go: capture and emission stay machine-wide, so a
  * second tenant cannot quietly widen what is collected under it.
@@ -129,9 +286,9 @@ export const emitSchema = z
  */
 export const rootOverrideSchema = z
   .object({
-    endpoint: z.string().url().optional(),
-    eventsUrl: z.string().url().optional(),
-    otlpUrl: z.string().url().optional(),
+    endpoint: deliverableUrl,
+    eventsUrl: deliverableUrl,
+    otlpUrl: deliverableUrl,
     token: z.string().optional(),
     installationId: z.string().optional(),
     developerEmail: z.string().optional()
@@ -143,11 +300,11 @@ export const configSchema = z
   .object({
     schemaVersion: z.literal(1).default(1),
     /** Backend base URL, e.g. https://backend.example.com */
-    endpoint: z.string().url().optional(),
+    endpoint: deliverableUrl,
     /** Overrides; derived from endpoint when absent. */
-    eventsUrl: z.string().url().optional(),
-    otlpUrl: z.string().url().optional(),
-    enforcementUrl: z.string().url().optional(),
+    eventsUrl: deliverableUrl,
+    otlpUrl: deliverableUrl,
+    enforcementUrl: deliverableUrl,
     token: z.string().optional(),
     installationId: z.string().optional(),
     /** Developer identity attached to turn summaries; falls back to `git config user.email`. */

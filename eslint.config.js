@@ -7,6 +7,30 @@ import importX from 'eslint-plugin-import-x';
 export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
+  // Formatting becomes a fact instead of a habit. Indentation, line width,
+  // member delimiters, arrow parens and object-literal breaking were reviewer
+  // opinion before this and stayed consistent only because one author wrote
+  // every line; the first outside contributor is where that ends.
+  //
+  // The preset supplies the mechanism, not the taste: the six rules whose
+  // defaults disagree with how this codebase is already written are pinned to
+  // what the code does, so this enforces the existing style rather than
+  // replacing it with the preset's. Everything the preset then reports is a
+  // real inconsistency.
+  stylistic.configs.recommended,
+  {
+    rules: {
+      '@stylistic/brace-style': ['error', '1tbs', { allowSingleLine: true }],
+      '@stylistic/comma-dangle': ['error', 'never'],
+      '@stylistic/max-statements-per-line': ['error', { max: 2 }],
+      '@stylistic/member-delimiter-style': ['error', { multiline: { delimiter: 'semi', requireLast: true }, singleline: { delimiter: 'semi', requireLast: false } }],
+      '@stylistic/arrow-parens': ['error', 'always'],
+      // as-needed, not consistent-as-needed: a map keyed on characters quotes
+      // only the keys that cannot be bare, which is correct and which the
+      // stricter form rejects.
+      '@stylistic/quote-props': ['error', 'as-needed']
+    }
+  },
   {
     plugins: {
       '@stylistic': stylistic,
@@ -57,6 +81,7 @@ export default tseslint.config(
         { prefer: 'type-imports', fixStyle: 'inline-type-imports' }
       ],
       'import-x/no-duplicates': 'error',
+      'import-x/order': ['error', { groups: ['builtin', 'external', 'parent', 'sibling', 'index'], 'newlines-between': 'never' }],
 
       // Formatting & newlines (padding lines)
       '@stylistic/padding-line-between-statements': [

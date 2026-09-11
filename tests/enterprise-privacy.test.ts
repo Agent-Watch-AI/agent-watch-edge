@@ -15,7 +15,10 @@ describe('enterprise privacy migration', () => {
   let world: TempWorld;
 
   beforeEach(async () => { world = await makeTempEnv(); });
-  afterEach(async () => { await world.cleanup(); vi.restoreAllMocks(); });
+  afterEach(async () => {
+    await world.cleanup();
+    vi.restoreAllMocks();
+  });
 
   it('starts with metadata only and no consent', () => {
     expect(defaultConfig().capture).toEqual({ ...allCapture, prompts: false, responses: false, toolInput: false, toolOutput: false });

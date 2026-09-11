@@ -3,9 +3,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { enabledSignalNames, eventsUrl, otlpBaseUrl } from '../config/config.js';
+import { selectRoot } from '../config/root-config.js';
+import { enabledSignalNames, enforcementUrl, eventsUrl, otlpBaseUrl } from '../config/config.js';
 import { loadEffectiveConfig } from '../config/repo-config.js';
-import { CONTENT_CAPTURE_FLAGS } from '../config/constants/config.constants.js';
+import { CONTENT_CAPTURE_KEYS } from '../config/constants/config.constants.js';
 import type { AgentWatchConfig, CaptureConfig, OtelConfig, OtelSignalName } from '../config/types/config.types.js';
 import type { Env } from '../core/types/core.types.js';
 import { meetsMinVersion, parseVersion } from '../core/version.js';
@@ -13,10 +14,15 @@ import { findExecutable } from '../core/which.js';
 import { developerIdentity } from '../git/git-context.js';
 import { providers } from '../providers/registry.js';
 import type { AgentProvider, SetupContext } from '../providers/types/provider.types.js';
+import { SECRET_FILE_MODE } from '../storage/constants/storage.constants.js';
 import { unattributedCount, unattributedQueue } from '../transport/queue-partition.js';
-import { buildCliContext, buildHookCommand, buildQueue } from './context.js';
+import { AUTH_REJECTED_STATUSES, CONTENT_TYPE_HEADER, JSON_CONTENT_TYPE } from '../transport/constants/transport.constants.js';
+import { discardResponseBody } from '../transport/response-body.js';
+import { edgeHeaders } from '../transport/headers.js';
+import { buildAuthBlock, buildCliContext, buildHookCommand, buildQueue } from './context.js';
 import { installedHookChecks } from './hook-check.js';
 import {
+  BACKEND_CONNECTIVITY_CHECK,
   BACKEND_PROBE_TIMEOUT_MS,
   CLAUDE_MIN_VERSION_FOR_PROMPT_ID,
   CLAUDE_VERSION_TIMEOUT_MS,
@@ -52,6 +58,7 @@ export async function runDoctor(env: Env, options: DoctorOptions = {}): Promise<
     nodeVersionCheck(),
     configurationCheck(context),
     ...endpointChecks(context),
+    enforcementCheck(context),
     await developerIdentityCheck(env, context, options),
     ...(await connectivityChecks(context)),
     await gitCheck(),
@@ -151,24 +158,102 @@ function nodeVersionCheck(): Check {
  * @returns The check.
  */
 function configurationCheck(context: CliContext): Check {
+  // The state first, because `loadConfig` attaches warnings to an *invalid*
+  // result too: a file with both a refused URL and a genuinely fatal error —
+  // a `schemaVersion` from a downgrade, a `maxAttempts` a templating tool sent
+  // as a string — would otherwise report only the URL, and never the fact that
+  // the runtime is on `fallbackConfig()` with no token, no installation id and
+  // the backlog orphaned. The developer fixes the URL, re-runs, and reads the
+  // same line. `status.ts` orders these the same way.
+  if (context.configState === 'invalid') {
+    return { name: 'configuration', level: 'fail', detail: [context.configError, ...context.configWarnings].join('; ') };
+  }
+
+  // Then a refused field: the file parsed, so every other check reads healthy
+  // while one destination receives nothing.
+  if (context.configWarnings.length > 0) return { name: 'configuration', level: 'fail', detail: `${context.paths.configFile}: ${context.configWarnings.join('; ')}` };
+
   if (context.configState === 'ok') return { name: 'configuration', level: 'ok', detail: context.paths.configFile };
 
-  if (context.configState === 'missing') return { name: 'configuration', level: 'warn', detail: 'not found — run `agentwatch setup`' };
-
-  return { name: 'configuration', level: 'fail', detail: context.configError };
+  return { name: 'configuration', level: 'warn', detail: 'not found — run `agentwatch setup`' };
 }
 
 /**
  * Whether a backend and a token are configured. Never reveals the token.
  *
+ * The *rooted* identity, and it says so when a root produced it: a diagnostic
+ * that names the machine-global endpoint while the hooks in this directory send
+ * somewhere else on another token is a diagnostic of an install nobody is
+ * running.
+ *
  * @param context - Resolved CLI context.
  * @returns The checks.
  */
 function endpointChecks(context: CliContext): Check[] {
+  const config = context.identityConfig;
+  const via = context.identityRoot === undefined ? '' : ` (root ${context.identityRoot})`;
+
   return [
-    { name: 'backend endpoint', level: context.config.endpoint ? 'ok' : 'warn', detail: context.config.endpoint ?? 'not configured' },
-    { name: 'auth token', level: 'ok', detail: context.config.token ? 'present (hidden)' : 'none configured' }
+    { name: 'backend endpoint', level: config.endpoint ? 'ok' : 'warn', detail: endpointDetail(config.endpoint, via) },
+    { name: 'auth token', level: 'ok', detail: config.token ? `present (hidden)${via}` : 'none configured' }
   ];
+}
+
+// A refused root must never expose its bearer to machine enforcement, but the
+// resulting lack of budget checks must be an explicit failure in diagnostics.
+function enforcementCheck(context: CliContext): Check {
+  const name = 'budget enforcement';
+  const config = context.identityConfig;
+  const via = context.identityRoot === undefined ? '' : ` under root ${context.identityRoot}`;
+
+  if (context.disabled || !config.enforcement.enabled) return { name, level: 'warn', detail: 'disabled; budget caps are not enforced' };
+
+  if (!config.token) return { name, level: 'warn', detail: 'no credential configured; budget caps are not enforced' };
+
+  const url = enforcementUrl(config);
+
+  if (!url) return { name, level: 'fail', detail: `budget caps are not enforced${via}: no usable decision URL; fix the endpoint reported by the configuration check` };
+
+  const root = context.identityRoot === undefined ? undefined : selectRoot(context.config.roots, context.identityRoot)?.override;
+  const host = new URL(url).host;
+
+  // Compare destinations, not which fields happened to be present. An own
+  // base states policy intent; otherwise explicit telemetry routes identify
+  // the root's hosts, falling back to the shared machine base for token-only roots.
+  const routes = root?.endpoint ? [root.endpoint] : [root?.eventsUrl, root?.otlpUrl].filter((value): value is string => Boolean(value));
+  const expected = routes.length > 0 ? routes : [context.config.endpoint];
+  // `none match`, not `any differs`: a root with a split ingest - events to the backend, OTLP
+  // to its own collector - declares two hosts, and the decision host can only be one of them.
+  // Asking whether any route differs calls that layout foreign while the decision host is the
+  // root's own events host, and then advises setting `endpoint`, which would collapse the split.
+  // The credential is somewhere it was never pointed at only when nothing the root declared matches.
+  const foreignPolicy = !expected.some((value) => value && new URL(value).host === host);
+
+  if (root && foreignPolicy) {
+    return { name, level: 'warn', detail: `budget decisions at ${host} use this root's credential${via}; set this root's endpoint if budget checks belong elsewhere` };
+  }
+
+  return { name, level: 'ok', detail: `decision route at ${host}${via}; request failures allow turns` };
+}
+
+/**
+ * How the endpoint reads in the report when there is no URL to print.
+ *
+ * Three states, not two: `undefined` is "nothing was ever configured", `null`
+ * is "a URL was written here and the edge refuses to talk to it". Printing the
+ * latter through the same branch as a real URL interpolated the literal string
+ * `null` into a report an install script parses.
+ *
+ * @param endpoint - The rooted identity's endpoint, as parsed.
+ * @param via - Suffix naming the root, empty for the machine identity.
+ * @returns The detail line.
+ */
+function endpointDetail(endpoint: string | null | undefined, via: string): string {
+  if (endpoint === undefined) return 'not configured';
+
+  if (endpoint === null) return `refused — see the configuration check${via}`;
+
+  return `${endpoint}${via}`;
 }
 
 /**
@@ -185,7 +270,7 @@ function endpointChecks(context: CliContext): Check[] {
  * @returns The check.
  */
 async function developerIdentityCheck(env: Env, context: CliContext, options: DoctorOptions): Promise<Check> {
-  const identity = await developerIdentity(context.config.developerEmail, env.cwd, { home: env.home, run: options.gitRun });
+  const identity = await developerIdentity(context.identityConfig.developerEmail, env.cwd, { home: env.home, run: options.gitRun });
 
   if (!identity) return { name: DEVELOPER_IDENTITY_CHECK, level: 'fail', detail: `${NO_DEVELOPER_IDENTITY}; ${DEVELOPER_IDENTITY_REMEDIES}` };
 
@@ -205,11 +290,14 @@ async function connectivityChecks(context: CliContext): Promise<Check[]> {
   if (context.disabled) return [];
 
   const checks: Check[] = [];
-  const url = eventsUrl(context.config);
+  // The rooted URL, probed with the rooted token: a 2xx here is what lifts a
+  // standing block, and the only credential whose proof may lift a block is the
+  // one the block was raised against.
+  const url = eventsUrl(context.identityConfig);
 
-  if (url) checks.push(await probeBackend(url));
+  checks.push(url ? await probeBackend(url, context) : { name: BACKEND_CONNECTIVITY_CHECK, level: 'warn', detail: noBackendDetail(context) });
 
-  const otlp = otlpBaseUrl(context.config);
+  const otlp = otlpBaseUrl(context.identityConfig);
 
   if (otlp) checks.push({ name: 'OTLP base URL', level: 'ok', detail: otlp });
 
@@ -217,23 +305,73 @@ async function connectivityChecks(context: CliContext): Promise<Check[]> {
 }
 
 /**
- * Post an empty batch and report what came back.
+ * Why there is nothing to probe.
+ *
+ * A root that names a destination of its own does not inherit the machine's
+ * routes, so a root that named only its OTLP base has no events route at all —
+ * a deliberate stop, but one that read as an unconfigured machine while the
+ * line above printed this root's endpoint. `agentwatch setup` is the wrong
+ * remedy for it too: re-running under the root writes the machine's endpoint
+ * into the entry, which stops it naming a destination of its own and quietly
+ * makes it a second seat on the machine's backend.
+ *
+ * @param context - Resolved CLI context.
+ * @returns The detail line.
+ */
+function noBackendDetail(context: CliContext): string {
+  if (context.identityRoot === undefined) return 'no backend configured yet — run `agentwatch setup`';
+
+  if (context.identityConfig.endpoint === null) return `root ${context.identityRoot} has a refused endpoint and no events route — fix the refused endpoint, see the configuration check`;
+
+  if (context.identityConfig.eventsUrl === null) return `root ${context.identityRoot} has no usable eventsUrl — check the configuration warnings or set an events route on this root`;
+
+  return `root ${context.identityRoot} names a backend of its own and no events route to it — set "eventsUrl" or "endpoint" on that root, or remove its other URL to inherit the machine's`;
+}
+
+/**
+ * Post an empty batch as the configured install, and say what came back.
+ *
+ * Authenticated on purpose: an anonymous probe answers a question nobody asked.
+ * It made a healthy install whose backend requires auth *warn* on 401, and made
+ * the single most common misconfiguration — a wrong, expired or revoked token —
+ * indistinguishable from success. Sending the same headers a real delivery
+ * sends is what makes the verdict a statement about *this* install.
+ *
+ * It runs whatever the local state says, block or no block: the diagnostic is
+ * the operator asking the backend a direct question, and must never be answered
+ * from a cache. A 2xx is therefore also the proof that lifts a standing block.
  *
  * @param url - The events URL.
+ * @param context - Resolved CLI context, for the credential and the block.
  * @returns The check.
  */
-async function probeBackend(url: string): Promise<Check> {
+async function probeBackend(url: string, context: CliContext): Promise<Check> {
+  const name = BACKEND_CONNECTIVITY_CHECK;
+
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { [CONTENT_TYPE_HEADER]: JSON_CONTENT_TYPE, ...edgeHeaders(context.identityConfig.token, context.identityConfig.installationId) },
       body: JSON.stringify({ events: [] }),
+      redirect: 'error',
       signal: AbortSignal.timeout(BACKEND_PROBE_TIMEOUT_MS)
     });
 
-    return { name: 'backend connectivity', level: response.ok ? 'ok' : 'warn', detail: `${url} -> HTTP ${response.status}` };
+    discardResponseBody(response);
+
+    if (response.ok) {
+      await buildAuthBlock(context).clear();
+
+      return { name, level: 'ok', detail: `${url} -> HTTP ${response.status}` };
+    }
+
+    if (AUTH_REJECTED_STATUSES.has(response.status)) {
+      return { name, level: 'fail', detail: `${url} -> HTTP ${response.status}: credential rejected — the configured token is wrong, expired or revoked` };
+    }
+
+    return { name, level: 'warn', detail: `${url} -> HTTP ${response.status}` };
   } catch (error) {
-    return { name: 'backend connectivity', level: 'fail', detail: `${url} unreachable (${(error as Error).name})` };
+    return { name, level: 'fail', detail: `${url} unreachable (${(error as Error).name})` };
   }
 }
 
@@ -450,7 +588,7 @@ async function repositoryChecks(env: Env, context: CliContext): Promise<Check[]>
     // Repo overrides are best-effort; their absence is not a finding.
   }
 
-  const enabled = CONTENT_CAPTURE_FLAGS.filter((flag) => capture[flag]);
+  const enabled = CONTENT_CAPTURE_KEYS.filter((flag) => capture[flag]);
 
   checks.push({
     name: 'privacy',
@@ -477,7 +615,12 @@ async function writableCheck(name: string, dir: string): Promise<Check> {
 
     const probe = path.join(dir, `.probe-${process.pid}`);
 
-    await fs.writeFile(probe, 'ok');
+    // `rm` then an exclusive create: `rm` unlinks a symlink rather than
+    // following it, and `wx` refuses to write through one that appears in
+    // between. The data root can be a shared directory — `AGENTWATCH_DATA_DIR`
+    // decides — and this is the one write the diagnostic makes.
+    await fs.rm(probe, { force: true });
+    await fs.writeFile(probe, 'ok', { flag: 'wx', mode: SECRET_FILE_MODE });
     await fs.rm(probe, { force: true });
 
     return { name, level: 'ok', detail: dir };

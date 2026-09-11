@@ -2,7 +2,7 @@ import { omitKeys } from '../../core/object.js';
 import type { AgentInstallState, InstallState } from '../../storage/types/storage.types.js';
 
 /** What one hook installation recorded about itself. */
-export interface HookInstallRecord {
+interface HookInstallRecord {
   readonly hookConfigPath: string;
   readonly hookEvents: readonly string[];
   readonly hookCommand: string;
@@ -82,11 +82,20 @@ export function withoutAgent(state: InstallState, agentId: string): InstallState
 }
 
 /** What one native-telemetry configuration recorded about itself. */
-export interface OtelInstallRecord {
+interface OtelInstallRecord {
   readonly configPath: string;
   /** Config keys AgentWatch now owns, and may therefore remove later. */
   readonly ownedKeys: readonly string[];
   readonly configuredAt: Date;
+  /**
+   * Permission bits the file had before this write tightened it.
+   *
+   * The agent's config file is not ours, and `writeFileAtomic` preserves the
+   * target's current mode by design — so tightening it once would otherwise
+   * keep it tightened forever, including after the token is gone. Recording
+   * the old bits is what makes the change reversible.
+   */
+  readonly priorMode?: number;
 }
 
 /**
@@ -114,7 +123,10 @@ export function withOtelInstall(state: InstallState, agentId: string, record: Ot
         notes: previous?.notes ?? [],
         otelConfiguredAt: record.configuredAt.toISOString(),
         otelConfigPath: record.configPath,
-        otelOwnedKeys: [...new Set(record.ownedKeys)]
+        otelOwnedKeys: [...new Set(record.ownedKeys)],
+        // First tightening wins: a second configure must not record the 0600 we
+        // ourselves left behind as the file's original mode.
+        ...(record.priorMode !== undefined && previous?.otelPriorMode === undefined ? { otelPriorMode: record.priorMode } : {})
       }
     }
   };
@@ -136,7 +148,7 @@ export function withoutOtelInstall(state: InstallState, agentId: string): Instal
     ...state,
     agents: {
       ...state.agents,
-      [agentId]: { ...omitKeys(previous, new Set(['otelConfiguredAt'])), otelOwnedKeys: [] }
+      [agentId]: { ...omitKeys(previous, new Set(['otelConfiguredAt', 'otelPriorMode'])), otelOwnedKeys: [] }
     }
   };
 }

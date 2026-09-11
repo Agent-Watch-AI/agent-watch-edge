@@ -5,7 +5,7 @@ import { detectCursor, cursorHooksJsonPath } from '../src/providers/cursor/curso
 import { installCursorHooks, uninstallCursorHooks, CURSOR_HOOK_EVENTS } from '../src/providers/cursor/cursor.hooks.js';
 import { parseCursorHookEvent } from '../src/providers/cursor/cursor.adapter.js';
 import { cursorProvider } from '../src/providers/cursor/cursor.provider.js';
-import { getProvider } from '../src/providers/registry.js';
+import { loadProvider } from '../src/providers/loaders.js';
 import { isAgentWatchHookCommand, type HookContext, type SetupContext } from '../src/providers/provider.js';
 import { readCursorTurnUsage } from '../src/turns/cursor-transcript.js';
 import { resolvePaths } from '../src/storage/paths.js';
@@ -262,8 +262,8 @@ describe('Cursor adapter', () => {
 });
 
 describe('Cursor provider wiring', () => {
-  it('is registered and returns the safe silent hook response', () => {
-    expect(getProvider('cursor')).toBe(cursorProvider);
+  it('is registered and returns the safe silent hook response', async () => {
+    expect(await loadProvider('cursor')).toBe(cursorProvider);
     expect(cursorProvider.getHookResponse({})).toEqual({ exitCode: 0 });
     expect(cursorProvider.nativeTelemetry).toBeUndefined();
   });

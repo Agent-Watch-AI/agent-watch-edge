@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sanitizeText, sanitizeValue } from '../src/privacy/sanitizer.js';
-import { REDACTED } from '../src/privacy/constants/privacy.constants.js';
+import { MAX_STRING_LENGTH, REDACTED } from '../src/privacy/constants/privacy.constants.js';
 
 describe('sanitizeText', () => {
   it('redacts API keys and tokens', () => {
@@ -15,6 +15,71 @@ describe('sanitizeText', () => {
 
     expect(out).toContain('Bearer');
     expect(out).not.toContain('abc.def-ghi_jkl123');
+  });
+
+  // Truncating before redacting cut a straddling credential short, so no pattern
+  // matched it any more and the surviving prefix shipped in the clear. `sk-`
+  // needs 16 characters after it, and a JWT needs its third segment: the header
+  // and payload of a JWT cut mid-signature base64url-decode to the claims the
+  // sanitizer exists to keep off the wire.
+  it('redacts a credential that straddles the length cap', () => {
+    const key = 'sk-ABCDEFGHIJKLMNOPQRSTUV';
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZGFAYWNtZS50ZXN0In0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+
+    for (const secret of [key, jwt]) {
+      // A space, because every pattern anchors on `\b` and a credential glued to
+      // a word character was never matched in the first place. The cap then
+      // lands nine characters into the secret, where every pattern's minimum
+      // length is still unmet.
+      const out = sanitizeText('x'.repeat(MAX_STRING_LENGTH - 10) + ' ' + secret);
+
+      expect(out.length).toBeLessThanOrEqual(MAX_STRING_LENGTH);
+      // What survives the cap is the head of the marker, never the head of the
+      // credential: the replacement happened before the slice.
+      expect(REDACTED.startsWith(out.slice(MAX_STRING_LENGTH - 9))).toBe(true);
+      expect(out).not.toContain(secret.slice(0, 12));
+      expect(out).not.toContain('eyJzdWIi');
+    }
+  });
+
+  // The scheme bound is what makes scrubbing the whole string affordable; the
+  // userinfo groups must stay unbounded. Under a `{1,256}` ceiling a 300-character
+  // URL password went out in the clear, and a signed URL, a service-account
+  // secret or a JWT used as a password is routinely longer than that.
+  it('redacts a URL credential far longer than any sane ceiling', () => {
+    for (const length of [200, 400, 2_000]) {
+      const secret = 'p'.repeat(length);
+      const out = sanitizeText(`connecting postgres://svc_user:${secret}@db.internal.example.com:5432/prod`);
+
+      expect(out, `${String(length)} chars`).not.toContain('pppppppppppppppppppp');
+      expect(out).toContain(REDACTED);
+      expect(out).toContain('@db.internal.example.com:5432/prod');
+    }
+
+    // The same for a long username with no password at all.
+    const user = 'u'.repeat(400);
+
+    expect(sanitizeText(`https://${user}:pw@h.example.com`)).not.toContain('uuuuuuuuuuuuuuuuuuuu');
+  });
+
+  // The bound that makes scrubbing the whole string affordable. `url-credentials`
+  // was quadratic in the input — 1.8s on one 64KiB prompt — and it runs on the
+  // agent's hook path. The adversarial shape is a scheme followed by a long run
+  // with no `@` to end it, which is what forced the backtracking.
+  it('scrubs a large string in linear time', () => {
+    const started = Date.now();
+
+    sanitizeText('http://' + 'x'.repeat(200_000));
+
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('scrubs a large string with no scheme in it in linear time', () => {
+    const started = Date.now();
+
+    sanitizeText('x'.repeat(200_000));
+
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 
   it('redacts JWTs', () => {
@@ -67,5 +132,43 @@ describe('sanitizeValue', () => {
     const input = { count: 3, ok: true, list: [1, 2, 3], when: null };
 
     expect(sanitizeValue(input)).toEqual(input);
+  });
+});
+
+describe('sanitizeValue on object keys', () => {
+  it('scrubs a secret that sits in a key, not only in a value', () => {
+    const out = sanitizeValue({ 'sk-abcdefghijklmnopqrstuvwx': 'value', note: 'see sk-abcdefghijklmnopqrstuvwx' });
+
+    expect(JSON.stringify(out)).not.toContain('sk-abcdefghijklmnopqrstuvwx');
+    expect(Object.keys(out)).toContain('note');
+  });
+
+  it('scrubs a secret key whose value is not a string', () => {
+    expect(JSON.stringify(sanitizeValue({ ghp_abcdefghijklmnopqrstuv123456: 1 }))).not.toContain('ghp_abcdefghijklmnopqrstuv123456');
+  });
+
+  it('keeps both entries when two distinct keys redact to the same string', () => {
+    const out = sanitizeValue({ ghp_abcdefghijklmnopqrstuv123456: 1, ghp_zyxwvutsrqponmlkjihg654321: 2 });
+    const values = Object.values(out);
+
+    expect(Object.keys(out)).toHaveLength(2);
+    expect(values).toContain(1);
+    expect(values).toContain(2);
+  });
+
+  it('still drops the value under a sensitive key after the key itself is scrubbed', () => {
+    const out = sanitizeValue({ 'authorization-ghp_abcdefghijklmnopqrstuv123456': 'Bearer topsecrettoken' });
+
+    expect(Object.values(out)).toEqual([REDACTED]);
+    expect(JSON.stringify(out)).not.toContain('ghp_abcdefghijklmnopqrstuv123456');
+  });
+
+  it('keeps a __proto__ own key instead of silently dropping it, and does not retarget the copy', () => {
+    const input = JSON.parse('{"__proto__":{"polluted":1},"a":2}') as Record<string, unknown>;
+    const out = sanitizeValue(input) as Record<string, unknown> & { polluted?: unknown };
+
+    expect(Object.keys(out)).toEqual(['__proto__', 'a']);
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype);
+    expect(out.polluted).toBeUndefined();
   });
 });

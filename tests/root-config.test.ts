@@ -1,11 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { makeTempEnv, writeJson, type TempWorld } from './helpers.js';
 import { applyRootOverride, selectRoot, servesMultipleIdentities } from '../src/config/root-config.js';
+import { configSchema } from '../src/config/schemas/config.schema.js';
 import { loadEffectiveConfig } from '../src/config/repo-config.js';
-import { defaultConfig } from '../src/config/config.js';
+import { defaultConfig, enforcementUrl, eventsUrl, otlpBaseUrl } from '../src/config/config.js';
 import { resolvePaths } from '../src/storage/paths.js';
+import { makeTempEnv, writeJson, type TempWorld } from './helpers.js';
 
 const TRIP = '/Users/dev/tripPlanner';
 const WATCH = '/Users/dev/agent watch';
@@ -142,5 +143,139 @@ describe('effective config for two tenants on one machine', () => {
     // Both tenants share one backend; only the bearer differs.
     expect(fromTrip.config.endpoint).toBe('https://backend.example.com');
     expect(fromWatch.config.endpoint).toBe('https://backend.example.com');
+  });
+});
+
+// The three URL fields have to move as a set. `eventsUrl()` and `otlpBaseUrl()`
+// prefer their own field and only fall back to `endpoint`, so a machine that
+// splits its routes across hosts — the deployment the overrides exist for — laid
+// two explicit strings under every root, and they won before the root's own
+// endpoint was ever consulted. Every prompt, response and branch name under that
+// root went to the machine's ingest under the root's own bearer, and the
+// `otel-headers` guard (which withholds the bearer when the two OTLP bases
+// differ) compared equal, so the credential crossed too.
+describe('a root that names a backend does not inherit the machine\'s routes', () => {
+  const REPO = '/Users/dev/clientA';
+
+  function rooted(override: Record<string, unknown>) {
+    const config = configSchema.parse({
+      endpoint: 'https://mycorp.example.com',
+      eventsUrl: 'https://ingest.mycorp.example.com/v1/events',
+      otlpUrl: 'https://otlp.mycorp.example.com',
+      token: 'tok-machine',
+      roots: { [REPO]: override }
+    });
+
+    return { global: config, config: applyRootOverride(config, REPO).config };
+  }
+
+  // Only the two route fields are cleared. `enforcementUrl` has no `roots[]`
+  // field and derives from `endpoint`, and no decision URL means ALLOW — so
+  // clearing `endpoint` switched every `block` cap off under a root that named
+  // nothing but its own ingest, on a tenant delivering events perfectly well.
+  it('leaves the machine\'s endpoint standing, so enforcement still asks', () => {
+    const { config } = rooted({ eventsUrl: 'https://ingest.clientc.example.com/v1/events', token: 'tok-c' });
+
+    expect(eventsUrl(config)).toBe('https://ingest.clientc.example.com/v1/events');
+    expect(enforcementUrl(config)).toBe('https://mycorp.example.com/v1/enforcement/decision');
+  });
+
+  // `setup --root` always writes `endpoint` — the machine's own unless
+  // `--endpoint` says otherwise — so keying on a present key took the machine's
+  // split routes away from every second seat ever enrolled through the CLI.
+  it('keeps inheriting for a root that repeats the machine\'s endpoint', () => {
+    const { global, config } = rooted({ endpoint: 'https://mycorp.example.com', token: 'tok-seat2' });
+
+    expect(eventsUrl(config)).toBe(eventsUrl(global));
+    expect(otlpBaseUrl(config)).toBe(otlpBaseUrl(global));
+  });
+
+  it.each(['https://mycorp.example.com', 'https://mycorp.example.com/'])('shares split routes for equivalent base %s', (endpoint) => {
+    const { global, config } = rooted({ endpoint, token: 'tok-seat2' });
+
+    expect(eventsUrl(config)).toBe(eventsUrl(global));
+    expect(otlpBaseUrl(config)).toBe(otlpBaseUrl(global));
+  });
+
+  it.each(['https://clienta.example.com', 'http://refused.internal'])('does not send a foreign root bearer to machine enforcement for %s', (endpoint) => {
+    const global = configSchema.parse({ endpoint: 'https://machine.example.com', enforcementUrl: 'https://policy.machine.example.com/decision', token: 'machine', roots: { [REPO]: { endpoint, token: 'foreign' } } });
+    const config = applyRootOverride(global, REPO).config;
+
+    expect(enforcementUrl(config)).not.toBe(enforcementUrl(global));
+    expect(enforcementUrl(config)).toBe(endpoint.startsWith('https:') ? 'https://clienta.example.com/v1/enforcement/decision' : undefined);
+  });
+
+  // With `endpoint` left standing, clearing the routes to `undefined` was a
+  // no-op: both accessors fall back to it, so whichever field the root did not
+  // name came straight back from the machine's backend under the root's bearer.
+  it('gives a root that names one route no fallback for the other', () => {
+    const events = rooted({ eventsUrl: 'https://ingest.clientc.example.com/v1/events', token: 'tok-c' });
+
+    expect(eventsUrl(events.config)).toBe('https://ingest.clientc.example.com/v1/events');
+    expect(otlpBaseUrl(events.config)).toBeUndefined();
+
+    const otlp = rooted({ otlpUrl: 'https://otlp.clientc.example.com', token: 'tok-c' });
+
+    expect(otlpBaseUrl(otlp.config)).toBe('https://otlp.clientc.example.com');
+    expect(eventsUrl(otlp.config)).toBeUndefined();
+  });
+
+  // Two refusals compare equal, so a value test alone read a root whose own
+  // endpoint was refused as a second seat on a machine whose endpoint was
+  // refused too — and handed it every live route the machine had.
+  it('treats a refused root endpoint as a backend of its own, not as the machine\'s', () => {
+    const config = configSchema.parse({
+      endpoint: 'http://collector.corp:4318',
+      eventsUrl: 'https://ingest.mycorp.example.com/v1/events',
+      token: 'tok-machine',
+      roots: { [REPO]: { endpoint: 'http://collector.clienta.internal', token: 'tok-c' } }
+    });
+    const rootedConfig = applyRootOverride(config, REPO).config;
+
+    expect(rootedConfig.token).toBe('tok-c');
+    expect(eventsUrl(rootedConfig)).toBeUndefined();
+  });
+
+  it('sends nowhere when the root\'s own endpoint was refused', () => {
+    const { global, config } = rooted({ endpoint: 'http://collector.clienta.internal', token: 'tok-client-a' });
+
+    expect(config.token).toBe('tok-client-a');
+    expect(eventsUrl(config)).toBeUndefined();
+    expect(otlpBaseUrl(config)).toBeUndefined();
+    expect(otlpBaseUrl(config)).not.toBe(otlpBaseUrl(global));
+  });
+
+  // The same leak with no refusal involved: a root with a perfectly good
+  // endpoint of its own still shipped to the machine's explicit routes.
+  it('derives from the root\'s own endpoint, not the machine\'s routes', () => {
+    const { global, config } = rooted({ endpoint: 'https://clienta.example.com', token: 'tok-client-a' });
+
+    expect(eventsUrl(config)).toBe('https://clienta.example.com/v1/events');
+    expect(otlpBaseUrl(config)).not.toBe(otlpBaseUrl(global));
+  });
+
+  // A root that names no URL is a second seat on the same backend, which is
+  // what most `roots[]` entries are. It must still inherit the destination.
+  it('leaves the machine\'s routes alone for a root that names no backend', () => {
+    const { global, config } = rooted({ token: 'tok-second-seat' });
+
+    expect(eventsUrl(config)).toBe(eventsUrl(global));
+    expect(otlpBaseUrl(config)).toBe(otlpBaseUrl(global));
+  });
+});
+
+// `enforcementUrl` is the one accessor a refusal must not make sticky: no URL
+// to ask means `resolveEnforcement` answers ALLOW, so one `http:` line in a
+// field nobody uses would switch every `block` cap on the machine off silently.
+describe('a refused enforcement URL does not switch enforcement off', () => {
+  it('derives the decision route from the validated endpoint', () => {
+    const config = configSchema.parse({
+      endpoint: 'https://backend.example.com',
+      enforcementUrl: 'http://enforcement.corp/v1/decision',
+      token: 'tok'
+    });
+
+    expect(config.enforcementUrl).toBeNull();
+    expect(enforcementUrl(config)).toContain('https://backend.example.com');
   });
 });

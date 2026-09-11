@@ -14,6 +14,7 @@ import { developerIdentity, runGit } from '../git/git-context.js';
 import { runSnapshotPipeline } from '../snapshot/snapshot-pipeline.js';
 import { SnapshotStateStore } from '../snapshot/snapshot-state.js';
 import { SNAPSHOT_BUDGET_MS } from '../snapshot/constants/snapshot.constants.js';
+import { BackendAuthBlock } from '../transport/auth-block.js';
 import { BackendCooldown } from '../transport/cooldown.js';
 import { DeliveryStats } from '../transport/delivery-stats.js';
 import { deliverEvents } from '../transport/delivery.js';
@@ -77,7 +78,7 @@ export function runHookPipeline(input: HookPipelineInput): Promise<FlowResult<Ho
   const initial: HookPipelineState = {
     ...input,
     cwd: resolvePayloadCwd(input),
-    config: input.globalConfig,
+    config: input.globalConfig.config,
     events: [],
     outbound: []
   };
@@ -99,7 +100,7 @@ export function runHookPipeline(input: HookPipelineInput): Promise<FlowResult<Ho
  * @returns The state with its effective config resolved.
  */
 async function resolveContext(state: HookPipelineState): Promise<StepOutcome<HookPipelineState>> {
-  const effective = await loadEffectiveConfig(state.paths, state.cwd);
+  const effective = await loadEffectiveConfig(state.paths, state.cwd, state.globalConfig);
 
   return next({ ...state, config: effective.config });
 }
@@ -298,7 +299,7 @@ async function deliver(state: HookPipelineState): Promise<StepOutcome<HookPipeli
 
   // `globalConfig`, not `config`: roots are stripped from the effective config
   // once applied, and the question is what the *machine* sends as.
-  await settleLegacyQueue(state.paths.queueDir, state.config.token, servesMultipleIdentities(state.globalConfig));
+  await settleLegacyQueue(state.paths.queueDir, state.config.token, servesMultipleIdentities(state.globalConfig.config));
 
   const identity = identityPaths(state.paths, state.config.token);
   const delivery = await deliverEvents(
@@ -307,7 +308,8 @@ async function deliver(state: HookPipelineState): Promise<StepOutcome<HookPipeli
     buildQueue(state),
     state.config.delivery.drainBatchSize,
     new BackendCooldown(identity.cooldownFile, state.env.now),
-    new DeliveryStats(identity.statsFile, state.env.now, state.paths.locksDir)
+    new DeliveryStats(identity.statsFile, state.env.now, state.paths.locksDir),
+    new BackendAuthBlock(identity.authBlockFile, state.env.now)
   );
 
   debugLog(`delivery: sent=${delivery.delivered} queued=${delivery.queued} drained=${delivery.drained} rejected=${delivery.rejected}`);
@@ -367,13 +369,18 @@ async function snapshot(state: HookPipelineState): Promise<StepOutcome<HookPipel
  * @returns A queue bound to this run's paths and delivery limits.
  */
 function buildQueue(state: HookPipelineState): EventQueue {
+  const identity = identityPaths(state.paths, state.config.token);
+
   return new EventQueue({
-    queueDir: identityPaths(state.paths, state.config.token).queueDir,
+    queueDir: identity.queueDir,
     locksDir: state.paths.locksDir,
     maxEvents: state.config.delivery.maxQueueEvents,
     maxAttempts: state.config.delivery.maxAttempts,
     maxEventAgeDays: state.config.delivery.maxEventAgeDays,
-    now: state.env.now
+    now: state.env.now,
+    // So the entries the bound sacrifices are counted wherever an enqueue
+    // happens, the snapshot pipeline's included.
+    stats: new DeliveryStats(identity.statsFile, state.env.now, state.paths.locksDir)
   });
 }
 
@@ -393,7 +400,8 @@ function buildTransport(state: HookPipelineState): EventTransport | undefined {
     capture: state.config.capture,
     token: state.config.token,
     installationId: state.config.installationId,
-    timeoutMs: state.config.delivery.timeoutMs
+    timeoutMs: state.config.delivery.timeoutMs,
+    budgetMs: state.config.delivery.timeoutMs
   });
 }
 

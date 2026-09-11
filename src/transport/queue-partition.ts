@@ -4,6 +4,7 @@ import { debugLog } from '../core/logger.js';
 import { sha256Hex } from '../events/event-id.js';
 import type { AgentWatchPaths } from '../storage/types/storage.types.js';
 import {
+  AUTH_BLOCK_FILE_NAME,
   COOLDOWN_FILE_NAME,
   DELIVERY_STATS_FILE_NAME,
   IDENTITY_FINGERPRINT_CHARS,
@@ -21,6 +22,8 @@ export interface IdentityPaths {
   readonly cooldownFile: string;
   /** Its permanent-loss tally. */
   readonly statsFile: string;
+  /** Its standing credential refusal, when the backend raised one. */
+  readonly authBlockFile: string;
 }
 
 /**
@@ -48,10 +51,11 @@ export function queuePartition(queueRoot: string, token: string | undefined): st
 }
 
 /**
- * Where one identity's delivery lives: queue partition, backend cooldown and
- * loss tally. All three per identity for the same reason — one tenant's backend
- * outage must not put the other tenant's hooks into cooldown, and `status` must
- * not report two tenants' losses as one number.
+ * Where one identity's delivery lives: queue partition, backend cooldown, loss
+ * tally and credential block. All four per identity for the same reason — one
+ * tenant's backend outage must not put the other tenant's hooks into cooldown,
+ * one tenant's revoked token must not suspend the other tenant's sends, and
+ * `status` must not report two tenants' losses as one number.
  *
  * @param paths - The machine's paths.
  * @param token - Bearer this invocation would send with, when there is one.
@@ -63,7 +67,8 @@ export function identityPaths(paths: AgentWatchPaths, token: string | undefined)
   return {
     queueDir: queuePartition(paths.queueDir, token),
     cooldownFile: path.join(stateDir, COOLDOWN_FILE_NAME),
-    statsFile: path.join(stateDir, DELIVERY_STATS_FILE_NAME)
+    statsFile: path.join(stateDir, DELIVERY_STATS_FILE_NAME),
+    authBlockFile: path.join(stateDir, AUTH_BLOCK_FILE_NAME)
   };
 }
 

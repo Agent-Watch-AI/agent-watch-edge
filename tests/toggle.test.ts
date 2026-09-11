@@ -11,7 +11,7 @@ import { runConfig, runOtelHeaders } from '../src/cli/misc.js';
 import { runStatus } from '../src/cli/status.js';
 import { runDoctor } from '../src/cli/doctor.js';
 import { queuePartition } from '../src/transport/queue-partition.js';
-import { getProvider } from '../src/providers/registry.js';
+import { loadProvider } from '../src/providers/loaders.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { disabledFile, isDisabled } from '../src/storage/disabled.js';
 import { defaultConfig } from '../src/config/config.js';
@@ -36,7 +36,10 @@ describe('local off switch', () => {
     });
     expect(await runSetup({ env: world.env, endpoint: 'https://example.com', token: 'test-token', developerEmail: 'dev@example.com', yes: true, hookCommandFor: (id) => `agentwatch hook --agent ${id}` })).toBe(0);
   });
-  afterEach(async () => { await world.cleanup(); vi.restoreAllMocks(); });
+  afterEach(async () => {
+    await world.cleanup();
+    vi.restoreAllMocks();
+  });
 
   it('repeated off/on preserves hooks, config, queue and unrelated settings', async () => {
     const paths = resolvePaths(world.env);
@@ -203,7 +206,7 @@ describe('local off switch', () => {
   });
 
   it('a disabled hook that throws still answers the agent', async () => {
-    const provider = getProvider('antigravity');
+    const provider = await loadProvider('antigravity');
     const stdout = vi.mocked(process.stdout.write);
 
     await runToggle(world.env, false);

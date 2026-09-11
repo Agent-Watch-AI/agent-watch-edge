@@ -1,4 +1,4 @@
-import type { AgentWatchConfig } from '../../config/types/config.types.js';
+import type { AgentWatchConfig, ConfigLoadResult } from '../../config/types/config.types.js';
 import type { Env } from '../../core/types/core.types.js';
 import type { AgentWatchEvent } from '../../events/types/events.types.js';
 import type { AgentProvider } from '../../providers/types/provider.types.js';
@@ -11,8 +11,15 @@ export interface HookPipelineInput {
   readonly provider: AgentProvider;
   readonly env: Env;
   readonly paths: AgentWatchPaths;
-  /** The machine-global configuration, before the repository overlay. */
-  readonly globalConfig: AgentWatchConfig;
+  /**
+   * The machine-global configuration as loaded, before the repository overlay.
+   *
+   * The load *result*, not just the config: the repository overlay is refused
+   * outright when the global file is missing or corrupt, so the stage that
+   * applies it needs to know which — and carrying it here is what keeps the
+   * hook path down to one read of the file.
+   */
+  readonly globalConfig: ConfigLoadResult;
   /** Decoded hook payload. */
   readonly payload: unknown;
   /** Preview only: append nothing, consume nothing, send nothing. */

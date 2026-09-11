@@ -14,7 +14,7 @@ import { GEMINI_CLI_VAR, GEMINI_EXECUTABLES, GEMINI_HOME_DIR, GEMINI_HOME_VAR, G
  * @param env - Environment supplying HOME and GEMINI_HOME.
  * @returns `$GEMINI_HOME`, or `~/.gemini`.
  */
-export function geminiHome(env: Env): string {
+function geminiHome(env: Env): string {
   return env.vars[GEMINI_HOME_VAR] ?? path.join(env.home, GEMINI_HOME_DIR);
 }
 

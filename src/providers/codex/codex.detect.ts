@@ -13,7 +13,7 @@ import { CODEX_CONFIG_FILE, CODEX_EXECUTABLE, CODEX_HOME_DIR, CODEX_HOME_VAR, CO
  * @param env - Environment supplying HOME and CODEX_HOME.
  * @returns `$CODEX_HOME`, or `~/.codex`.
  */
-export function codexHome(env: Env): string {
+function codexHome(env: Env): string {
   return env.vars[CODEX_HOME_VAR] ?? path.join(env.home, CODEX_HOME_DIR);
 }
 

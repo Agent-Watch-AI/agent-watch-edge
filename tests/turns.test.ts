@@ -1,11 +1,13 @@
+import { execFileSync } from 'node:child_process';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import process from 'node:process';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { CONTENT_CAPTURE_ON, makeTempEnv, queueEntryFiles, writeJson, type TempWorld } from './helpers.js';
 import { readTurnUsage } from '../src/turns/claude-transcript.js';
 import { SESSION_MODEL_FILE } from '../src/turns/constants/turns.constants.js';
+import { SWEEP_MARKER_FILE } from '../src/storage/constants/storage.constants.js';
 import { parseCodexHookEvent } from '../src/providers/codex/codex.adapter.js';
-import { codexSessionStart, codexStop, codexUserPromptSubmit } from './fixtures/codex.js';
 import { configSchema } from '../src/config/schemas/config.schema.js';
 import { trackTurn } from '../src/turns/turn-tracker.js';
 import { TurnStateStore } from '../src/turns/turn-state.js';
@@ -13,6 +15,8 @@ import { buildTurnSummary } from '../src/turns/turn-summary.js';
 import { runHook } from '../src/cli/hook.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { defaultConfig } from '../src/config/config.js';
+import { codexSessionStart, codexStop, codexUserPromptSubmit } from './fixtures/codex.js';
+import { CONTENT_CAPTURE_ON, makeTempEnv, queueEntryFiles, writeJson, type TempWorld } from './helpers.js';
 
 describe('claude transcript usage', () => {
   let world: TempWorld;
@@ -98,15 +102,32 @@ describe('claude transcript usage', () => {
       { type: 'assistant', timestamp: '2026-08-06T18:01:00.000Z', message: { id: 'early', model: 'claude-sonnet-4', usage: { input_tokens: 10, output_tokens: 5 } } }
     ]);
     const lateEntry = { type: 'assistant', timestamp: '2026-08-06T18:02:00.000Z', message: { id: 'late', model: 'claude-sonnet-4', usage: { input_tokens: 20, output_tokens: 7 } } };
-    const appended = new Promise<void>((resolve) => {
-      setTimeout(() => fs.appendFile(file, '\n' + JSON.stringify(lateEntry)).then(resolve, resolve), 50);
-    });
 
-    const usage = await readTurnUsage(file, since, { attempts: 6, delayMs: 150 });
+    // The flush is triggered by the *second* read rather than by a timer. Two
+    // passes that agree end the loop, and with `minSettleMs` unset they agree
+    // as early as the second pass — so a timed append that a loaded machine
+    // delays past the first delay window makes this assert 10, which is what it
+    // did on the Node 24 runner. Appended synchronously, and with `node:fs`
+    // rather than the patched promises API, so nothing re-enters this hook.
+    let reads = 0;
+    const realReadFile = fs.readFile;
 
-    await appended;
-    expect(usage!.inputTokens).toBe(30);
-    expect(usage!.outputTokens).toBe(12);
+    (fs as { readFile: typeof fs.readFile }).readFile = ((target: Parameters<typeof fs.readFile>[0], ...rest: unknown[]) => {
+      reads += 1;
+
+      if (reads === 2 && target === file) fsSync.appendFileSync(file, '\n' + JSON.stringify(lateEntry));
+
+      return (realReadFile as (...args: unknown[]) => unknown)(target, ...rest);
+    }) as typeof fs.readFile;
+
+    try {
+      const usage = await readTurnUsage(file, since, { attempts: 6, delayMs: 10 });
+
+      expect(usage!.inputTokens).toBe(30);
+      expect(usage!.outputTokens).toBe(12);
+    } finally {
+      (fs as { readFile: typeof fs.readFile }).readFile = realReadFile;
+    }
   });
 
   it('waits out the settle window before trusting an early stable snapshot', async () => {
@@ -407,7 +428,9 @@ describe('turn tracking through the hook pipeline', () => {
 
     await hookDryRun({ hook_event_name: 'SessionEnd', session_id: 'sess-model', reason: 'clear', cwd: world.home });
     expect(await store.readModel('sess-model')).toBeUndefined();
-    expect(await fs.readdir(turnsDir).catch(() => [])).toEqual([]);
+    // No session state left behind. The sweep marker is not session state: it
+    // holds no session id and no content, only the time of the last sweep.
+    expect((await fs.readdir(turnsDir).catch(() => [])).filter((name) => name !== SWEEP_MARKER_FILE)).toEqual([]);
   });
 
   it('emits only a turn.summary on Stop with provisional transcript usage', async () => {
@@ -864,5 +887,60 @@ describe('the session model memo is written on the session hook alone', () => {
     // The session's own hook is the one that writes it, for every agent.
     await track(codexSessionStart);
     expect(await store.readModel(codexStop.session_id)).toBe('gpt-5.2-codex');
+  });
+});
+
+describe('a degraded turn summary names the same developer as a healthy one', () => {
+  let world: TempWorld;
+  let repoDir: string;
+
+  beforeEach(async () => {
+    world = await makeTempEnv();
+    repoDir = path.join(world.home, 'repo');
+    await fs.mkdir(repoDir, { recursive: true });
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: repoDir, stdio: 'pipe', env: { ...process.env, HOME: world.home } });
+
+    git('init');
+    git('config', 'user.email', 'git-only@company.com');
+    git('config', 'user.name', 'Git Only');
+  });
+  afterEach(() => world.cleanup());
+
+  /** No `developerEmail`: this machine can only be named by git. */
+  function track(payload: unknown) {
+    const config = configSchema.parse({ ...defaultConfig(), developerEmail: undefined });
+    const paths = resolvePaths(world.env);
+
+    return trackTurn({
+      agentId: 'codex',
+      rawPayload: payload,
+      events: parseCodexHookEvent(payload, { env: world.env, config }),
+      config,
+      turnsDir: paths.turnsDir,
+      locksDir: paths.locksDir,
+      env: world.env,
+      cwd: repoDir
+    });
+  }
+
+  it('resolves the git identity on the degraded close, not only on the healthy one', async () => {
+    await track({ ...codexUserPromptSubmit, cwd: repoDir });
+
+    const healthy = await track({ ...codexStop, cwd: repoDir });
+
+    expect(healthy).toBeDefined();
+    expect(healthy!.developer_id).toBe('git-only@company.com');
+
+    // Sabotage turn state so the close throws and the degraded path runs.
+    const paths = resolvePaths(world.env);
+
+    await fs.mkdir(path.dirname(paths.turnsDir), { recursive: true });
+    await fs.rm(paths.turnsDir, { recursive: true, force: true });
+    await fs.writeFile(paths.turnsDir, 'not a directory');
+
+    const degraded = await track({ ...codexStop, session_id: 'sess-degraded', cwd: repoDir });
+
+    expect(degraded).toBeDefined();
+    expect(degraded!.developer_id).toBe('git-only@company.com');
   });
 });

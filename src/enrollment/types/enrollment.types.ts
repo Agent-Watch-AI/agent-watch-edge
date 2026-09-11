@@ -1,11 +1,4 @@
-/**
- * Endpoint and credential acquisition.
- *
- * The MVP ships a manual provider — the user types a backend URL — and a future
- * RemoteEnrollmentProvider will implement `agentwatch setup <enrollment-url>`
- * (fetch org config, register the device, receive installation credentials)
- * without setup having to change.
- */
+/** What `setup` has to work out before it can write a configuration. */
 export interface EnrollmentInput {
   /** URL passed to `agentwatch setup`, when any. */
   readonly setupUrl?: string;
@@ -20,8 +13,4 @@ export interface EnrollmentInput {
 export interface EnrollmentResult {
   readonly endpoint: string;
   readonly token?: string;
-}
-
-export interface EnrollmentProvider {
-  enroll(input: EnrollmentInput): Promise<EnrollmentResult>;
 }

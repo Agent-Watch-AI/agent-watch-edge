@@ -3,11 +3,6 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { makeTempEnv, readJson, type TempWorld } from './helpers.js';
-import { claudePreToolUseBash, claudeSessionStart, claudeUserPromptSubmit } from './fixtures/claude.js';
-import { codexUserPromptSubmit } from './fixtures/codex.js';
-import { cursorBeforeSubmitPrompt } from './fixtures/cursor.js';
-import { antigravityPreTool } from './fixtures/antigravity.js';
 import { runHook } from '../src/cli/hook.js';
 import { configSchema, defaultConfig } from '../src/config/config.js';
 import { saveConfig } from '../src/config/config-store.js';
@@ -18,6 +13,11 @@ import { ENFORCEMENT_CACHE_FILE_NAME } from '../src/enforcement/constants/enforc
 import { SESSION_MODEL_FILE } from '../src/turns/constants/turns.constants.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { TurnStateStore } from '../src/turns/turn-state.js';
+import { antigravityPreTool } from './fixtures/antigravity.js';
+import { cursorBeforeSubmitPrompt } from './fixtures/cursor.js';
+import { codexUserPromptSubmit } from './fixtures/codex.js';
+import { claudePreToolUseBash, claudeSessionStart, claudeUserPromptSubmit } from './fixtures/claude.js';
+import { makeTempEnv, readJson, type TempWorld } from './helpers.js';
 
 /**
  * Every child process the hook path starts, wherever it starts it from.
@@ -358,6 +358,8 @@ describe('enforcement through the hook', () => {
 
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 
+    server.keepAliveTimeout = 1;
+
     const address = server.address();
 
     endpoint = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
@@ -372,6 +374,8 @@ describe('enforcement through the hook', () => {
   });
 
   afterEach(async () => {
+    server.closeAllConnections();
+
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await world.cleanup();
   });

@@ -13,7 +13,7 @@ import { CURSOR_EXECUTABLES, CURSOR_HOME_DIR, CURSOR_HOOKS_FILE } from './consta
  * @param env - Environment supplying HOME.
  * @returns Absolute path of `~/.cursor`.
  */
-export function cursorHome(env: Env): string {
+function cursorHome(env: Env): string {
   return path.join(env.home, CURSOR_HOME_DIR);
 }
 

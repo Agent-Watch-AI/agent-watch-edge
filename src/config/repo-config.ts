@@ -17,7 +17,7 @@ import {
   REPO_CONFIG_NAME
 } from './constants/config.constants.js';
 import { configSchema } from './schemas/config.schema.js';
-import type { AgentWatchConfig, CaptureConfig, EffectiveConfig, MergedConfig } from './types/config.types.js';
+import type { AgentWatchConfig, CaptureConfig, ConfigLoadResult, EffectiveConfig, MergedConfig } from './types/config.types.js';
 
 export { REPO_CONFIG_NAME } from './constants/config.constants.js';
 export type { EffectiveConfig, MergedConfig } from './types/config.types.js';
@@ -88,10 +88,14 @@ export function mergeRepoConfig(global: AgentWatchConfig, repoValue: unknown): M
  *
  * @param paths - Resolved AgentWatch paths.
  * @param cwd - Directory the payload came from.
+ * @param preloaded - The global config if the caller already read it. The hook
+ *   path has it in hand before the first stage runs, and re-reading the file
+ *   there was one more open, read and parse on every one of the ten-odd hooks a
+ *   turn fires.
  * @returns The effective config, its warnings, and the file that produced it.
  */
-export async function loadEffectiveConfig(paths: AgentWatchPaths, cwd: string): Promise<EffectiveConfig> {
-  const loaded = await loadConfig(paths);
+export async function loadEffectiveConfig(paths: AgentWatchPaths, cwd: string, preloaded?: ConfigLoadResult): Promise<EffectiveConfig> {
+  const loaded = preloaded ?? (await loadConfig(paths));
   const global = loaded.config;
 
   // The fail-safe stays closed: with the global config missing or corrupt the

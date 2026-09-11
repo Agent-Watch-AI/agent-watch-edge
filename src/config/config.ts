@@ -78,10 +78,27 @@ export function parseOtelSignals(value: string): OtelConfig | undefined {
 /**
  * Where product events are POSTed.
  *
+ * `null` is checked before truthiness, and that is not a formality: `null` is
+ * how `deliverableUrl` records "a URL was written here and refused", and it
+ * means something a *missing* field does not. Read by truthiness the two are
+ * the same value, so a refused `roots[].eventsUrl` fell through to the
+ * machine-global `endpoint` — the root's own destination being unusable is
+ * exactly when it must not inherit the other tenant's. A consultant whose
+ * `roots["/work/clientA"]` points `eventsUrl` at an internal `http:` collector
+ * would have had every prompt, response and branch name under that directory
+ * POSTed to their corporate backend under clientA's bearer.
+ *
+ * So a refusal is sticky where an absence is derivable. `otlpBaseUrl` holds the
+ * same rule for the same reason; `enforcementUrl` deliberately does not, and
+ * says why.
+ *
  * @param config - Effective configuration.
- * @returns The events URL, or undefined when no backend is configured.
+ * @returns The events URL, or undefined when no backend is configured or the
+ *   one configured here was refused.
  */
 export function eventsUrl(config: AgentWatchConfig): string | undefined {
+  if (config.eventsUrl === null) return undefined;
+
   if (config.eventsUrl) return config.eventsUrl;
 
   if (!config.endpoint) return undefined;
@@ -96,9 +113,16 @@ export function eventsUrl(config: AgentWatchConfig): string | undefined {
  * this base themselves, so it must stay a base and not a signal route.
  *
  * @param config - Effective configuration.
- * @returns The OTLP base URL, or undefined when no backend is configured.
+ * @returns The OTLP base URL, or undefined when no backend is configured or the
+ *   one configured here was refused.
  */
 export function otlpBaseUrl(config: AgentWatchConfig): string | undefined {
+  // Refused, not absent — see `eventsUrl`. Worse here than there: `otel-headers`
+  // hands the root's bearer to the agent's exporter only when the root's OTLP
+  // base equals the machine's, so a refused root URL that fell back to the
+  // machine's made those two equal and opened the guard.
+  if (config.otlpUrl === null) return undefined;
+
   if (config.otlpUrl) return config.otlpUrl;
 
   if (!config.endpoint) return undefined;
@@ -107,11 +131,39 @@ export function otlpBaseUrl(config: AgentWatchConfig): string | undefined {
 }
 
 /**
+ * Use the same collector check for exporter credentials and setup diagnostics.
+ * Missing collectors cannot establish permission to expose a root's bearer.
+ * @param machine - Configuration used by the machine-wide exporter.
+ * @param identity - Effective configuration for the selected directory.
+ * @returns Whether the exporter can use this identity's credential.
+ */
+export function sharesOtlpCollector(machine: AgentWatchConfig, identity: AgentWatchConfig): boolean {
+  const base = otlpBaseUrl(identity);
+
+  return base !== undefined && base === otlpBaseUrl(machine);
+}
+
+/**
  * Where the pre-turn budget check asks its question.
  *
  * Derived from the same base as everything else, so a tenant configures one
  * endpoint; the override exists for the same reason the other two do — a
  * deployment that does not put every route behind one host.
+ *
+ * The one accessor that does *not* hold `eventsUrl`'s rule, and deliberately.
+ * There, refusing to derive is fail-safe: nothing leaves. Here it is fail-open
+ * — `resolveEnforcement` answers `ALLOW` when there is no URL to ask, and
+ * `enforcementWouldAsk` stops the caller even paying for the identity lookup —
+ * so one `http:` line in a field nobody uses would switch every `block` cap on
+ * the machine off silently. The security argument does not carry either: the
+ * derived URL is a path on an `endpoint` already validated as `https:`, so
+ * deriving sends the bearer nowhere it was not already going. `doctor` reports
+ * the refused field as `configuration: fail` regardless.
+ *
+ * Root resolution retains this route only for the shared backend. A root with
+ * a different base derives its decision route there; a route-only root still
+ * uses machine enforcement, so setting endpoint is required for a separate
+ * enforcement backend.
  *
  * @param config - Effective configuration.
  * @returns The decision URL, or undefined when no backend is configured.

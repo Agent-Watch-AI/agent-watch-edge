@@ -9,9 +9,6 @@ export const VALUE_FLAGS: ReadonlySet<string> = new Set(['agent', 'endpoint', 't
 
 export const FLAG_PREFIX = '--';
 
-/** Commands the CLI dispatches. */
-export const COMMANDS = ['hook', 'setup', 'status', 'doctor', 'uninstall', 'agents', 'config', 'otel-headers'] as const;
-
 /** What setup asks for when nothing on the machine names the developer. */
 export const DEVELOPER_EMAIL_PROMPT = 'Developer email: ';
 
@@ -26,8 +23,8 @@ export const DEVELOPER_IDENTITY_CHECK = 'developer identity';
  * the whole fix rather than a hint to go looking for it.
  */
 export const NO_DEVELOPER_IDENTITY = 'no developer identity: `git config user.email` is unset here and --developer-email was not given';
-export const DEVELOPER_IDENTITY_REMEDIES =
-  'set one with `git config --global user.email you@company.com`, or re-run setup with `--developer-email you@company.com`';
+export const DEVELOPER_IDENTITY_REMEDIES
+  = 'set one with `git config --global user.email you@company.com`, or re-run setup with `--developer-email you@company.com`';
 
 /** Said on the failure path, because a half-written config is worse than none. */
 export const NO_CONFIG_WRITTEN = 'no configuration was written; re-run setup once the identity resolves';
@@ -46,6 +43,13 @@ export const MIN_NODE_MAJOR = 20;
  * versions fall back to session-scoped turn tracking with an empty turn_id.
  */
 export const CLAUDE_MIN_VERSION_FOR_PROMPT_ID = '2.1.196';
+
+/**
+ * Name of the one check an administrator's install script greps for: it carries
+ * all four backend states — accepted, credential rejected, unreachable, and not
+ * configured yet — so a rollout can be judged from one line.
+ */
+export const BACKEND_CONNECTIVITY_CHECK = 'backend connectivity';
 
 /** Budgets for the diagnostics that shell out or reach the network. */
 export const BACKEND_PROBE_TIMEOUT_MS = 4_000;
@@ -76,4 +80,3 @@ export const RE_QUOTE_ESCAPE = /(["\\$`])/g;
 
 /** Redaction placeholder in the `config` command's output. */
 export const REDACTED_TOKEN = '<redacted>';
-

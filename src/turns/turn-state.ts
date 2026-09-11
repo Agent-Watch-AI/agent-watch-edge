@@ -4,11 +4,13 @@ import { asRecord } from '../core/object.js';
 import { sha256Hex } from '../events/event-id.js';
 import { writeFileAtomic } from '../storage/atomic-file.js';
 import { readJsonFile } from '../storage/json-file.js';
-import { SECRET_FILE_MODE } from '../storage/constants/storage.constants.js';
+import { SECRET_FILE_MODE, SWEEP_MARKER_FILE } from '../storage/constants/storage.constants.js';
+import { claimSweep } from '../storage/sweep-marker.js';
 import {
   RE_UNSAFE_NAME_CHARS,
   SESSION_DIR_HASH_LENGTH,
   SESSION_MODEL_FILE,
+  TURN_STATE_SWEEP_INTERVAL_MS,
   USAGE_CLAIM_PREFIX
 } from './constants/turns.constants.js';
 import type { SessionModelRecord, TurnRecord, TurnStateEntry } from './types/turn-state.types.js';
@@ -224,13 +226,25 @@ export class TurnStateStore {
    * look younger than its records — never older, and never sweepable while it is
    * still being written to.
    *
+   * Throttled by a marker in the state root: the walk used to run on every
+   * closing turn, which is hundreds of syscalls to learn that nothing had aged
+   * out. Removal now happens within the TTL plus the sweep interval, which is
+   * what the retention window's tolerance allows.
+   *
    * @param maxAgeMs - Age past which a session is considered abandoned.
    */
   async sweep(maxAgeMs: number): Promise<void> {
+    if (!(await claimSweep(path.join(this.turnsDir, SWEEP_MARKER_FILE), TURN_STATE_SWEEP_INTERVAL_MS, Date.now()))) return;
+
     const sessionDirs = await readSessionDirSafely(this.turnsDir);
     const cutoff = Date.now() - maxAgeMs;
 
     for (const name of sessionDirs) {
+      // The marker lives in this directory too, and it is not a session: without
+      // this it is handed to `removeIfStale`, which fails with ENOTDIR into a
+      // catch that reports it as concurrent hook activity.
+      if (name === SWEEP_MARKER_FILE) continue;
+
       const dir = path.join(this.turnsDir, name);
 
       await removeIfStale(dir, cutoff);

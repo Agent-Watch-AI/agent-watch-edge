@@ -2,13 +2,16 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import readline from 'node:readline/promises';
-import { defaultConfig, enabledSignalNames, eventsUrl, parseOtelSignals } from '../config/config.js';
+import { defaultConfig, enabledSignalNames, eventsUrl, parseOtelSignals, sharesOtlpCollector } from '../config/config.js';
 import { ensureInstallationId, saveConfig } from '../config/config-store.js';
 import { CONTENT_CAPTURE_KEYS } from '../config/constants/config.constants.js';
-import { asRecord } from '../core/object.js';
+import type { Destination } from '../config/types/destination.types.js';
+import { applyRootOverride, canonicalRoot } from '../config/root-config.js';
+import { transitionDestination } from '../config/destination.js';
+import { asRecord, compact } from '../core/object.js';
 import type { AgentWatchConfig, OtelConfig, RootOverride } from '../config/types/config.types.js';
 import { collectGitContext, developerIdentity } from '../git/git-context.js';
-import { ManualEnrollmentProvider } from '../enrollment/manual-enrollment.js';
+import { resolveEnrollment } from '../enrollment/enrollment.js';
 import type { EnrollmentResult } from '../enrollment/types/enrollment.types.js';
 import { providers } from '../providers/registry.js';
 import type { AgentProvider, DetectionResult, SetupContext, SetupOutcome } from '../providers/types/provider.types.js';
@@ -17,7 +20,7 @@ import { readJsonFile } from '../storage/json-file.js';
 import { TOKEN_VAR } from '../storage/constants/storage.constants.js';
 import { identityPaths } from '../transport/queue-partition.js';
 import type { InstallState } from '../storage/types/storage.types.js';
-import { buildCliContext, buildHookCommand, buildQueue } from './context.js';
+import { buildCliContext, buildHookCommand, openIdentityQueue } from './context.js';
 import { DEVELOPER_EMAIL_PROMPT, DEVELOPER_IDENTITY_REMEDIES, NO_CONFIG_WRITTEN, NO_DEVELOPER_IDENTITY } from './constants/cli.constants.js';
 import type { CliContext, SetupOptions } from './types/cli.types.js';
 import { bold, dim, printErrln, println, symbols } from './ui.js';
@@ -60,6 +63,22 @@ export async function runSetup(options: SetupOptions): Promise<number> {
     return 1;
   }
 
+  // Named, not fatal. `saveConfig` carries a refused URL over from the raw file
+  // rather than writing the parsed `null` back, so this run cannot erase the
+  // line the developer wrote or the warning that reports it — and refusing the
+  // run instead left the machine with no CLI repair path at all, including
+  // `agentwatch setup --endpoint https://…`, which supplies a replacement for
+  // the very field it would have been refused over. One tenant's typo also
+  // stopped every other tenant's install, which is the blast radius this
+  // release removed from `loadConfig`.
+  if (context.configWarnings.length > 0) {
+    println(`${symbols.warn} existing config at ${context.paths.configFile} holds a URL the edge will not send to:`);
+
+    for (const warning of context.configWarnings) println(`  ${warning}`);
+
+    println('  it is kept as written; nothing is sent there until it is fixed');
+  }
+
   // A fresh install starts from the schema defaults: metadata on, content off.
   // Turning content capture on is a separate, deliberate edit to the config.
   const baseConfig = context.configState === 'missing' ? defaultConfig() : context.config;
@@ -91,9 +110,10 @@ export async function runSetup(options: SetupOptions): Promise<number> {
   }
 
   const rootPath = resolved.root;
-  // A root inherits nothing from the machine identity; the machine re-enrolls
-  // on top of what it already has.
-  const inherited: RootOverride = rootPath === undefined ? baseConfig : { endpoint: baseConfig.endpoint };
+  // Re-running a root keeps its chosen backend. Only a missing base inherits;
+  // a refused one requires repair, and the machine token is never inherited.
+  const existingRoot = rootPath === undefined ? undefined : baseConfig.roots?.[rootPath];
+  const inherited: RootOverride = rootPath === undefined ? baseConfig : { endpoint: existingRoot?.endpoint === undefined ? baseConfig.endpoint : existingRoot.endpoint };
   const ask = interactivePrompt(options);
   const enrolled = await enroll(options, inherited, ask);
 
@@ -118,19 +138,36 @@ export async function runSetup(options: SetupOptions): Promise<number> {
   }
 
   const identity: RootOverride = { endpoint: enrolled.endpoint, token: enrolled.token, developerEmail };
-  const withIdentity = rootPath === undefined ? { ...baseConfig, ...identity } : { ...baseConfig, roots: { ...baseConfig.roots, [rootPath]: identity } };
+  const stored: (RootOverride & Destination) | undefined = rootPath === undefined ? baseConfig : baseConfig.roots?.[rootPath];
+  const previous = rootPath === undefined ? baseConfig.endpoint : previousEndpoint(stored, baseConfig);
+  const transition = transitionDestination(stored ?? {}, previous, enrolled.endpoint);
+  const updated = { ...stored, ...identity, ...transition.routes };
+  const withIdentity = rootPath === undefined
+    ? { ...baseConfig, ...updated }
+    : { ...baseConfig, roots: { ...baseConfig.roots, [rootPath]: compact(updated) } };
+
+  for (const field of transition.cleared) {
+    println(`${symbols.warn} cleared ${field} (${stored?.[field]}) for ${rootPath ?? 'machine'}; backend is now ${identity.endpoint}; reconfigure this route if it is still required`);
+  }
+
   const config = ensureInstallationId({ ...withIdentity, otel, emit: { ...baseConfig.emit, llmCalls: true } });
 
   await reportContentDowngrade(context, config);
   await saveConfig(context.paths, config);
-  await offerBacklogRetarget(context, baseConfig, config, ask);
+  const beforeIdentity = rootPath === undefined ? baseConfig : applyRootOverride(baseConfig, rootPath).config;
+  const afterIdentity = rootPath === undefined ? config : applyRootOverride(config, rootPath).config;
+  const canMigrate = Boolean(exclusiveQueueIdentity(baseConfig, rootPath) && exclusiveQueueIdentity(config, rootPath));
+
+  if (stored && beforeIdentity.token) {
+    await offerBacklogRetarget(context, beforeIdentity, afterIdentity, ask, rootPath ?? 'machine', canMigrate);
+  }
 
   if (rootPath !== undefined) println(`${symbols.ok} project root: ${rootPath}`);
 
   println(`${symbols.ok} backend: ${identity.endpoint}`);
 
-  if (rootPath !== undefined && identity.endpoint !== baseConfig.endpoint) {
-    println(`${symbols.warn} native OTLP export stays machine-wide at ${baseConfig.endpoint} and sends no bearer under this root; only hook-path events reach ${identity.endpoint}`);
+  if (rootPath !== undefined && !sharesOtlpCollector(config, applyRootOverride(config, rootPath).config)) {
+    println(`${symbols.warn} native OTLP cannot use this root's bearer with the machine-wide collector; only hook-path events use the root identity`);
   }
 
   println(`${symbols.ok} developer: ${developerEmail}`);
@@ -144,6 +181,49 @@ export async function runSetup(options: SetupOptions): Promise<number> {
   println(dim('  run `agentwatch status` anytime, `agentwatch doctor` to diagnose'));
 
   return failures === 0 ? 0 : 1;
+}
+
+// A partition is keyed by token, not by checkout. Only an existing, exclusive
+// identity owns a backlog we can offer to migrate. A new/nested root never
+// adopts its parent's queue, and changing a shared token cannot move siblings.
+function exclusiveQueueIdentity(config: AgentWatchConfig, rootPath: string | undefined): AgentWatchConfig | undefined {
+  const roots = config.roots ?? {};
+
+  if (rootPath === undefined) {
+    if (!config.token) return undefined;
+
+    if (Object.values(roots).some((root) => root.token !== undefined && root.token === config.token)) return undefined;
+
+    return config;
+  }
+
+  const stored = roots[rootPath];
+
+  if (!stored?.token || stored.token === config.token) return undefined;
+
+  if (Object.entries(roots).some(([key, root]) => key !== rootPath && root.token === stored.token)) return undefined;
+
+  return applyRootOverride(config, rootPath).config;
+}
+
+/**
+ * The destination the entry was sending to before this run.
+ *
+ * An entry that names no `endpoint` of its own was sending to the machine's, so
+ * a run that changes nothing must not read as a reroute. A *refused* one is not
+ * converted: this file's own rule is that a refusal is never the same
+ * destination as the machine's, and `??` would have said the opposite —
+ * carrying the previous engagement's live ingest onto a new token, which is the
+ * misroute the carry list exists to stop.
+ *
+ * @param stored - The entry as it stands, absent for a root being created.
+ * @param baseConfig - Config this run starts from.
+ * @returns The previous destination, or undefined when there is no entry.
+ */
+function previousEndpoint(stored: RootOverride | undefined, baseConfig: AgentWatchConfig): string | null | undefined {
+  if (stored === undefined) return undefined;
+
+  return stored.endpoint === undefined ? baseConfig.endpoint : stored.endpoint;
 }
 
 /**
@@ -162,7 +242,7 @@ export async function runSetup(options: SetupOptions): Promise<number> {
  *
  * @param options - Flags and environment.
  * @param baseConfig - Config the run starts from.
- * @returns The canonical root (absent without `--root`), or the refusal.
+ * @returns The existing matching key or a new canonical root, or the refusal.
  */
 async function resolveRoot(options: SetupOptions, baseConfig: AgentWatchConfig): Promise<{ root?: string } | { error: string }> {
   if (options.root === undefined) return {};
@@ -172,7 +252,12 @@ async function resolveRoot(options: SetupOptions, baseConfig: AgentWatchConfig):
   if (options.otel !== undefined) return { error: 'native OTLP signals are machine-wide; run setup without --root to change them' };
 
   try {
-    return { root: await fs.realpath(path.resolve(options.env.cwd, options.root)) };
+    const root = await fs.realpath(path.resolve(options.env.cwd, options.root));
+    const existing = Object.keys(baseConfig.roots ?? {}).filter((key) => path.isAbsolute(key) && canonicalRoot(key) === root);
+
+    if (existing.length > 1) return { error: `multiple configured root keys resolve to ${root}; consolidate them before setup` };
+
+    return { root: existing[0] ?? root };
   } catch {
     return { error: `project root does not exist: ${options.root}` };
   }
@@ -267,9 +352,14 @@ async function enroll(
   ask: ((question: string) => Promise<string>) | undefined
 ): Promise<EnrollmentResult | { error: string }> {
   try {
-    return await new ManualEnrollmentProvider().enroll({
+    return await resolveEnrollment({
       setupUrl: options.setupUrl,
-      endpoint: options.endpoint ?? inherited.endpoint,
+      // `?? undefined` last, so a *refused* stored endpoint — `null`, a URL the
+      // edge will not talk to — is nothing to inherit rather than a value to
+      // carry forward. Load-bearing: setup runs on a file that holds one, so
+      // without this a re-run would carry the refusal into enrollment instead
+      // of asking for a URL that works.
+      endpoint: options.endpoint ?? inherited.endpoint ?? undefined,
       // Flag, then environment, then what is already stored. An MDM policy runs
       // with no terminal and has to get the token in somehow; `--token` puts it
       // on a command line, where `ps` can read it for the life of the process.
@@ -278,7 +368,16 @@ async function enroll(
       // and enrollment treats a defined token as final — so `??` would write an
       // empty token, skip the prompt, and leave an install that authenticates
       // against nothing while reporting success.
-      token: options.token ?? (options.env.vars[TOKEN_VAR] || inherited.token),
+      //
+      // Trimmed here, at the one boundary every non-interactive token crosses.
+      // A partition is keyed by the token's hash and a bearer is the token
+      // verbatim, so `tok\n` is a different exclusive identity from `tok` and a
+      // malformed `Authorization` header — and a trailing newline is what a
+      // mounted secret file, `read`, and most `.env` loaders hand over. The
+      // interactive answer and `--developer-email` already trim; this is the
+      // path that did not. `|| undefined` after it, so whitespace-only stops
+      // being a token here rather than at some later `if`.
+      token: (options.token || options.env.vars[TOKEN_VAR] || inherited.token)?.trim() || undefined,
       ask
     });
   } catch (error) {
@@ -353,12 +452,16 @@ function reportMissingIdentity(): void {
  * @param previousConfig - Config before this run.
  * @param config - Config this run just wrote.
  * @param ask - The prompt, when the run is interactive.
+ * @param owner - Machine or selected root whose records would move.
+ * @param canMigrate - Both ends have exclusive credentialed queue owners.
  */
 async function offerBacklogRetarget(
   context: CliContext,
   previousConfig: AgentWatchConfig,
   config: AgentWatchConfig,
-  ask: ((question: string) => Promise<string>) | undefined
+  ask: ((question: string) => Promise<string>) | undefined,
+  owner: string,
+  canMigrate: boolean
 ): Promise<void> {
   const previousUrl = eventsUrl(previousConfig);
   const configuredUrl = eventsUrl(config);
@@ -367,15 +470,21 @@ async function offerBacklogRetarget(
 
   if (previousUrl === configuredUrl && previousConfig.token === config.token) return;
 
-  const queue = await buildQueue({ ...context, config: previousConfig });
+  const queue = openIdentityQueue({ ...context, identityConfig: previousConfig });
   const stranded = await queue.pendingFor(previousUrl);
 
   if (stranded === 0) return;
 
-  const question =
-    previousUrl === configuredUrl
-      ? `${stranded} offline event(s) are queued under the previous token. Deliver them with the new token? [y/N]: `
-      : `${stranded} offline event(s) are queued for the previous backend (${previousUrl}). Deliver them to the new backend? [y/N]: `;
+  if (!canMigrate) {
+    println(`${symbols.warn} ${stranded} offline event(s) captured under ${owner} cannot be migrated: source or destination has no exclusive credential; backlog stays in its original queue and expires under retention; automatic migration skipped`);
+
+    return;
+  }
+
+  const question
+    = previousUrl === configuredUrl
+      ? `${stranded} offline event(s) captured under ${owner} are queued under the previous token. Deliver them to ${configuredUrl} with the new token (tenant attribution may change)? [y/N]: `
+      : `${stranded} offline event(s) captured under ${owner} are queued for the previous backend (${previousUrl}). Deliver them to ${configuredUrl} with the configured token (tenant attribution may change)? [y/N]: `;
   const answer = ask ? (await ask(question)).trim().toLowerCase() : '';
 
   if (answer !== 'y' && answer !== 'yes') {

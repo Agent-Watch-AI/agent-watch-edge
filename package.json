@@ -1,7 +1,7 @@
 {
   "name": "@agent-watch-ai/edge",
-  "version": "0.2.5",
-  "description": "Connect Claude Code, Codex and Cursor telemetry to your backend with turn, Git and ticket-key attribution.",
+  "version": "0.3.0",
+  "description": "Usage and cost telemetry for Claude Code, Codex, Cursor, Gemini CLI and Antigravity. No daemon, no proxy.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -38,12 +38,15 @@
     "SECURITY.md",
     "docs/DATA_HANDLING.md",
     "docs/ENTERPRISE_DEPLOYMENT.md",
+    "docs/PERFORMANCE.md",
     "LICENSE",
     "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
+    "coverage": "vitest run --coverage",
+    "benchmark": "npm run build && node scripts/benchmark.mjs",
     "lint": "eslint src tests",
     "lint:fix": "eslint src tests --fix",
     "test": "vitest run",
@@ -66,6 +69,9 @@
     "opentelemetry",
     "claude-code",
     "codex",
+    "cursor",
+    "gemini-cli",
+    "antigravity",
     "ai-coding-agents",
     "ai-cost",
     "cost-attribution",
@@ -81,10 +87,10 @@
     "@eslint/js": "^9.17.0",
     "@stylistic/eslint-plugin": "^5.10.0",
     "@types/node": "^22.10.0",
+    "@vitest/coverage-v8": "^2.1.9",
     "eslint": "^9.17.0",
     "eslint-plugin-import-x": "^4.17.1",
     "eslint-plugin-jsdoc": "^63.3.3",
-    "patch-package": "^8.0.1",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.19.0",
     "vitest": "^2.1.8"

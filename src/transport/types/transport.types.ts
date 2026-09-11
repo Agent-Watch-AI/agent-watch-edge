@@ -17,6 +17,8 @@ export interface DeliveryResult {
   /** Whether a failure is worth retrying later (network error, 5xx, 429...). */
   readonly retryable: boolean;
   readonly error?: string;
+  /** The local pass budget prevented or curtailed a request; no retry is charged. */
+  readonly deferred?: boolean;
   /** Per-event outcomes from an accepted batch, when the backend sent them. */
   readonly counters?: DeliveryCounters;
 }
@@ -40,6 +42,12 @@ export interface HttpTransportOptions {
   readonly installationId?: string;
   readonly timeoutMs: number;
   readonly fetchFn?: typeof fetch;
+  /** Monotonic deadline shared by direct delivery, drain and isolation probes. */
+  readonly deadline?: number;
+  /** Hook-owned pass duration, started on first send; omit for reusable transports. */
+  readonly budgetMs?: number;
+  /** Clock in the same units as deadline; performance.now in production. */
+  readonly nowMs?: () => number;
 }
 
 /** What one hook-path delivery attempt did. */
@@ -58,6 +66,16 @@ export interface QueueOptions {
   readonly maxAttempts: number;
   readonly maxEventAgeDays: number;
   readonly now?: () => Date;
+  /**
+   * Sink for the entries the bound sacrifices on enqueue.
+   *
+   * On the options rather than on `enqueue`, because `enforceBound` runs under
+   * every enqueue — including the snapshot pipeline's, which has no stats of
+   * its own — and a deletion nobody counts is exactly the invisibility
+   * `DeliveryStatsSnapshot` exists to remove. Drain reports its own losses
+   * through the recorder passed to it.
+   */
+  readonly stats?: DrainStatsRecorder;
 }
 
 export interface DrainStats {
@@ -68,6 +86,20 @@ export interface DrainStats {
   readonly rejected: number;
   /** True when the drain lock was held elsewhere and this pass did nothing. */
   readonly skipped: boolean;
+}
+
+/**
+ * A standing refusal of this identity's credential by one destination.
+ *
+ * `since` is when the refusals started, not when the last one happened: it is
+ * the number an administrator needs to tell "rotated an hour ago" from
+ * "revoked last week and nobody noticed".
+ */
+export interface AuthBlockState {
+  readonly destination: string;
+  /** The refusing HTTP status, 401 or 403. */
+  readonly status: number;
+  readonly since: string;
 }
 
 export interface DrainStatsRecorder {

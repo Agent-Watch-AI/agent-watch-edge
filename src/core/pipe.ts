@@ -61,7 +61,7 @@ export async function runFlow<TState>(steps: readonly Step<TState>[], initial: T
     } catch (error) {
       observe?.({ step: current.name, outcome: 'threw', reason: errorMessage(error) });
 
-      return { state, completed: false, stoppedAt: current.name, reason: errorMessage(error) };
+      return { state, completed: false, stoppedAt: current.name, reason: errorMessage(error), cause: error };
     }
 
     observe?.({ step: current.name, outcome: outcome.kind, reason: outcome.kind === 'stop' ? outcome.reason : undefined });
@@ -74,29 +74,6 @@ export async function runFlow<TState>(steps: readonly Step<TState>[], initial: T
   }
 
   return { state, completed: true };
-}
-
-/**
- * Left-to-right function composition for plain value transformations, so a
- * derivation reads in the order it happens instead of inside-out.
- *
- * Takes the unary transformations to apply, in order.
- *
- * @returns One function that threads its argument through all of them.
- */
-export function pipe<A, B>(ab: (a: A) => B): (a: A) => B;
-export function pipe<A, B, C>(ab: (a: A) => B, bc: (b: B) => C): (a: A) => C;
-export function pipe<A, B, C, D>(ab: (a: A) => B, bc: (b: B) => C, cd: (c: C) => D): (a: A) => D;
-export function pipe<A, B, C, D, E>(ab: (a: A) => B, bc: (b: B) => C, cd: (c: C) => D, de: (d: D) => E): (a: A) => E;
-export function pipe<A, B, C, D, E, F>(ab: (a: A) => B, bc: (b: B) => C, cd: (c: C) => D, de: (d: D) => E, ef: (e: E) => F): (a: A) => F;
-export function pipe(...fns: ((value: unknown) => unknown)[]): (value: unknown) => unknown {
-  return (value: unknown) => {
-    let current = value;
-
-    for (const fn of fns) current = fn(current);
-
-    return current;
-  };
 }
 
 /**

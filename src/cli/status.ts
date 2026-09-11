@@ -4,11 +4,12 @@ import { collectGitContext } from '../git/git-context.js';
 import type { GitContext } from '../git/types/git.types.js';
 import { providers } from '../providers/registry.js';
 import type { AgentProvider, SetupContext } from '../providers/types/provider.types.js';
+import type { BackendAuthBlock } from '../transport/auth-block.js';
 import type { DeliveryStats } from '../transport/delivery-stats.js';
 import type { DeliveryStatsSnapshot } from '../transport/types/transport.types.js';
 import type { EventQueue } from '../transport/queue.js';
 import { unattributedCount, unattributedQueue } from '../transport/queue-partition.js';
-import { buildCliContext, buildDeliveryStats, buildHookCommand, buildQueue, buildTransport } from './context.js';
+import { buildAuthBlock, buildCliContext, buildDeliveryStats, buildHookCommand, buildQueue, buildTransport } from './context.js';
 import { STATUS_SEND_TIMEOUT_MS } from './constants/cli.constants.js';
 import type { CliContext } from './types/cli.types.js';
 import { bold, dim, println, symbols } from './ui.js';
@@ -65,8 +66,18 @@ function reportBackend(context: CliContext): void {
     return;
   }
 
-  if (context.config.endpoint) {
-    println(`${symbols.ok} ${context.config.endpoint}`);
+  // Named before the endpoint, because this is why an endpoint someone wrote
+  // into the file is not the one printed below.
+  for (const warning of context.configWarnings) println(`${symbols.fail} config ${warning}`);
+
+  if (context.identityConfig.endpoint) {
+    println(`${symbols.ok} ${context.identityConfig.endpoint}`);
+
+    // The identity is per directory, so the report has to say when this one is
+    // not the machine's: everything below — the backlog, the losses, the
+    // credential block — belongs to the root's partition, not the global one.
+    if (context.identityRoot !== undefined) println(dim(`  identity from root ${context.identityRoot}`));
+
     reportEnforcement(context);
 
     return;
@@ -167,13 +178,42 @@ async function reportDelivery(context: CliContext): Promise<void> {
 
   const queue = await buildQueue(context);
   const deliveryStats = buildDeliveryStats(context);
-  const pending = await retryBacklog(context, queue, deliveryStats);
+  const authBlock = buildAuthBlock(context);
+  const pending = await retryBacklog(context, queue, deliveryStats, authBlock);
 
   println(pending === 0 ? `${symbols.ok} healthy` : `${symbols.warn} backlog`);
   println(`${pending} pending event(s)`);
 
+  await reportAuthBlock(context, authBlock, pending);
   await reportUnattributed(context);
   reportLosses(context, await deliveryStats.read());
+}
+
+/**
+ * The credential the backend is refusing, and what is waiting behind it.
+ *
+ * Without this line a rejected token looks exactly like a backend outage: a
+ * backlog that grows and then empties itself when the entries age out. The
+ * remedy is a new credential, and nothing else will do — the block is lifted by
+ * a changed fingerprint or by `doctor` proving the credential good, never by
+ * waiting.
+ *
+ * @param context - Resolved CLI context.
+ * @param authBlock - The persisted block.
+ * @param pending - Entries in this identity's backlog.
+ */
+async function reportAuthBlock(context: CliContext, authBlock: BackendAuthBlock, pending: number): Promise<void> {
+  const url = eventsUrl(context.identityConfig);
+
+  if (!url) return;
+
+  const block = await authBlock.active(url);
+
+  if (!block) return;
+
+  println(`${symbols.warn} backend refused this machine's credential with HTTP ${block.status}, first at ${block.since}`);
+  println(dim(`  ${pending} event(s) are held for it; automatic sends are suspended until the token changes`));
+  println(dim('  configure a new token with `agentwatch setup`, then run `agentwatch doctor` to confirm and resume'));
 }
 
 /**
@@ -202,18 +242,20 @@ async function reportUnattributed(context: CliContext): Promise<void> {
  * @param context - Resolved CLI context.
  * @param queue - The offline queue.
  * @param deliveryStats - Sink for anything the drain loses.
+ * @param authBlock - Sink for a refused credential, so this retry cannot spend
+ *   the backlog's attempts on a token the backend has already rejected.
  * @returns The remaining entry count.
  */
-async function retryBacklog(context: CliContext, queue: EventQueue, deliveryStats: DeliveryStats): Promise<number> {
+async function retryBacklog(context: CliContext, queue: EventQueue, deliveryStats: DeliveryStats, authBlock: BackendAuthBlock): Promise<number> {
   const pending = await queue.pendingCount();
 
-  if (pending === 0 || !eventsUrl(context.config)) return pending;
+  if (pending === 0 || !eventsUrl(context.identityConfig)) return pending;
 
   const transport = buildTransport(context, STATUS_SEND_TIMEOUT_MS);
 
   if (!transport) return pending;
 
-  const drained = await queue.drain(transport, context.config.delivery.drainBatchSize, deliveryStats);
+  const drained = await queue.drain(transport, context.identityConfig.delivery.drainBatchSize, deliveryStats, authBlock);
 
   if (drained.sent > 0) println(dim(`  retried: ${drained.sent} event(s) delivered`));
 

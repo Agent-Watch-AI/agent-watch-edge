@@ -50,8 +50,8 @@ export const CURSOR_HOOKS_VERSION = 1;
 export const CURSOR_VERSION_KEY = 'version';
 
 /** Note surfaced at install time about Cursor's missing token usage. */
-export const CURSOR_USAGE_NOTE =
-  'note: Cursor transcripts carry no token usage yet — Cursor turn summaries stay usage_status=pending until Cursor enriches them.';
+export const CURSOR_USAGE_NOTE
+  = 'note: Cursor transcripts carry no token usage yet — Cursor turn summaries stay usage_status=pending until Cursor enriches them.';
 
 /** Provider hook name to canonical event type, where the mapping is direct. */
 export const CURSOR_EVENT_TYPE_MAP: Readonly<Record<string, CanonicalEventType>> = {

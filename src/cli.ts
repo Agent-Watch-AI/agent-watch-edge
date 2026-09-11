@@ -153,11 +153,43 @@ async function runFallback(parsed: ParsedArgs): Promise<number> {
   return parsed.command === undefined || parsed.command === 'help' ? 0 : 1;
 }
 
+/**
+ * Wait for anything still queued on a stream to reach the other end of the pipe.
+ *
+ * The hook's stdout *is* the agent protocol: a budget refusal travels as a
+ * `block` JSON document, and for Antigravity an empty stdout means "no decision
+ * at all". On POSIX a write to a pipe is asynchronous and `process.exit` drops
+ * whatever is still queued, so the exit waits for the drain instead of racing
+ * it. A zero-length write is enough — its callback runs behind every write
+ * already in the queue.
+ *
+ * @param stream - The stream to drain.
+ * @returns Resolves once the queue is empty.
+ */
+async function drain(stream: NodeJS.WriteStream): Promise<void> {
+  if (stream.writableLength === 0) return;
+
+  await new Promise<void>((resolve) => stream.write('', () => resolve()));
+}
+
+/**
+ * Exit once the answer has actually been handed to the agent.
+ *
+ * @param code - The exit code to leave with.
+ */
+async function exitAfterFlush(code: number): Promise<never> {
+  await drain(process.stdout);
+  await drain(process.stderr);
+
+  return process.exit(code);
+}
+
 main().then(
-  (code) => process.exit(code),
+  (code) => exitAfterFlush(code),
   (error) => {
     process.stderr.write(`[agentwatch] fatal: ${(error as Error).stack ?? error}\n`);
+
     // A crashing hook must not break the calling agent.
-    process.exit(process.argv[2] === 'hook' ? 0 : 1);
+    return exitAfterFlush(process.argv[2] === 'hook' ? 0 : 1);
   }
 );

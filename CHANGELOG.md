@@ -1,6 +1,182 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+### Behaviour change: hook delivery timeout
+
+Existing configurations need no schema migration, but `delivery.timeoutMs`
+changes from a per-request timeout to a shared hook delivery budget for direct
+send, drain and isolation. It starts at the first send, not at transport
+construction. A low existing value can leave no time to drain after a direct
+send; those records wait for a later hook or an explicit `agentwatch status`
+retry. Review custom values during upgrade. The default remains 1,500 ms.
+There is no separate drain setting: keeping one hook budget bounds its network
+latency without introducing competing timeout controls. CLI/status transports
+remain reusable with a fresh timeout per request (3 seconds in status), including
+bounded isolation probes. Local budget deferrals do not spend retry attempts.
+
+### Fixes and verification
+
+- Empty token flags fall back to the environment or stored credential. Tokenless
+  configurations cannot own a backlog migration. Queue inspection before consent
+  never adopts legacy records; shared-owner warnings require actual pending events.
+  Migration prompts name both source owner and target URL and explain attribution.
+  Doctor compares policy and configured destination hosts instead of URL field
+  presence. Tests pin the 9/10/11 ms send boundary and usable larger remainders.
+
+- Backlog migration requires exclusive source and destination identities;
+  skipped migrations warn on endpoint-only changes and consent names the owner.
+  Setup reuses existing canonical-equivalent root keys and refuses ambiguous
+  duplicates. Doctor names the enforcement host and warns when the policy host differs from the root’s configured destination hosts.
+
+- **Backlog migration requires an existing exclusive identity.** A new root
+  inherits no machine/parent backlog; a shared token's queue stays in place.
+  Collector warnings use the same effective-route check as the credential
+  helper. Doctor explicitly fails when a configured identity has no budget
+  decision route, including a refused root endpoint.
+
+- **Delivery follows one ordered flow:** choose whether to send, attempt,
+  preserve unsent records, update diagnostics, then drain or sweep the queue.
+  A thrown transport error or gateway 503 keeps the records for retry with
+  their original IDs. Accepted-batch rejection counters remain diagnostic.
+- **One network budget per delivery pass.** Direct delivery, backlog sends and
+  isolation probes share `delivery.timeoutMs` (1,500 ms by default). Deferred
+  requests consume no retry attempts and do not trip backend cooldown. A 401/403
+  during isolation stops further probes and persists the credential block.
+- **Response cleanup is bounded.** Unread bodies are cancelled, including
+  oversized declared responses and diagnostic probes; readers release their locks.
+- **Linux and macOS are checked on Node 20 and 24.** CI also publishes repeatable
+  hook/queue timing reports. Windows and managed-fleet rollout remain separate
+  verification work.
+
+Production-installation readiness. Everything below either changes what an
+operator sees or what the package does on the hook path; read the first two
+items before upgrading a fleet.
+
+- **A refused credential now suspends sending instead of retrying.** After a 401
+  or 403 from the events endpoint, a block is persisted per (destination,
+  credential fingerprint) — the fingerprint is the token digest the queue
+  already uses to name its partition, never the token — and automatic sends for
+  that pair stop. **The refusal does not discard queued records**: normal age and size
+  retention limits still apply; what stops is the retrying, not the queueing, and no attempt is spent against an entry for a
+  refusal that is not its fault. The block never expires on a timer. It is
+  lifted by configuring a different token, or by `agentwatch doctor` proving the
+  current one good. `agentwatch status` reports the refusing status and when the
+  refusals started.
+- **`agentwatch doctor` diagnoses the install, not an anonymous request.** The
+  backend probe now sends the same credentials a real delivery sends, and
+  distinguishes four states in its verdict and its exit code: healthy, credential
+  rejected (a **failure**, not a warning, naming a wrong, expired or revoked
+  token), unreachable, and no backend configured yet. A healthy install whose
+  backend requires authentication no longer warns. The probe always asks the
+  backend, whatever local state says, so it is also what lifts a standing block.
+- **A delivery pass costs the same whatever the backlog holds.** One pass reads
+  at most `delivery.drainBatchSize` queue entries instead of reading and
+  validating all of them — up to 2000 file reads on every hook during a backend
+  outage. The scan resumes where the previous one stopped and wraps around, so
+  every entry is still examined within one rotation and none is deferred
+  forever. Expiry is no longer enforced only inside a pass: a throttled sweep
+  removes aged-out entries hourly, including during an outage, when a pass is
+  skipped for the whole cooldown window and nothing used to age out at all.
+- **A hook loads one agent, and reads its configuration once.** Providers are
+  imported lazily, so a hook pays for the agent it was invoked for rather than
+  all five; the global configuration file is read once per invocation; the
+  credential scrub and capture gate are applied once to a record this invocation
+  produced (a record coming out of the backlog is still re-gated against current
+  settings before it is sent); the session-state sweep is throttled; and the
+  transcript settle loop stops re-zeroing its read buffer on every attempt.
+- **The hook's answer is flushed before the process exits.** A budget refusal
+  travels as a JSON document on stdout, and a write to a pipe is asynchronous:
+  `process.exit` could drop it, which for Antigravity reads as "no decision".
+- **Secrets in object keys are scrubbed.** The sanitizer pattern-scrubbed values
+  only, so a credential used as a *key* in a captured map was transmitted
+  verbatim. Two keys that scrub to the same string keep distinct spellings
+  rather than silently merging into one entry. Redaction also runs *before* the
+  length cap rather than after it: a credential straddling the 64KiB boundary
+  was cut short first, so no pattern matched it any more and the surviving
+  prefix shipped in the clear — for a JWT, a header and payload that decode to
+  the claims the sanitizer exists to withhold. The URL-credentials pattern is
+  bounded, which is what makes scrubbing the whole string affordable; unbounded,
+  it cost 1.8s of CPU on a single 64KiB prompt, on the hook path.
+- **A backend URL is validated on every load, not only when setup writes it.**
+  Every URL in the configuration must be `https:`, or `http:` to loopback, so a
+  hand-edited or MDM-templated config cannot send a bearer and captured content
+  in cleartext. An offending URL is *refused* and named — on stderr from the
+  hook, and by `status` and `doctor` — rather than invalidating the whole file:
+  a failed parse falls back to a config with no token, which orphaned the
+  existing backlog under a partition nothing would drain again, and one bad URL
+  in one `roots[]` entry would have stopped delivery for every other project on
+  the machine. A refused field reads as "configured but unusable" and never as
+  absent — through `endpoint`, `eventsUrl` and `otlpUrl` alike. A `roots[]`
+  entry that names a backend of its own now takes its routes from its own fields
+  or from none: the machine's `eventsUrl` and `otlpUrl` are explicit strings
+  that used to win before a root's own `endpoint` was ever consulted, so one
+  tenant's prompts reached the other's ingest under the first tenant's bearer
+  whether or not a refusal was involved, and `otel-headers` handed that bearer
+  to the machine-wide collector. An entry that repeats the machine's endpoint —
+  a second seat on the same backend — still inherits its routes and its bearer. `enforcementUrl` is the one
+  accessor a refusal deliberately does *not* make unusable: no decision URL means
+  `ALLOW`, so a typo there would switch every `block` cap off silently, and the
+  derived route is a path on an already-validated `https:` endpoint.
+  `setup` names a refused URL and leaves the line the developer wrote exactly
+  where it is: the value is carried over the write from the file rather than
+  replaced by the parse, re-enrolling merges into the entry instead of replacing
+  it, so refused fields survive until repaired and another tenant's typo does
+  not block setup. A route override survives a run that leaves the destination
+  where it was (including trailing-slash normalization) and is dropped by one
+  that moves it or cannot establish the previous destination — for a `roots[]` entry and
+  for the machine identity alike, so winding one engagement down and enrolling
+  the next no longer keeps POSTing to the first one's ingest under the second
+  one's bearer. Every cleared live route is printed before the write, including
+  during endpoint repair. The same rule includes machine `enforcementUrl`; a
+  foreign root derives enforcement from its own base. Root token rotation keeps
+  its stored backend when `--endpoint` is omitted, and backlog migration asks
+  about the selected identity's queue. `config` warns about unavailable root
+  routes and `doctor` names refused endpoints explicitly. `setup` still refuses a non-deliverable `--endpoint` outright.
+  Response bodies the hook decodes are capped, and neither the batch send nor
+  the enforcement check follows a redirect — both carry a bearer.
+- **`status` and `doctor` act as the identity of the directory they run in.**
+  Both read the machine-global token where the hooks in a `roots[]` project use
+  that root's own. A 401 inside such a project raised a block under the root
+  credential's fingerprint that `status` could not see and `doctor` could not
+  lift — it probed the global token, and a 2xx cleared a block that was never
+  the one standing — leaving that project's telemetry suspended, with no timer
+  to end it and no diagnostic naming it.
+- **Retention holds on the paths that never send.** The whole-partition sweep ran
+  inside a delivery pass, and both skips — a tripped cooldown and a refused
+  credential — return before one. A revoked token therefore aged nothing out for
+  as long as the block stood, while the queue bound quietly shed the oldest
+  entries at the ceiling without counting them, so `status` reported nothing
+  lost. The sweep now runs on every path that skips a pass — including the one
+  where no usable endpoint is configured, which a refused URL makes a durable
+  state rather than a pre-setup one — its hourly throttle is read from the clock
+  the marker is written in (an injected or backward-stepped clock silenced it
+  permanently), and the bound reports what it sacrifices.
+- **Every registered agent is loadable.** The eager provider list and the lazy
+  loader map are two hand-maintained lists of the same agents; a test now asserts
+  they agree. An agent in only one of them installed hooks that resolved no
+  provider on every invocation and dropped all of that agent's telemetry, while
+  `setup`, `status` and `doctor` all reported success.
+- **A degraded turn summary is attributed to the same developer as a healthy
+  one.** On a machine that takes its identity from git rather than from
+  configuration, a summary emitted after turn assembly failed carried no
+  developer at all: counted in organization totals, in nobody's budget.
+- **Agent config files are no longer permanently tightened.** `0600` is set only
+  when the block being written actually carries a bearer token, and `uninstall`
+  restores the mode the file had before AgentWatch touched it.
+- **Supply chain.** Actions pinned by commit SHA, `npm ci --ignore-scripts` in
+  the job that builds the published tarball, `npm audit --omit=dev
+  --audit-level=high`, CodeQL on every change and weekly, grouped weekly
+  Dependabot updates, and a CI matrix over Node 20 and Node 24 so the declared
+  floor is verified rather than declared. Coverage is measured with enforced
+  per-directory thresholds for the privacy, enforcement, transport and turn
+  paths.
+- **Fewer moving parts.** Dead exports deleted and the compiler set to reject
+  unused locals and parameters; enrollment collapsed from four files and an
+  interface to one function; one definition each of the content-capture flag
+  list, the product-record guard and the hook-command quoting patterns.
+
+### Earlier changes, never published, shipping in 0.3.0
 
 - **Content capture is now off by default.** `capture.prompts`, `capture.responses`,
   `capture.toolInput` and `capture.toolOutput` default to `false`: a fresh install collects

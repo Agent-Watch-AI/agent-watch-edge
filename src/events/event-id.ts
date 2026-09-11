@@ -32,17 +32,6 @@ export function deriveEventId(input: EventIdInput): string {
 }
 
 /**
- * Event id built from an id the provider already guarantees to be unique.
- *
- * @param provider - Internal provider id, which scopes the namespace.
- * @param rawId - The provider's own identifier.
- * @returns The namespaced event id.
- */
-export function providerEventId(provider: string, rawId: string): string {
-  return `${EVENT_ID_PREFIX}${provider}_${rawId}`;
-}
-
-/**
  * SHA-256 of a string, hex encoded.
  *
  * Used both for ids and as the one-way function behind every pseudonymous

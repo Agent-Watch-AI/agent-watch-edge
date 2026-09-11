@@ -10,11 +10,16 @@ export type { UnknownRecord } from './types/core.types.js';
  * absent instead. Building a fresh object (rather than deleting keys) also
  * keeps the result monomorphic for V8 (STYLEGUIDE 3.4).
  *
+ * Built on a null prototype and spread into a plain object at the end: on a
+ * plain literal an own `__proto__` key (which is what `JSON.parse` produces)
+ * would be swallowed by the setter, so the copy would silently lose the one
+ * key most likely to be present for a bad reason.
+ *
  * @param value - Object to compact; left untouched.
  * @returns A copy holding only the defined entries.
  */
 export function compact<T extends object>(value: T): T {
-  const out: UnknownRecord = {};
+  const out: UnknownRecord = Object.create(null) as UnknownRecord;
 
   for (const [key, entry] of Object.entries(value)) {
     if (entry === undefined) continue;
@@ -22,7 +27,7 @@ export function compact<T extends object>(value: T): T {
     out[key] = entry;
   }
 
-  return out as T;
+  return { ...out } as T;
 }
 
 /**
@@ -36,7 +41,7 @@ export function compact<T extends object>(value: T): T {
  * @returns A copy without those keys.
  */
 export function omitKeys<T extends UnknownRecord>(value: T, keys: ReadonlySet<string>): T {
-  const out: UnknownRecord = {};
+  const out: UnknownRecord = Object.create(null) as UnknownRecord;
 
   for (const [key, entry] of Object.entries(value)) {
     if (keys.has(key)) continue;
@@ -44,7 +49,7 @@ export function omitKeys<T extends UnknownRecord>(value: T, keys: ReadonlySet<st
     out[key] = entry;
   }
 
-  return out as T;
+  return { ...out } as T;
 }
 
 /**

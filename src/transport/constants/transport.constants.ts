@@ -5,6 +5,9 @@
  */
 export const ANY_DESTINATION = '*';
 
+/** Avoid starting a drain/probe with an unusable remainder of the hook budget. */
+export const MIN_VIABLE_SEND_MS = 10;
+
 /** How long hooks skip direct sends after the backend failed one. */
 export const BACKEND_COOLDOWN_MS = 60_000;
 
@@ -38,10 +41,34 @@ export const STATS_LOCK_MAX_WAIT_MS = 300;
 export const STATS_LOCK_POLL_MS = 25;
 
 /** HTTP statuses worth retrying that are not 5xx. */
-export const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([401, 403, 408, 429]);
+export const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([408, 429]);
+
+/**
+ * The backend refusing the credential itself.
+ *
+ * Deliberately *not* retryable: a revoked or rotated token does not become
+ * valid by waiting, and re-presenting it on every hook for a week reads to the
+ * backend's security monitoring as low-rate credential stuffing from every
+ * developer machine at once — and to the operator as nothing at all. The
+ * records stay queued; what stops is the retrying.
+ */
+export const AUTH_REJECTED_STATUSES: ReadonlySet<number> = new Set([401, 403]);
+
+/**
+ * Ceiling on a response body the hook will decode.
+ *
+ * Generous: every body the edge reads back is a handful of integers. It exists
+ * so an endpoint cannot make the coding agent's hook allocate an arbitrarily
+ * large buffer — the request timeout bounds the request, not the decode.
+ */
+export const MAX_RESPONSE_BYTES = 64 * 1024;
+
+/** Reason a body was refused; never carries any of the body itself. */
+export const BODY_TOO_LARGE = 'response body too large';
 
 /** Request headers every batch carries. */
 export const CONTENT_TYPE_HEADER = 'content-type';
+export const CONTENT_LENGTH_HEADER = 'content-length';
 export const USER_AGENT_HEADER = 'user-agent';
 export const AUTHORIZATION_HEADER = 'authorization';
 export const INSTALLATION_HEADER = 'x-agentwatch-installation';
@@ -51,6 +78,7 @@ export const USER_AGENT = 'agentwatch-edge';
 /** Filenames under the data directory. */
 export const COOLDOWN_FILE_NAME = 'backend-cooldown.json';
 export const DELIVERY_STATS_FILE_NAME = 'delivery-stats.json';
+export const AUTH_BLOCK_FILE_NAME = 'auth-block.json';
 
 export const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -58,6 +86,19 @@ export const MS_PER_DAY = 24 * 60 * 60 * 1000;
 export const RE_UNSAFE_QUEUE_NAME = /[^A-Za-z0-9_-]/g;
 
 export const QUEUE_FILE_SUFFIX = '.json';
+
+/**
+ * Where a bounded scan stopped, so the next one resumes instead of re-reading
+ * the same head. Deliberately not a `.json` name: the entry listing filters on
+ * that suffix, so the cursor is invisible to every count and every sweep.
+ */
+export const QUEUE_SCAN_CURSOR_FILE = '.scan';
+
+/**
+ * How often a drain may walk the whole partition to enforce the retention
+ * bound, rather than only the batch-sized head of it.
+ */
+export const QUEUE_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
 /**
  * Queue partition used before setup writes a token. Entries land here pinned to
@@ -84,3 +125,12 @@ export const IDENTITY_FINGERPRINT_CHARS = 12;
 
 /** Under the data directory: one sub-directory per identity for cooldown and loss stats. */
 export const IDENTITY_STATE_DIR_NAME = 'identity';
+
+/** Delivery order makes persistence precede optional diagnostic writes. */
+export const DELIVERY_STAGE_NAMES = {
+  select: 'select-delivery',
+  send: 'send-current',
+  preserve: 'preserve-unsent',
+  report: 'report-backend',
+  maintain: 'maintain-queue'
+} as const;

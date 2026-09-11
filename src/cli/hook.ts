@@ -3,7 +3,7 @@ import { loadConfig } from '../config/config-store.js';
 import { debugLog, warnLog } from '../core/logger.js';
 import { runHookPipeline } from '../pipeline/hook-pipeline.js';
 import type { HookPipelineState } from '../pipeline/types/pipeline.types.js';
-import { getProvider } from '../providers/registry.js';
+import { loadProvider } from '../providers/loaders.js';
 import type { AgentProvider, ProviderHookResponse } from '../providers/types/provider.types.js';
 import { isDisabled } from '../storage/disabled.js';
 import { resolvePaths } from '../storage/paths.js';
@@ -30,7 +30,7 @@ export type { HookRunOptions } from './types/cli.types.js';
  * @returns The process exit code; always one the agent tolerates.
  */
 export async function runHook(agentId: string, options: HookRunOptions): Promise<number> {
-  const provider = getProvider(agentId);
+  const provider = await loadProvider(agentId);
 
   if (!provider) {
     warnLog(`unknown agent "${agentId}"; passing through`);
@@ -139,11 +139,22 @@ function respondToDecision(provider: AgentProvider, payload: unknown, result?: H
 async function processPayload(provider: AgentProvider, payload: unknown, options: HookRunOptions): Promise<HookPipelineState> {
   const paths = resolvePaths(options.env);
   const loaded = await loadConfig(paths);
+
+  // On stderr, on every hook, because this is the only place a developer ever
+  // sees it. A config the schema refuses degrades the runtime to `fallbackConfig`
+  // — no endpoint, no token — and nothing else on this path says a word, so an
+  // install that stopped delivering the moment someone hand-edited the file
+  // looked healthy until somebody thought to run `status`. `missing` is not
+  // warned: that is a machine before `setup`, which is not a fault.
+  if (loaded.state === 'invalid') warnLog(`config ${paths.configFile} is invalid (${loaded.error}); running metadata-only with nothing configured`);
+
+  for (const warning of loaded.warnings) warnLog(`config ${paths.configFile}: ${warning}`);
+
   const result = await runHookPipeline({
     provider,
     env: options.env,
     paths,
-    globalConfig: loaded.config,
+    globalConfig: loaded,
     payload,
     dryRun: options.dryRun === true
   });

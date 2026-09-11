@@ -19,7 +19,7 @@ export type {
 
 export { HOOK_COMMAND_MARKER, KNOWN_AGENT_IDS } from './constants/provider.constants.js';
 export { isAgentWatchHookCommand } from './provider.js';
-export { getProvider, providerIds, providers } from './registry.js';
+export { loadProvider, providerIds, providers } from './registry.js';
 export { classifyTool, contentEvidence, extractCommand, extractFilePath, parseMcpToolName, toolCompleteType, toolStartType } from './shared/tooling.js';
 export { baseEvent, filePathPatch, promptPatch, providerPatch, responsePatch, toolPatch, withPatch } from './shared/event-builder.js';
 export { registerOurHandlers, stripOurHandlers, sweepUnregisteredEvents, withHooksBlock, writeJsonValidated } from './shared/hook-config.js';

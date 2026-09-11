@@ -7,11 +7,12 @@ import { findExecutable } from '../core/which.js';
 import { isDisabled } from '../storage/disabled.js';
 import { loadInstallState } from '../storage/install-state.js';
 import { resolvePaths } from '../storage/paths.js';
+import { BackendAuthBlock } from '../transport/auth-block.js';
 import { DeliveryStats } from '../transport/delivery-stats.js';
 import { HttpTransport } from '../transport/http-transport.js';
 import { EventQueue } from '../transport/queue.js';
 import { identityPaths, settleLegacyQueue } from '../transport/queue-partition.js';
-import { servesMultipleIdentities } from '../config/root-config.js';
+import { applyRootOverride, servesMultipleIdentities } from '../config/root-config.js';
 import type { EventTransport } from '../transport/types/transport.types.js';
 import { RE_NEEDS_QUOTING, RE_QUOTE_ESCAPE } from './constants/cli.constants.js';
 import type { CliContext } from './types/cli.types.js';
@@ -30,14 +31,26 @@ export type { CliContext } from './types/cli.types.js';
 export async function buildCliContext(env: Env): Promise<CliContext> {
   const paths = resolvePaths(env);
   const configResult = await loadConfig(paths);
+  // Resolved once, here, because every identity-scoped file a command touches is
+  // named after the token the *hooks in this directory* use. `buildAuthBlock`
+  // reading the global token was a per-root block nothing could see or lift: a
+  // 401 under a root's own token wrote a block file under that token's
+  // fingerprint, `status` read the global one and printed nothing, and `doctor`
+  // proved the global credential good and cleared a block that was never the
+  // one standing. That root's telemetry stayed suspended with no diagnostic and
+  // no remedy, and a block has no timer to end it.
+  const rooted = applyRootOverride(configResult.config, env.cwd);
 
   return {
     env,
     disabled: await isDisabled(paths),
     paths,
     config: configResult.config,
+    identityConfig: rooted.config,
+    ...(rooted.root === undefined ? {} : { identityRoot: rooted.root.path }),
     configState: configResult.state,
     configError: configResult.state === 'invalid' ? configResult.error : undefined,
+    configWarnings: configResult.warnings,
     installState: await loadInstallState(paths)
   };
 }
@@ -54,15 +67,30 @@ export async function buildCliContext(env: Env): Promise<CliContext> {
  * @returns The queue.
  */
 export async function buildQueue(context: CliContext): Promise<EventQueue> {
-  await settleLegacyQueue(context.paths.queueDir, context.config.token, servesMultipleIdentities(context.config));
+  // `config` for the multi-identity question and `identityConfig` for the
+  // partition, exactly as the hook path does it: whether the machine serves two
+  // bearers is a fact about the whole file, and which partition this command
+  // owns is a fact about where it was run.
+  await settleLegacyQueue(context.paths.queueDir, context.identityConfig.token, servesMultipleIdentities(context.config));
 
+  return openIdentityQueue(context);
+}
+
+/**
+ * Open the selected partition without adopting or moving legacy records.
+ * Setup can inspect ownership and ask for consent without changing the queue.
+ * @param context - Resolved identity and storage paths.
+ * @returns A queue handle; construction performs no filesystem writes.
+ */
+export function openIdentityQueue(context: CliContext): EventQueue {
   return new EventQueue({
-    queueDir: identityPaths(context.paths, context.config.token).queueDir,
+    queueDir: identityPaths(context.paths, context.identityConfig.token).queueDir,
     locksDir: context.paths.locksDir,
-    maxEvents: context.config.delivery.maxQueueEvents,
-    maxAttempts: context.config.delivery.maxAttempts,
-    maxEventAgeDays: context.config.delivery.maxEventAgeDays,
-    now: context.env.now
+    maxEvents: context.identityConfig.delivery.maxQueueEvents,
+    maxAttempts: context.identityConfig.delivery.maxAttempts,
+    maxEventAgeDays: context.identityConfig.delivery.maxEventAgeDays,
+    now: context.env.now,
+    stats: buildDeliveryStats(context)
   });
 }
 
@@ -73,7 +101,17 @@ export async function buildQueue(context: CliContext): Promise<EventQueue> {
  * @returns The tally.
  */
 export function buildDeliveryStats(context: CliContext): DeliveryStats {
-  return new DeliveryStats(identityPaths(context.paths, context.config.token).statsFile, context.env.now, context.paths.locksDir);
+  return new DeliveryStats(identityPaths(context.paths, context.identityConfig.token).statsFile, context.env.now, context.paths.locksDir);
+}
+
+/**
+ * The standing credential refusal for this context.
+ *
+ * @param context - Resolved CLI context.
+ * @returns The block.
+ */
+export function buildAuthBlock(context: CliContext): BackendAuthBlock {
+  return new BackendAuthBlock(identityPaths(context.paths, context.identityConfig.token).authBlockFile, context.env.now);
 }
 
 /**
@@ -84,16 +122,20 @@ export function buildDeliveryStats(context: CliContext): DeliveryStats {
  * @returns The transport, or undefined before setup has run.
  */
 export function buildTransport(context: CliContext, timeoutMs?: number): EventTransport | undefined {
-  const url = eventsUrl(context.config);
+  // The rooted identity throughout, so `doctor` probes the credential the hooks
+  // in this directory present and `status` drains the partition they fill. Only
+  // that credential can prove itself good, and only that proof may lift the
+  // block standing against it.
+  const url = eventsUrl(context.identityConfig);
 
   if (!url || context.disabled) return undefined;
 
   return new HttpTransport({
     eventsUrl: url,
-    capture: context.config.capture,
-    token: context.config.token,
-    installationId: context.config.installationId,
-    timeoutMs: timeoutMs ?? context.config.delivery.timeoutMs
+    capture: context.identityConfig.capture,
+    token: context.identityConfig.token,
+    installationId: context.identityConfig.installationId,
+    timeoutMs: timeoutMs ?? context.identityConfig.delivery.timeoutMs
   });
 }
 

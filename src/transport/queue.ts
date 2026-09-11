@@ -2,14 +2,16 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pollUntil } from '../core/async.js';
 import { debugLog } from '../core/logger.js';
-import { PRODUCT_EVENT_TYPE_SET } from '../events/constants/events.constants.js';
-import type { ProductEvent } from '../events/product-event.js';
+import { isProductEvent, type EventTypeCarrier, type ProductEvent } from '../events/product-event.js';
 import { writeFileAtomic } from '../storage/atomic-file.js';
 import { acquireLock } from '../storage/lock.js';
-import { SECRET_FILE_MODE } from '../storage/constants/storage.constants.js';
+import { claimSweep } from '../storage/sweep-marker.js';
+import { SECRET_FILE_MODE, SWEEP_MARKER_FILE } from '../storage/constants/storage.constants.js';
 import type { ReleaseLock } from '../storage/types/storage.types.js';
+import type { BackendAuthBlock } from './auth-block.js';
 import {
   ANY_DESTINATION,
+  AUTH_REJECTED_STATUSES,
   BACKOFF_BASE_MS,
   BACKOFF_JITTER_MIN,
   BACKOFF_JITTER_RANGE,
@@ -18,10 +20,13 @@ import {
   MS_PER_DAY,
   QUEUE_DRAIN_LOCK,
   QUEUE_FILE_SUFFIX,
+  QUEUE_SCAN_CURSOR_FILE,
+  QUEUE_SWEEP_INTERVAL_MS,
   RETARGET_LOCK_POLL_MS,
   RETARGET_LOCK_WAIT_MS,
   RE_UNSAFE_QUEUE_NAME
 } from './constants/transport.constants.js';
+import { sendEvents } from './send.js';
 import { queueEntrySchema } from './schemas/queue.schema.js';
 import type { DrainStats, DrainStatsRecorder, DueEntry, EventTransport, QueueEntry, QueueOptions } from './types/transport.types.js';
 
@@ -116,24 +121,27 @@ export class EventQueue {
    * @param transport - Where to send.
    * @param maxBatch - Ceiling on events sent in one pass.
    * @param statsRecorder - Optional sink for what this pass lost.
+   * @param authBlock - Optional sink for a refused credential, so a rejected
+   *   bearer suspends sending instead of spending the backlog's attempts on it.
    * @returns What the pass sent, failed, dropped and had rejected.
    */
-  async drain(transport: EventTransport, maxBatch: number, statsRecorder?: DrainStatsRecorder): Promise<DrainStats> {
+  async drain(transport: EventTransport, maxBatch: number, statsRecorder?: DrainStatsRecorder, authBlock?: BackendAuthBlock): Promise<DrainStats> {
     const release = await acquireLock(this.options.locksDir, QUEUE_DRAIN_LOCK, this.now);
 
     if (!release) return { sent: 0, failed: 0, dropped: 0, rejected: 0, skipped: true };
 
     try {
       const nowMs = this.now().getTime();
-      const collected = await this.collectDue(transport, nowMs);
-      // Oldest first: hash-ordered filenames would otherwise let a large
-      // backlog defer the same late-sorting entries on every drain.
+      const swept = await this.sweepUnsendable(nowMs);
+      const collected = await this.collectDue(transport, nowMs, maxBatch);
+      // Oldest first among what was scanned: hash-ordered filenames would
+      // otherwise let a large backlog defer the same late-sorting entries.
       const batch = collected.due
         .slice()
         .sort((a, b) => Date.parse(a.entry.firstQueuedAt) - Date.parse(b.entry.firstQueuedAt))
         .slice(0, maxBatch);
-      const sent = batch.length === 0 ? EMPTY_DELTA : await this.sendBatch(transport, batch, nowMs);
-      const stats: DrainStats = { ...mergeDeltas(collected.delta, sent), skipped: false };
+      const sent = batch.length === 0 ? EMPTY_DELTA : await this.sendBatch(transport, batch, nowMs, authBlock);
+      const stats: DrainStats = { ...mergeDeltas(mergeDeltas(swept, collected.delta), sent), skipped: false };
 
       await report(statsRecorder, stats);
 
@@ -141,6 +149,31 @@ export class EventQueue {
     } finally {
       await release();
     }
+  }
+
+  /**
+   * Enforce retention across the whole partition, without sending anything.
+   *
+   * `drain` sweeps too, but every early return in `deliverEvents` skips a drain
+   * — a tripped cooldown, and a credential the backend is refusing — and those
+   * are precisely the multi-day outages the age bound exists for. A block has no
+   * timer at all, so a revoked token used to mean nothing aged out until someone
+   * fixed the credential, while `enforceBound` quietly shed the oldest records
+   * at the ceiling. Sharing the marker with the drain's own sweep, so a hook
+   * that does reach a drain still pays for only one pass.
+   *
+   * Takes no lock: every removal is idempotent, which is the same reason
+   * `claimSweep` is unlocked.
+   *
+   * @param statsRecorder - Optional sink for what aged out.
+   * @returns How many entries were removed.
+   */
+  async sweep(statsRecorder?: DrainStatsRecorder): Promise<number> {
+    const { dropped } = await this.sweepUnsendable(this.now().getTime());
+
+    if (dropped > 0) await statsRecorder?.recordDropped(dropped);
+
+    return dropped;
   }
 
   /**
@@ -217,22 +250,48 @@ export class EventQueue {
   /**
    * Entries due for this transport, dropping the ones that can never be sent.
    *
+   * Reads at most `maxBatch` entries, whatever the backlog holds and whatever it
+   * finds in them. Reading and zod-parsing the whole partition to find the few
+   * entries a pass may send is what made an outage cost the developer up to
+   * `maxQueueEvents` file reads on every hook, which AGENTS.md §3 forbids
+   * outright. The bound is on entries *read*, not on entries found due: a
+   * backlog where nothing is due — every entry in backoff, or every entry
+   * pinned to a destination this identity no longer sends to, which is what a
+   * changed endpoint leaves behind for a week — is exactly the case that would
+   * otherwise walk all of it and send nothing.
+   *
+   * A hard read bound needs the scan to move, or the head of the sorted list
+   * would be re-read on every pass and the tail never reached. So the scan
+   * starts where the last one stopped and wraps around: every entry is examined
+   * within `ceil(backlog / maxBatch)` passes, which is what FR-009 asks for —
+   * no entry deferred forever. Losing the cursor costs one pass starting at the
+   * head again.
+   *
+   * The batch is therefore the oldest of what this pass *scanned*, not of the
+   * whole backlog. Global oldest-first would need a due-time index, which is
+   * separate work.
+   *
    * @param transport - Where the pass will send.
    * @param nowMs - This pass's clock reading.
+   * @param maxBatch - Entries this pass may read; also its ceiling on sends.
    * @returns The due entries and what collecting them dropped.
    */
-  private async collectDue(transport: EventTransport, nowMs: number): Promise<CollectedEntries> {
+  private async collectDue(transport: EventTransport, nowMs: number, maxBatch: number): Promise<CollectedEntries> {
+    const names = await this.listFiles();
+    const start = await this.scanStart(names);
+    const scan = [...names.slice(start), ...names.slice(0, start)].slice(0, maxBatch);
     const due: DueEntry[] = [];
     let dropped = 0;
 
-    for (const name of await this.listFiles()) {
+    for (const name of scan) {
       const file = path.join(this.options.queueDir, name);
       const entry = await this.readEntry(file);
 
-      if (!entry || this.isExpired(entry, nowMs) || !isProductEntry(entry)) {
+      if (!entry || this.isExpired(entry, nowMs) || !isProductEvent(entry.event as EventTypeCarrier)) {
         // Unreadable, aged out, or — for a backlog written by a pre-product
         // release — an internal lifecycle event the backend does not accept.
-        // Draining one of those would poison every batch it rides in.
+        // Draining one of those would poison every batch it rides in. Entries
+        // past the scan are the throttled sweep's business, not this pass's.
         await fs.rm(file, { force: true });
         dropped += 1;
         continue;
@@ -243,7 +302,112 @@ export class EventQueue {
       if (Date.parse(entry.nextAttemptAt) <= nowMs) due.push({ file, entry });
     }
 
+    const last = scan.at(-1);
+
+    if (last !== undefined) await this.rememberScan(last);
+
     return { due, delta: { ...EMPTY_DELTA, dropped } };
+  }
+
+  /**
+   * Index the next bounded scan starts at.
+   *
+   * The first name *after* the one last scanned, so an entry that was sent and
+   * deleted in the meantime does not send the scan back to the head.
+   *
+   * @param names - This pass's sorted entry names.
+   * @returns The starting index; zero when there is no cursor to resume from.
+   */
+  private async scanStart(names: readonly string[]): Promise<number> {
+    const last = await this.lastScanned();
+
+    if (last === undefined) return 0;
+
+    const next = names.findIndex((name) => name > last);
+
+    return next === -1 ? 0 : next;
+  }
+
+  /**
+   * The entry name the previous pass stopped on.
+   *
+   * @returns The name, or undefined when nothing has scanned yet.
+   */
+  private async lastScanned(): Promise<string | undefined> {
+    try {
+      return (await fs.readFile(this.cursorFile(), 'utf8')) || undefined;
+    } catch {
+      // No cursor, or one we cannot read: start at the head. This is a hint for
+      // fairness, not state anything depends on.
+      return undefined;
+    }
+  }
+
+  /**
+   * Record where this pass stopped.
+   *
+   * @param name - The last entry name it read.
+   */
+  private async rememberScan(name: string): Promise<void> {
+    try {
+      // The same write as every other file in the partition, for the same
+      // reason: it renames a 0600 temp file over the target, so a cursor
+      // somebody pre-created as a symlink is replaced rather than followed.
+      await writeFileAtomic(this.cursorFile(), name, SECRET_FILE_MODE);
+    } catch {
+      // Same rule as the sweep marker: the drain runs on the hook path, and
+      // failing to remember a position must never fail the agent's turn.
+    }
+  }
+
+  /**
+   * Where the scan cursor lives.
+   *
+   * Not a `.json` name, so the entry listing never sees it.
+   *
+   * @returns Absolute path to the cursor file.
+   */
+  private cursorFile(): string {
+    return path.join(this.options.queueDir, QUEUE_SCAN_CURSOR_FILE);
+  }
+
+  /**
+   * Remove everything that can never be sent, wherever it sits in the partition.
+   *
+   * The bounded scan only ever sees the head of the backlog, so the retention
+   * bound needs a pass that sees all of it. Throttled by a marker, because that
+   * pass is the expensive one — and it is an improvement on what it replaces:
+   * expiry used to be enforced only inside a drain, and a drain is skipped for
+   * the whole cooldown window, so during a backend outage nothing aged out at
+   * all. That was precisely the week-long case the bound exists for.
+   *
+   * @param nowMs - This pass's clock reading.
+   * @returns What the sweep dropped, or nothing when it was not due.
+   */
+  private async sweepUnsendable(nowMs: number): Promise<DrainDelta> {
+    // `Date.now()`, not `nowMs`: the throttle is a marker file's mtime, which is
+    // real wall-clock time, and `nowMs` comes from the injectable clock. Compared
+    // against each other a fixed test clock — or a backward NTP step in
+    // production — makes `nowMs - last` negative forever, which reads as "not
+    // due" and silences the retention pass for good. `TurnStateStore.sweep`
+    // passes the wall clock here for the same reason. Expiry below still uses
+    // `nowMs`, because that is a judgement about the entries, not about when this
+    // process last swept.
+    if (!(await claimSweep(path.join(this.options.queueDir, SWEEP_MARKER_FILE), QUEUE_SWEEP_INTERVAL_MS, Date.now()))) return EMPTY_DELTA;
+
+    let dropped = 0;
+
+    for (const name of await this.listFiles()) {
+      const file = path.join(this.options.queueDir, name);
+      const entry = await this.readEntry(file);
+
+      if (entry && !this.isExpired(entry, nowMs) && isProductEvent(entry.event as EventTypeCarrier)) continue;
+
+      await fs.rm(file, { force: true });
+      dropped += 1;
+    }
+
+    return { ...EMPTY_DELTA, dropped };
   }
 
   /**
@@ -252,10 +416,11 @@ export class EventQueue {
    * @param transport - Where to send.
    * @param batch - Entries to send.
    * @param nowMs - This pass's clock reading.
+   * @param authBlock - Optional sink for a refused credential.
    * @returns What the send accomplished and cost.
    */
-  private async sendBatch(transport: EventTransport, batch: readonly DueEntry[], nowMs: number): Promise<DrainDelta> {
-    const result = await transport.send(batch.map(({ entry }) => entry.event as unknown as ProductEvent));
+  private async sendBatch(transport: EventTransport, batch: readonly DueEntry[], nowMs: number, authBlock?: BackendAuthBlock): Promise<DrainDelta> {
+    const result = await sendEvents(transport, batch.map(({ entry }) => entry.event as unknown as ProductEvent));
 
     if (result.ok) {
       await Promise.all(batch.map(({ file }) => fs.rm(file, { force: true })));
@@ -263,9 +428,21 @@ export class EventQueue {
       return { ...EMPTY_DELTA, sent: batch.length, rejected: reportRejected(result.counters?.rejected, 'the drained batch') };
     }
 
+    if (result.deferred) return { ...EMPTY_DELTA, failed: batch.length };
+
     debugLog('queue drain failed', result.error ?? `status ${result.status}`);
 
-    if (!result.retryable && batch.length > 1) return this.isolateBatch(transport, batch, nowMs);
+    if (result.status !== undefined && AUTH_REJECTED_STATUSES.has(result.status)) {
+      // The credential was refused, so nothing in this batch is at fault and
+      // nothing about it may change: an attempt spent here would walk the whole
+      // backlog to maxAttempts and delete it, which is the one thing the queue
+      // exists to prevent. Raise the block instead and leave every entry due.
+      if (authBlock && transport.destination) await authBlock.raise(transport.destination, result.status);
+
+      return { ...EMPTY_DELTA, failed: batch.length };
+    }
+
+    if (!result.retryable && batch.length > 1) return this.isolateBatch(transport, batch, nowMs, authBlock);
 
     let delta = EMPTY_DELTA;
 
@@ -288,9 +465,10 @@ export class EventQueue {
    * @param transport - Where to send.
    * @param batch - Entries the batch send refused.
    * @param nowMs - This pass's clock reading.
+   * @param authBlock - Persisted refusal, including one received by a single probe.
    * @returns What the probes accomplished and cost.
    */
-  private async isolateBatch(transport: EventTransport, batch: readonly DueEntry[], nowMs: number): Promise<DrainDelta> {
+  private async isolateBatch(transport: EventTransport, batch: readonly DueEntry[], nowMs: number, authBlock?: BackendAuthBlock): Promise<DrainDelta> {
     let delta = EMPTY_DELTA;
     let probes = 0;
 
@@ -301,7 +479,13 @@ export class EventQueue {
       }
 
       probes += 1;
-      const single = await transport.send([entry.event as unknown as ProductEvent]);
+      const single = await sendEvents(transport, [entry.event as unknown as ProductEvent]);
+
+      if (single.deferred || (single.status !== undefined && AUTH_REJECTED_STATUSES.has(single.status))) {
+        if (!single.deferred && single.status !== undefined && authBlock && transport.destination) await authBlock.raise(transport.destination, single.status);
+
+        return mergeDeltas(delta, { ...EMPTY_DELTA, failed: batch.length - probes + 1 });
+      }
 
       if (!single.ok) {
         delta = mergeDeltas(delta, await this.recordFailure(file, entry, nowMs));
@@ -406,6 +590,11 @@ export class EventQueue {
    *
    * The oldest are the least likely to still be deliverable, and an unbounded
    * queue on a developer machine is a disk-space bug.
+   *
+   * Reported through `options.stats`, like every other permanent loss: these
+   * deletions used to be the one kind that left `totalDropped` at zero, so a
+   * machine steadily shedding records at the bound looked, in `status`, exactly
+   * like one that had never lost any.
    */
   private async enforceBound(): Promise<void> {
     const files = await this.listFiles();
@@ -427,6 +616,8 @@ export class EventQueue {
     for (const { full } of doomed) {
       await fs.rm(full, { force: true });
     }
+
+    if (doomed.length > 0) await this.options.stats?.recordDropped(doomed.length);
   }
 
   /**
@@ -534,12 +725,6 @@ function matchesDestination(entry: string | undefined, transport: string | undef
  * @param entry - The entry.
  * @returns True for an llm.call or turn.summary.
  */
-function isProductEntry(entry: QueueEntry): boolean {
-  const type = (entry.event as { event?: { type?: unknown } }).event?.type;
-
-  return typeof type === 'string' && PRODUCT_EVENT_TYPE_SET.has(type);
-}
-
 /**
  * Backoff for the nth attempt, with jitter.
  *

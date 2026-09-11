@@ -20,6 +20,7 @@ class FakeTransport implements EventTransport {
     private readonly result: DeliveryResult,
     readonly destination?: string
   ) {}
+
   async send(events: ProductEvent[]): Promise<DeliveryResult> {
     this.calls.push(events);
 
@@ -49,7 +50,8 @@ describe('EventQueue', () => {
   async function makeAllDue(): Promise<void> {
     const dir = path.join(world.home, 'q');
 
-    for (const name of await fs.readdir(dir)) {
+    // Entries only: the partition also holds the sweep marker, which is not one.
+    for (const name of (await fs.readdir(dir)).filter((entry) => entry.endsWith('.json'))) {
       const file = path.join(dir, name);
       const entry = JSON.parse(await fs.readFile(file, 'utf8'));
 
@@ -278,7 +280,7 @@ describe('deliverEvents', () => {
 
     // Simulate the next hook invocation with a healthy backend: direct send
     // succeeds and the backlog drains. Force the queued entry to be due.
-    const file = (await fs.readdir(path.join(world.home, 'q')))[0]!;
+    const file = (await fs.readdir(path.join(world.home, 'q'))).find((name) => name.endsWith('.json'))!;
     const full = path.join(world.home, 'q', file);
     const entry = JSON.parse(await fs.readFile(full, 'utf8'));
 

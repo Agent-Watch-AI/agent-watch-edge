@@ -12,7 +12,7 @@ export type { HookHandler, HookMatcherGroup, StripOptions, StripResult } from '.
  * @param handler - Entry from an agent's hook list.
  * @returns True when we own it.
  */
-export function isOurHandler(handler: unknown): boolean {
+function isOurHandler(handler: unknown): boolean {
   const record = handler as HookHandler | null;
 
   if (!isRecord(record) || typeof record.command !== 'string') return false;
@@ -32,7 +32,7 @@ export function isOurHandler(handler: unknown): boolean {
  * @param options - Whether bare handlers are accepted alongside groups.
  * @returns The entries to keep.
  */
-export function withoutOurHandlers(entries: readonly unknown[], options: StripOptions = {}): unknown[] {
+function withoutOurHandlers(entries: readonly unknown[], options: StripOptions = {}): unknown[] {
   const kept: unknown[] = [];
 
   for (const entry of entries) {

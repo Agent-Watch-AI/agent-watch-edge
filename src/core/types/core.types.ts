@@ -34,15 +34,17 @@ export interface Step<TState> {
  * — instead of a thrown error or a nullable return — is what keeps the flow
  * linear and every stage independently testable.
  */
-export type StepOutcome<TState> =
-  | { readonly kind: 'next'; readonly state: TState }
-  | { readonly kind: 'stop'; readonly state: TState; readonly reason: string };
+export type StepOutcome<TState>
+  = | { readonly kind: 'next'; readonly state: TState }
+    | { readonly kind: 'stop'; readonly state: TState; readonly reason: string };
 
 /** Where a flow ended and why; `stoppedAt` is empty when every stage ran. */
 export interface FlowResult<TState> {
   readonly state: TState;
   readonly completed: boolean;
   readonly stoppedAt?: string;
+  /** Original thrown value retained for callers, never included in observer traces. */
+  readonly cause?: unknown;
   readonly reason?: string;
 }
 

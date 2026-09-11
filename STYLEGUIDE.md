@@ -13,6 +13,20 @@ Everything here that can be machine-checked is enforced by `eslint.config.js`. `
    - **Zero side-effects** in core logic / transformations.
    - Do **NOT** mutate arguments. Return new values instead — including accumulators: a helper that "adds to the stats" takes no stats, it returns its own delta and the caller folds them (see `mergeDeltas` in `src/transport/queue.ts`).
    - Separate pure computation (core) from impure I/O (adapters, network, file system).
+   - **Two exceptions, and only these two.** A *stateful I/O adapter* may be a
+     class: `EventQueue`, `HttpTransport`, `DecisionCache`, `TurnStateStore`,
+     `DeliveryStats`, `BackendCooldown`, `BackendAuthBlock`, `SnapshotStateStore`
+     and the three OTel configurators are constructor-injected bags of paths,
+     config and a clock, and not one of them holds a non-`readonly` field —
+     their mutable state is the filesystem. Replacing them with factories
+     returning closures would change the syntax and nothing else: the effects
+     are identical and `readonly` on an injected dependency freezes the
+     reference, never the world behind it. Domain logic and transformations get
+     no such licence and must be pure functions.
+   - The other exception is `let verbose` in `src/core/logger.ts`: the one
+     process-wide mutable cell in the package, because a debug switch read by
+     every module cannot be threaded through every signature. It is named here
+     so nobody reads it as a precedent.
 
 2. **Control Flow: Guard Clauses Only (No `if-else`)**:
    - **Never** use `else` or `else if`.
@@ -47,7 +61,6 @@ Everything here that can be machine-checked is enforced by `eslint.config.js`. `
    - An entry point is expressed as an ordered list of **named stages**, each a pure function of one immutable state value, composed with `runFlow` from `src/core/pipe.ts`.
    - A stage returns `next(state)` to continue or `stop(state, reason)` to end the flow. "Stop" is a value, never a thrown error or a nullable return.
    - The canonical example is `src/pipeline/hook-pipeline.ts`: the whole hook contract is five lines you read top to bottom, and reordering a step is a change to that array.
-   - `pipe(...)` composes plain value transformations left to right for the same reason: a derivation should read in the order it happens.
 
 ---
 

@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { writeFileAtomic } from '../src/storage/atomic-file.js';
+import { SECRET_FILE_MODE } from '../src/storage/constants/storage.constants.js';
 import { EventQueue } from '../src/transport/queue.js';
 
 function summary(id: string) {
@@ -26,6 +28,50 @@ function dirs() {
 
   return { base, queueDir: path.join(base, 'queue'), locksDir: path.join(base, 'locks') };
 }
+
+// The sweep's throttle is a marker file's mtime, which is real wall-clock time,
+// and the pass used to compare it against the queue's *injected* clock. A fixed
+// test clock — or a backward NTP step in production — made the difference a large
+// negative number, which reads as "not due", so the retention pass was silenced
+// for good and nothing ever aged out again.
+describe('the retention sweep against an injected clock', () => {
+  it('claims a due sweep even when the queue clock is not the wall clock', async () => {
+    const { base, queueDir, locksDir } = dirs();
+    const queue = new EventQueue({
+      queueDir,
+      locksDir,
+      maxEvents: 50,
+      maxAttempts: 20,
+      maxEventAgeDays: 7,
+      now: () => new Date('2026-08-15T10:00:00Z')
+    });
+
+    await queue.enqueue([summary('evt_stale')]);
+
+    // A marker last claimed two hours ago in wall-clock terms: due, by the only
+    // clock the marker is written in. Written through `writeFileAtomic`, as the
+    // package writes every file under a directory `AGENTWATCH_DATA_DIR` may put
+    // in a shared temp tree: an unpredictable temp name, 0600, and a rename that
+    // replaces a pre-planted symlink rather than following it.
+    const marker = path.join(queueDir, '.sweep');
+
+    await writeFileAtomic(marker, '', SECRET_FILE_MODE);
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+
+    await fs.utimes(marker, twoHoursAgo, twoHoursAgo);
+
+    // Queued under the injected clock, so by that same clock it is 45 days old.
+    const [file] = await fs.readdir(queueDir).then((names) => names.filter((name) => name.endsWith('.json')));
+    const entry = JSON.parse(await fs.readFile(path.join(queueDir, file!), 'utf8'));
+
+    await writeFileAtomic(path.join(queueDir, file!), JSON.stringify({ ...entry, firstQueuedAt: '2026-07-01T10:00:00.000Z' }), SECRET_FILE_MODE);
+
+    expect(await queue.sweep()).toBe(1);
+    expect(await queue.pendingCount()).toBe(0);
+
+    await fs.rm(base, { recursive: true, force: true });
+  });
+});
 
 describe('queue fairness', () => {
   it('evicts by firstQueuedAt, not by file mtime', async () => {
@@ -86,7 +132,12 @@ describe('queue fairness', () => {
     await fs.rm(base, { recursive: true, force: true });
   });
 
-  it('drains oldest-first by firstQueuedAt', async () => {
+  it('sends the oldest first among the entries one pass scans, and starves none', async () => {
+    // A pass reads only as many entries as it may send, so the batch is the
+    // oldest of what it *scanned*, not of the whole backlog: global age order
+    // would mean reading and parsing every entry on every hook. What must hold
+    // is that no entry is deferred forever — a sent entry is deleted and a
+    // refused one takes a backoff, so the scan always moves on.
     const { base, queueDir, locksDir } = dirs();
     let nowMs = Date.parse('2026-08-15T10:00:00Z');
     const queue = new EventQueue({
@@ -113,9 +164,118 @@ describe('queue fairness', () => {
       destination: undefined
     };
 
+    // One entry per pass: both leave, each exactly once, and the queue empties.
+    await queue.drain(transport as never, 1);
     await queue.drain(transport as never, 1);
 
-    expect(sent[0]).toEqual(['evt_zzz_first']);
+    expect(sent.flat().sort()).toEqual(['evt_aaa_second', 'evt_zzz_first']);
+    expect(await queue.pendingCount()).toBe(0);
+
+    // A pass that scans both orders them by age, not by filename.
+    await queue.enqueue([summary('evt_zzz_first')]);
+    nowMs += 1000;
+    await queue.enqueue([summary('evt_aaa_second')]);
+    sent.length = 0;
+    await queue.drain(transport as never, 2);
+
+    expect(sent[0]).toEqual(['evt_zzz_first', 'evt_aaa_second']);
+    await fs.rm(base, { recursive: true, force: true });
+  });
+
+  it('reads a number of entries bounded by the batch size, whatever the backlog holds', async () => {
+    const { base, queueDir, locksDir } = dirs();
+    const queue = new EventQueue({ queueDir, locksDir, maxEvents: 500, maxAttempts: 20, maxEventAgeDays: 7 });
+
+    await queue.enqueue(Array.from({ length: 200 }, (_, index) => summary(`evt_${index}`)));
+    expect(await queue.pendingCount()).toBe(200);
+
+    // The sweep already ran on that enqueue's own pass, so this drain measures
+    // the bounded scan alone.
+    await queue.drain({ async send() { return { ok: true, retryable: false } as const; }, destination: undefined } as never, 5);
+
+    const opened = await countOpenedEntries(queueDir, () =>
+      queue.drain({ async send() { return { ok: true, retryable: false } as const; }, destination: undefined } as never, 5)
+    );
+
+    // Five sent, so at most five parsed. Without the bound this was 195. The
+    // lower bound proves the counter is actually seeing the reads.
+    expect(opened).toBeGreaterThan(0);
+    expect(opened).toBeLessThanOrEqual(5);
+    await fs.rm(base, { recursive: true, force: true });
+  });
+
+  it('reads no more than the batch size when nothing in the backlog is due', async () => {
+    // The bound is on entries read, not on entries found sendable. A backlog
+    // pinned to a destination this identity no longer sends to — what a changed
+    // endpoint leaves behind until it expires — must not be walked in full on
+    // every hook to conclude that none of it can go.
+    const { base, queueDir, locksDir } = dirs();
+    const queue = new EventQueue({ queueDir, locksDir, maxEvents: 500, maxAttempts: 20, maxEventAgeDays: 7 });
+    const transport = { async send() { return { ok: true, retryable: false } as const; }, destination: 'https://new.example.com/v1/events' };
+
+    await queue.enqueue(Array.from({ length: 200 }, (_, index) => summary(`evt_${index}`)), 'https://old.example.com/v1/events');
+
+    // The first pass claims the sweep, which walks the whole partition by
+    // design; the bound under test is the one on the pass after it.
+    await queue.drain(transport as never, 5);
+
+    const opened = await countOpenedEntries(queueDir, () => queue.drain(transport as never, 5));
+
+    expect(opened).toBeGreaterThan(0);
+    expect(opened).toBeLessThanOrEqual(5);
+    expect(await queue.pendingCount()).toBe(200);
+    await fs.rm(base, { recursive: true, force: true });
+  });
+
+  it('reaches an entry behind a backlog of unsendable ones within one rotation', async () => {
+    // The read bound means a pass sees a window, so the window has to move: the
+    // one sendable entry sits behind twelve that never match, and must still go
+    // out within ceil(13 / 2) passes.
+    const { base, queueDir, locksDir } = dirs();
+    const queue = new EventQueue({ queueDir, locksDir, maxEvents: 50, maxAttempts: 20, maxEventAgeDays: 7 });
+    const sent: string[] = [];
+    const transport = {
+      async send(events: { id: string }[]) {
+        sent.push(...events.map((event) => event.id));
+
+        return { ok: true, retryable: false } as const;
+      },
+      destination: 'https://mine.example.com/v1/events'
+    };
+
+    await queue.enqueue(Array.from({ length: 12 }, (_, index) => summary(`evt_stranded_${index}`)), 'https://other.example.com/v1/events');
+    await queue.enqueue([summary('evt_mine')], 'https://mine.example.com/v1/events');
+
+    for (let pass = 0; pass < 7 && sent.length === 0; pass += 1) await queue.drain(transport as never, 2);
+
+    expect(sent).toEqual(['evt_mine']);
+    expect(await queue.pendingCount()).toBe(12);
     await fs.rm(base, { recursive: true, force: true });
   });
 });
+
+/**
+ * How many queue entry files a call reads, counted by patching `fs.readFile`.
+ *
+ * @param queueDir - Partition whose entries to count.
+ * @param run - The call to measure.
+ * @returns The number of distinct entry reads it made.
+ */
+async function countOpenedEntries(queueDir: string, run: () => Promise<unknown>): Promise<number> {
+  const real = fs.readFile.bind(fs);
+  let reads = 0;
+
+  (fs as { readFile: typeof fs.readFile }).readFile = ((file: Parameters<typeof fs.readFile>[0], ...rest: unknown[]) => {
+    if (typeof file === 'string' && file.startsWith(queueDir) && file.endsWith('.json')) reads += 1;
+
+    return (real as (...args: unknown[]) => unknown)(file, ...rest);
+  }) as typeof fs.readFile;
+
+  try {
+    await run();
+  } finally {
+    (fs as { readFile: typeof fs.readFile }).readFile = real;
+  }
+
+  return reads;
+}

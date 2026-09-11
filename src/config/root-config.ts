@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { compact } from '../core/object.js';
+import { sameEndpoint } from './destination.js';
+import { ROOT_URL_FIELDS } from './constants/config.constants.js';
 import type { AgentWatchConfig, RootedConfig, RootOverride } from './types/config.types.js';
 
 /**
@@ -20,7 +22,7 @@ import type { AgentWatchConfig, RootedConfig, RootOverride } from './types/confi
 export function selectRoot(roots: Readonly<Record<string, RootOverride>> | undefined, cwd: string): RootedConfig['root'] {
   if (!roots) return undefined;
 
-  const target = canonical(cwd);
+  const target = canonicalRoot(cwd);
   let bestKey: string | undefined;
   let bestLength = -1;
 
@@ -29,7 +31,7 @@ export function selectRoot(roots: Readonly<Record<string, RootOverride>> | undef
     // happened to start in, which is not a decision anyone can predict.
     if (!path.isAbsolute(key)) continue;
 
-    const candidate = canonical(key);
+    const candidate = canonicalRoot(key);
 
     if (!contains(candidate, target) || candidate.length <= bestLength) continue;
 
@@ -82,7 +84,34 @@ export function applyRootOverride(config: AgentWatchConfig, cwd: string): Rooted
 
   // Undefined-valued keys in the override would erase the global value, so
   // only the keys actually present are laid over it.
-  return { config: { ...withoutRoots, ...compact(selected.override) }, root: selected };
+  return { config: { ...withoutDestination(withoutRoots, selected.override), ...compact(selected.override) }, root: selected };
+}
+
+/**
+ * A root shares telemetry routes only when it names no different destination.
+ * Refusal never establishes sharing. Route-only roots retain the machine base
+ * for enforcement, but cannot derive an unnamed telemetry route from it.
+ * A root with its own base derives enforcement there instead of leaking its
+ * bearer to an explicit machine enforcement service.
+ */
+function withoutDestination<T extends AgentWatchConfig>(config: Omit<T, 'roots'>, override: RootOverride): Omit<T, 'roots'> {
+  const named = ROOT_URL_FIELDS.some((field) => {
+    const key = field as keyof RootOverride & keyof typeof config;
+    const value = override[key];
+
+    if (value === undefined) return false;
+
+    if (key === 'endpoint') return !sameEndpoint(value, config[key]);
+
+    return value === null || value !== config[key];
+  });
+
+  if (!named) return config;
+
+  const ownBase = override.endpoint !== undefined;
+  const route = ownBase ? undefined : null;
+
+  return { ...config, eventsUrl: route, otlpUrl: route, enforcementUrl: ownBase && !sameEndpoint(override.endpoint, config.endpoint) ? undefined : config.enforcementUrl };
 }
 
 /**
@@ -92,7 +121,7 @@ export function applyRootOverride(config: AgentWatchConfig, cwd: string): Rooted
  * @param value - Path as configured or as reported by the agent.
  * @returns The canonical path.
  */
-function canonical(value: string): string {
+export function canonicalRoot(value: string): string {
   try {
     return fs.realpathSync.native(value);
   } catch {

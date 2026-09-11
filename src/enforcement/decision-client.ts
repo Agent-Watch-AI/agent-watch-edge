@@ -1,5 +1,6 @@
 import { debugLog } from '../core/logger.js';
 import { edgeHeaders } from '../transport/headers.js';
+import { discardResponseBody, readCappedJson } from '../transport/response-body.js';
 import { BRANCH_PARAM, DEVELOPER_ID_PARAM, MODEL_PARAM, REPOSITORY_PARAM } from './constants/enforcement.constants.js';
 import { cacheTtlSchema, decisionSchema } from './schemas/enforcement.schema.js';
 import type { AnsweredDecision, DecisionRequest } from './types/enforcement.types.js';
@@ -9,8 +10,8 @@ import type { AnsweredDecision, DecisionRequest } from './types/enforcement.type
  *
  * Never throws, and answers `undefined` — "nobody said no" — for everything
  * that is not a complete, valid decision: a timeout, a network error, any
- * non-2xx status, a body that is not JSON, and a body whose decision this code
- * cannot read. Only the caller's own allow default gets built out of those; a
+ * non-2xx status, a body that is not JSON, a body too large to be a decision,
+ * and a body whose decision this code cannot read. Only the caller's own allow default gets built out of those; a
  * refusal can only ever come from a body that validates.
  *
  * @param request - Destination, credentials, identity and timeout.
@@ -25,16 +26,20 @@ export async function requestDecision(request: DecisionRequest): Promise<Answere
       // A GET carries no body, so no content type: the identifying triple is all
       // the platform needs to resolve the tenant.
       headers: edgeHeaders(request.token, request.installationId),
+      // The identity travels in the headers, so a redirect would hand the
+      // bearer to somewhere nothing configured.
+      redirect: 'error',
       signal: AbortSignal.timeout(request.timeoutMs)
     });
 
     if (!response.ok) {
+      discardResponseBody(response);
       debugLog(`enforcement: HTTP ${response.status}; allowing`);
 
       return undefined;
     }
 
-    return readDecision(await response.json());
+    return readDecision(await readCappedJson(response));
   } catch (error) {
     // Never log the response body: the message names a person and what they
     // spent, and this line goes to the developer's terminal.

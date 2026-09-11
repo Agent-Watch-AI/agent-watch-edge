@@ -3,6 +3,7 @@ import { next, runFlow, step, stop } from '../core/pipe.js';
 import type { FlowResult, Step, StepOutcome } from '../core/types/core.types.js';
 import { collectBranchCommits, collectBranchRefs, resolveDefaultBranch } from '../git/repo-snapshot.js';
 import { sanitizeValue } from '../privacy/sanitizer.js';
+import type { SnapshotBranch } from '../git/types/snapshot.types.js';
 import { nextSnapshotState, selectChangedBranches } from './branch-selection.js';
 import { budgetedRunner, remainingMs, withinBudget } from './budget.js';
 import { buildRepoSnapshot } from './snapshot-event.js';
@@ -19,7 +20,6 @@ import {
   STOP_NO_EVENT,
   STOP_NOT_A_REPOSITORY
 } from './constants/snapshot-stages.constants.js';
-import type { SnapshotBranch } from '../git/types/snapshot.types.js';
 import type {
   SelectionInput,
   SnapshotFlowState,

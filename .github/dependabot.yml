@@ -1,0 +1,26 @@
+# Dependency updates arrive as reviewable pull requests rather than as a
+# question nobody asks between releases. Weekly, grouped, and capped: a flood of
+# individual PRs is how this stops being read.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the toolchain, so a lint or test-runner bump does not arrive
+      # as six separate reviews.
+      dev-dependencies:
+        dependency-type: development
+      production-dependencies:
+        dependency-type: production
+
+  # The workflow pins actions by SHA, which is the control that matters and also
+  # the thing that goes stale silently. Dependabot understands SHA pins and
+  # keeps the trailing version comment in step.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3

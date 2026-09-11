@@ -36,7 +36,3 @@ export const RE_SHELL_CONTROL = /[|&;<>\r\n]/;
 export const RE_DOUBLE_QUOTE_ESCAPABLE = /["\\$`]/;
 
 export const RE_WHITESPACE = /\s/;
-
-/** Argument shape that forces quoting when a hook command is generated. */
-export const RE_NEEDS_QUOTING = /[\s"'\\$`]/;
-export const RE_QUOTE_ESCAPE = /(["\\$`])/g;

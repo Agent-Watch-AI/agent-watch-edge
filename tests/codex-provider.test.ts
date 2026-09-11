@@ -1,13 +1,13 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { parse as parseToml } from 'smol-toml';
 import { detectCodex, codexHooksJsonPath, codexConfigTomlPath } from '../src/providers/codex/codex.detect.js';
 import { installCodexHooks, uninstallCodexHooks, CODEX_HOOK_EVENTS } from '../src/providers/codex/codex.hooks.js';
 import { CodexOtelConfigurator } from '../src/providers/codex/codex.otel.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { defaultConfig } from '../src/config/config.js';
 import type { SetupContext } from '../src/providers/provider.js';
-import { parse as parseToml } from 'smol-toml';
 import { CONTENT_CAPTURE_ON, makeTempEnv, readJson, writeJson, type TempWorld } from './helpers.js';
 
 const HOOK_CMD = 'agentwatch hook --agent codex';
@@ -295,6 +295,32 @@ describe('Codex provider', () => {
       const mode = (await fs.stat(codexConfigTomlPath(world.env))).mode & 0o777;
 
       expect(mode).toBe(0o600);
+    });
+
+    it('gives config.toml its own permissions back on uninstall', async () => {
+      const configPath = codexConfigTomlPath(world.env);
+
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, 'model = "gpt-5.2-codex"\n');
+      await fs.chmod(configPath, 0o644);
+
+      const context = setupContext();
+
+      context.config.token = 'tok-abc';
+
+      const configured = await new CodexOtelConfigurator().configure(context);
+
+      expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
+      expect(configured.installState?.agents.codex?.otelPriorMode).toBe(0o644);
+
+      // This file is Codex's, and `writeFileAtomic` preserves the target's
+      // mode, so without the recorded original it would keep 0600 forever
+      // after the token was gone.
+      const removed = await new CodexOtelConfigurator().uninstall({ ...context, installState: configured.installState ?? context.installState });
+
+      expect(removed.ok).toBe(true);
+      expect((await fs.stat(configPath)).mode & 0o777).toBe(0o644);
+      expect(removed.installState?.agents.codex?.otelPriorMode).toBeUndefined();
     });
 
     it('uninstall removes exactly the managed block', async () => {

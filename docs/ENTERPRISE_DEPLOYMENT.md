@@ -16,6 +16,58 @@ and no root requirement. The items below are **not implemented**.
 | Deferred | Independent penetration testing and remediation. No completed penetration test is claimed. |
 | Deferred | SOC 2 readiness, evidence collection, and independent audit roadmap. No SOC 2 attestation is claimed. |
 
+## What the edge changes outside its own directory
+
+A change-control board asks for this list before a pilot, and it is the same
+list the package's ownership rules are built on. Everything else lives under
+`~/.agentwatch/` and is removed by `uninstall --purge`.
+
+| Path | Change | Reverted by |
+| --- | --- | --- |
+| `~/.claude/settings.json` | AgentWatch hook entries, and `otelHeadersHelper` plus OTel env keys when native telemetry is configured | `uninstall` removes exactly the entries recorded as owned; unrelated hooks and settings are preserved |
+| `~/.codex/config.toml` | A managed `[otel]` block; the file is set to 0600 **only** when that block carries a bearer token | `uninstall` removes the block and restores the permission bits the file had before AgentWatch tightened it |
+| `~/.gemini/settings.json` | AgentWatch hook entries and an `env` block including `OTEL_EXPORTER_OTLP_HEADERS`; 0600 **only** when that block carries a bearer token | as above — owned keys only, and the original mode is restored |
+| Cursor / Antigravity hook configuration | AgentWatch hook entries only; neither has a managed native exporter | `uninstall` removes the entries it recorded |
+| Nothing else | No daemon, no launchd/systemd unit, no PATH change, no shell profile edit, no root requirement, no file outside the paths above | — |
+
+Every write to a file the edge does not own is preceded by a timestamped copy
+into `~/.agentwatch/backups/`, which preserves the source permissions and can
+therefore contain credentials — treat that directory as sensitive and note that
+`uninstall --purge` is what removes it.
+
+## Verifying a rollback
+
+The point of this section is that "we removed it" is checkable rather than
+asserted. On one machine, in this order:
+
+1. `agentwatch uninstall` — reports what it removed per agent. It removes
+   exactly the keys and hook entries the install state recorded as owned, so a
+   setting a developer added themselves is never touched. (The refuse-rather-
+   than-guess check runs at *install* time: a native-telemetry key already set
+   to a foreign value makes `setup` skip that agent's exporter and say so,
+   rather than overwriting it.)
+2. `agentwatch doctor --json` — the `backend connectivity` check reads
+   `no backend configured yet` only after a `--purge`; before that the
+   configuration is intentionally retained. Every `agent … hooks` check must
+   report the hooks as absent.
+3. Inspect each agent file in the table above: no `agentwatch` string should
+   remain, the agent's own settings must be intact, and
+   `stat -f '%Lp' ~/.codex/config.toml` (Linux: `stat -c '%a'`) must show the
+   mode the file had before installation, not `600`.
+4. Confirm the agent still starts and runs a turn. A configuration the edge left
+   unparseable is the failure this step exists to catch. For Codex's TOML,
+   removal is explicitly guarded: a file that parsed before removal and would
+   not parse after it is refused with nothing written. The JSON files are
+   re-serialized from a parsed document and the serialization is parsed again
+   before the write, so an unparseable result is not reachable — but the agent
+   itself starting is the only end-to-end check, which is why it is a step here.
+5. `agentwatch uninstall --purge` — then `~/.agentwatch/` is gone, including
+   queued records and backups. Anything already delivered to the backend is the
+   backend's to delete; the edge cannot recall it.
+
+The npm package itself is never removed by `uninstall`; `npm rm -g
+@agent-watch-ai/edge` is a separate, deliberate step.
+
 ## Release operation
 
 Ordinary pushes and PRs verify and build artifacts; they do not publish. Run
@@ -32,9 +84,80 @@ Node >=22.14 for OIDC support. No long-lived npm token is required. The workflow
 publishes the verified artifact with provenance; it does not create a GitHub release.
 See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/).
 
-The version must be deliberately selected before triggering publication; this
-change does not bump it. Signing with a real release identity is a later step,
-not a simulated signature. Package verification permits built JS/types and public
+The version must be deliberately selected before triggering publication;
+publishing an already released version is not supported. Signing with a real release identity is a later step,
+not a simulated signature.
+
+Provenance covers the npm artifact, not the git history it was built from, so
+**release tags must be signed**: `git tag -s vX.Y.Z -m 'vX.Y.Z'` and push the
+tag, with `git tag -v vX.Y.Z` as the check. A maintainer can make that the
+default for this repository with `git config tag.gpgSign true`. This is a
+process requirement rather than something the workflow can enforce, and it is
+recorded here because an unsigned tag is the gap between "the tarball is
+attested" and "the commit it came from is".
+
+The workflow's own supply-chain controls, so a reviewer does not have to read
+the YAML to find them: every action is pinned to a commit SHA rather than a
+mutable tag; `npm ci` runs with `--ignore-scripts`, as pack and publish already
+did, so no dependency lifecycle script executes in the job that builds the
+published tarball; `npm audit --omit=dev --audit-level=high` gates on advisories
+in what actually ships; CodeQL runs on every change and weekly; and Dependabot
+opens grouped weekly updates for both npm and the pinned actions. Package verification permits built JS/types and public
 documentation only, with a 2 MB unpacked review ceiling. Hundreds of small files
 are expected from the existing module layout and declarations; bundling solely
 to reduce the file count is deferred.
+
+## Destination changes and project roots
+
+Setup treats `endpoint` as the backend identity and explicit `eventsUrl`,
+`otlpUrl`, and machine `enforcementUrl` as routes belonging to it. The same
+transition applies to machine setup and `setup --root`:
+
+| Previous base | Selected base | Existing live routes |
+| --- | --- | --- |
+| Usable, equal after removing trailing slashes | Same backend | Preserved, including token rotation |
+| Usable, different | Another backend | Cleared and each old URL printed before saving |
+| Missing or refused | Usable replacement | Cleared and each old URL printed before saving |
+
+Refused routes remain on disk and continue to produce warnings until repaired.
+For an existing root, omitting `--endpoint` keeps its stored base. Only an absent
+root base inherits the machine base; a refused base requires an explicit repair.
+The root's token is never inherited from the machine during enrollment.
+
+At runtime a root naming no different destination shares the machine's routes.
+A root naming a different or refused base never inherits its telemetry or explicit
+enforcement routes. A root naming only one telemetry route cannot inherit the
+other telemetry route; it still uses machine enforcement. Configure `endpoint`
+on that root if its budget checks belong to a separate backend. `agentwatch config`
+and `doctor` explain unavailable routes. Backlog moves remain opt-in and target
+an existing identity with an exclusive token, regardless of the directory setup
+is run from. New roots inherit no backlog. If another configured identity shares
+the source or destination token, setup keeps the queue in place instead of offering
+a migration and warns when records are pending, including when only the destination
+URL changes. Consent names the capturing machine or root, the target URL, and the
+possible change in tenant attribution. Empty token flags fall back to environment
+or stored credentials; tokenless configurations cannot own a migration. Queue
+inspection before consent does not adopt legacy records. Existing symlink root keys are
+updated in place; duplicate keys for one canonical path require consolidation.
+Doctor names the decision host and warns if it differs from the root’s own base
+host, or explicit telemetry hosts when no base is given. Token-only roots compare
+against the machine base. A different path on the same host does not warn. This
+check reports the configured route; it does not change enforcement routing.
+A refused root base has no usable enforcement route: budget checks allow turns,
+and doctor reports this as an explicit budget-enforcement failure. Repair the
+root endpoint to restore checks; the root bearer is never sent to machine policy
+as a fallback.
+
+## Verification scope and performance
+
+CI runs lint, type checking, coverage and build on Linux and macOS with Node 20
+and 24. Provider configuration is tested in isolated temporary homes; this does
+not replace a managed-fleet pilot with the real agent versions. Windows remains
+unverified. The release artifact is produced once on Linux/Node 24.
+
+Run `npm run benchmark` for fresh-process hook latency and queue scan timings at
+0, 100 and 2,000 entries. CI publishes a separate benchmark JSON artifact for
+Linux and macOS on Node 24. Measurements include the runtime and hardware, and
+report full queue sweeps separately from bounded scans. See
+[performance methodology](PERFORMANCE.md). Timing distributions are diagnostic;
+correctness tests assert the network deadline, bounded scans and record retention.

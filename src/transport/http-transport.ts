@@ -1,11 +1,14 @@
+import { performance } from 'node:perf_hooks';
 import type { ProductEvent } from '../events/product-event.js';
 import { applyProductCapture } from '../privacy/product-capture.js';
 import {
   CONTENT_TYPE_HEADER,
   JSON_CONTENT_TYPE,
+  MIN_VIABLE_SEND_MS,
   RETRYABLE_STATUSES
 } from './constants/transport.constants.js';
 import { edgeHeaders } from './headers.js';
+import { discardResponseBody, readCappedJson } from './response-body.js';
 import type { DeliveryResult, EventTransport, HttpTransportOptions } from './types/transport.types.js';
 
 export type { HttpTransportOptions } from './types/transport.types.js';
@@ -18,6 +21,7 @@ export type { HttpTransportOptions } from './types/transport.types.js';
  */
 export class HttpTransport implements EventTransport {
   private readonly fetchFn: typeof fetch;
+  private deadline: number | undefined;
 
   /**
    * Bind the transport to one backend.
@@ -26,6 +30,7 @@ export class HttpTransport implements EventTransport {
    */
   constructor(private readonly options: HttpTransportOptions) {
     this.fetchFn = options.fetchFn ?? fetch;
+    this.deadline = options.deadline;
   }
 
   /**
@@ -49,24 +54,53 @@ export class HttpTransport implements EventTransport {
 
     // Current policy, not the policy the record was written under: a queued
     // event may predate a revoked consent or capture flag.
-    const payload = events.map((event) => applyProductCapture(event, this.options.capture)).filter((event) => event !== undefined);
+    const payload: ProductEvent[] = [];
+
+    for (const event of events) {
+      const captured = applyProductCapture(event, this.options.capture);
+
+      if (captured) payload.push(captured);
+    }
 
     if (payload.length === 0) return { ok: true, retryable: false };
+
+    const now = this.options.nowMs?.() ?? performance.now();
+
+    // Only hook-owned transports opt into a pass budget. Start on first use,
+    // after selection and capture, so construction and local checks cost none.
+    if (this.deadline === undefined && this.options.budgetMs !== undefined) this.deadline = now + this.options.budgetMs;
+
+    const remaining = this.deadline === undefined ? this.options.timeoutMs : this.deadline - now;
+
+    if (remaining < Math.min(MIN_VIABLE_SEND_MS, this.options.timeoutMs)) return { ok: false, retryable: true, deferred: true };
+
+    const requestMs = Math.min(this.options.timeoutMs, remaining);
 
     try {
       const response = await this.fetchFn(this.options.eventsUrl, {
         method: 'POST',
         headers: this.headers(),
         body: JSON.stringify({ events: payload }),
-        signal: AbortSignal.timeout(this.options.timeoutMs)
+        // A redirect would move a batch that carries a bearer to an endpoint
+        // nothing configured; refusing is the only safe answer.
+        redirect: 'error',
+        signal: AbortSignal.timeout(Math.max(1, Math.floor(requestMs)))
       });
 
       if (response.ok) {
         return { ok: true, status: response.status, retryable: false, counters: await readCounters(response) };
       }
 
+      discardResponseBody(response);
+
       return { ok: false, status: response.status, retryable: isRetryableStatus(response.status), error: `HTTP ${response.status}` };
     } catch (error) {
+      // A shortened request exhausting the remainder of a pass is local
+      // scheduling pressure, not evidence that the backend is unhealthy.
+      if (requestMs < this.options.timeoutMs && error instanceof Error && error.name === 'TimeoutError') {
+        return { ok: false, retryable: true, deferred: true };
+      }
+
       // Never include response or request bodies in errors: they carry event
       // content, and this string ends up in logs.
       return { ok: false, retryable: true, error: (error as Error).name || 'network error' };
@@ -91,15 +125,18 @@ export class HttpTransport implements EventTransport {
  *
  * A 202 can still carry per-event rejections, and the batch "succeeding" while
  * events inside it were dropped is exactly the case the caller must see. A
- * backend that returns no JSON body is treated as counter-less, not failed.
+ * backend that returns no JSON body — or one too large to be counters — is
+ * treated as counter-less, not failed.
  *
  * @param response - The backend's response.
  * @returns The counters, or undefined when the body carried none.
  */
 async function readCounters(response: Response): Promise<DeliveryResult['counters']> {
   try {
-    const body = (await response.json()) as Record<string, unknown>;
-    const numeric = (key: string): number => (typeof body[key] === 'number' ? (body[key] as number) : 0);
+    const body = (await readCappedJson(response)) as Record<string, unknown>;
+    // Own properties only: this object came off the network, so a `__proto__`
+    // in the body must not answer for a counter nobody sent.
+    const numeric = (key: string): number => (Object.hasOwn(body, key) && Number.isSafeInteger(body[key]) && (body[key] as number) >= 0 ? body[key] as number : 0);
 
     return {
       accepted: numeric('accepted'),
@@ -115,9 +152,10 @@ async function readCounters(response: Response): Promise<DeliveryResult['counter
 /**
  * Whether a failing status is worth retrying.
  *
- * Auth and rate-limit problems are usually transient misconfiguration, so they
- * count as retryable; retries are capped by `delivery.maxAttempts`, so they
- * cannot accumulate forever.
+ * A rate limit or a timeout is transient, so those count as retryable and are
+ * capped by `delivery.maxAttempts`. A refused *credential* is deliberately not
+ * here: see `AUTH_REJECTED_STATUSES` and `BackendAuthBlock` — the records stay
+ * queued, but re-presenting a rejected bearer on every hook does not.
  *
  * @param status - HTTP status.
  * @returns True when the batch should be queued for another attempt.

@@ -27,6 +27,36 @@ export const OTEL_NONE = 'none';
 
 /** Backend routes derived from the configured base endpoint. */
 export const EVENTS_PATH = '/v1/events';
+
+/**
+ * Hosts a plain-`http:` backend URL is allowed to name.
+ *
+ * A local collector and the test suite are the only legitimate `http:`
+ * destinations; anywhere else the bearer and the captured content would cross a
+ * network in cleartext.
+ */
+export const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+/** Said to whoever wrote the URL, so the remedy is in the message. */
+export const DELIVERABLE_URL_MESSAGE = 'must be an https:// URL (http:// is allowed for localhost only)';
+
+/**
+ * Every field of the config file itself that holds a backend URL.
+ *
+ * One list, so a fifth URL field is reported by `nonDeliverableUrlFields` the
+ * moment the schema validates it.
+ */
+export const URL_FIELDS: readonly string[] = ['endpoint', 'eventsUrl', 'otlpUrl', 'enforcementUrl'];
+
+/**
+ * The subset a `roots[]` entry may carry.
+ *
+ * Not the same set, and reporting them as if it were made `doctor` *fail* on a
+ * `roots[].enforcementUrl`: `rootOverrideSchema` strips it as an unknown key
+ * whatever its value, so it has never had any effect. A per-root enforcement URL
+ * would mean adding it there, not reporting it here.
+ */
+export const ROOT_URL_FIELDS: readonly string[] = ['endpoint', 'eventsUrl', 'otlpUrl'];
 export const OTLP_BASE_PATH = '/v1/otlp';
 export const ENFORCEMENT_PATH = '/v1/enforcement/decision';
 
@@ -100,7 +130,7 @@ export const MERGE_BLOCKS = [CAPTURE_KEY, 'emit'] as const;
 /** Ceiling on the upward walk looking for a repo config. */
 export const MAX_WALK_DEPTH = 32;
 
-/** Capture flags that mean raw content leaves the machine. */
-export const CONTENT_CAPTURE_FLAGS = ['prompts', 'responses', 'toolInput', 'toolOutput'] as const;
-
 export const RE_TRAILING_SLASHES = /\/+$/;
+
+/** Explicit routes belong to the backend selected at enrollment. */
+export const ROUTE_FIELDS = ['eventsUrl', 'otlpUrl', 'enforcementUrl'] as const;

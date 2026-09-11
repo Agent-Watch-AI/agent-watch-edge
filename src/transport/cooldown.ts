@@ -58,6 +58,12 @@ export class BackendCooldown {
    * End the cooldown after a successful send.
    */
   async clear(): Promise<void> {
-    await fs.rm(this.file, { force: true });
+    try {
+      await fs.rm(this.file, { force: true });
+    } catch {
+      // Same rule as `trip`: this is awaited between a proven-healthy send and
+      // the drain, so an EACCES here would abort the deliver stage and leave the
+      // backlog unsent on the one hook that just proved the backend works.
+    }
   }
 }

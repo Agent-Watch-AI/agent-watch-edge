@@ -1,7 +1,6 @@
 /**
- * Getting product records to the backend without ever losing one and without
- * ever making the coding agent wait: one bounded direct send, a persisted
- * circuit breaker, and a file-per-event offline queue behind it.
+ * Bounded delivery with durable retries: failed sends stay queued until
+ * delivered or removed by the configured retention and retry limits.
  */
 export type {
   DeliveryCounters,
@@ -25,3 +24,6 @@ export type { IdentityPaths } from './queue-partition.js';
 export { BackendCooldown } from './cooldown.js';
 export { DeliveryStats } from './delivery-stats.js';
 export { deliverEvents } from './delivery.js';
+
+export { sendEvents } from './send.js';
+export { discardResponseBody, readCappedJson } from './response-body.js';

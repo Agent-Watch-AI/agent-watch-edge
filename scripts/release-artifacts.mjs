@@ -10,11 +10,11 @@ fs.mkdirSync(output, { recursive: true });
 const packed = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', output], { encoding: 'utf8' }))[0];
 const tarball = path.join(output, packed.filename);
 const entries = execFileSync('tar', ['-tzf', tarball], { encoding: 'utf8' }).trim().split('\n');
-const allowed = /^package\/(?:dist\/[\w./-]+\.(?:js|d\.ts)|package\.json|README\.md|SECURITY\.md|LICENSE|CHANGELOG\.md|docs\/(?:DATA_HANDLING|ENTERPRISE_DEPLOYMENT)\.md)$/;
+const allowed = /^package\/(?:dist\/[\w./-]+\.(?:js|d\.ts)|package\.json|README\.md|SECURITY\.md|LICENSE|CHANGELOG\.md|docs\/(?:DATA_HANDLING|ENTERPRISE_DEPLOYMENT|PERFORMANCE)\.md)$/;
 for (const entry of entries) {
   assert(!entry.split('/').includes('..') && allowed.test(entry), `Unexpected package entry: ${entry}`);
 }
-for (const file of ['dist/cli.js', 'README.md', 'SECURITY.md', 'docs/DATA_HANDLING.md', 'LICENSE', 'package.json']) {
+for (const file of ['dist/cli.js', 'README.md', 'SECURITY.md', 'docs/DATA_HANDLING.md', 'docs/ENTERPRISE_DEPLOYMENT.md', 'docs/PERFORMANCE.md', 'LICENSE', 'package.json']) {
   assert(entries.includes(`package/${file}`), `Missing package entry: ${file}`);
 }
 const manifest = JSON.parse(execFileSync('tar', ['-xOf', tarball, 'package/package.json'], { encoding: 'utf8' }));

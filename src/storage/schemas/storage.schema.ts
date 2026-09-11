@@ -16,6 +16,12 @@ export const agentInstallSchema = z
     otelConfiguredAt: z.string().optional(),
     otelConfigPath: z.string().optional(),
     otelOwnedKeys: z.array(z.string()).default([]),
+    /**
+     * Permission bits the agent's own config file carried before AgentWatch
+     * tightened it, so uninstall can put them back. Absent when the file was
+     * never tightened, or when AgentWatch created it.
+     */
+    otelPriorMode: z.number().int().optional(),
     notes: z.array(z.string()).default([])
   })
   .passthrough();

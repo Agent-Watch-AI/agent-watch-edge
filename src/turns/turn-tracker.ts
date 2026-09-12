@@ -4,7 +4,7 @@ import { asRecord } from '../core/object.js';
 import { detectBillingMode } from '../billing/billing-mode.js';
 import type { AgentWatchEvent, ContentEvidence, UsageBillingMode } from '../events/types/events.types.js';
 import { sha256Hex } from '../events/event-id.js';
-import { developerIdentity } from '../git/git-context.js';
+import { developerDisplayName, developerIdentity } from '../git/git-context.js';
 import { sanitizeValue } from '../privacy/sanitizer.js';
 import { acquireLock } from '../storage/lock.js';
 import type { ReleaseLock } from '../storage/types/storage.types.js';
@@ -298,6 +298,7 @@ async function closeTurnLocked(
     sessionId,
     turnId: stopTurnId,
     developerId: await developerIdentity(options.config.developerEmail, options.cwd, { home: options.env.home }),
+    developerName: await developerDisplayName(options.config.developerName, options.cwd, { home: options.env.home }),
     installationId: options.config.installationId,
     git: stopEvent.git,
     featureCandidates: stopEvent.feature?.candidates,
@@ -339,6 +340,7 @@ async function fallbackSummary(sessionId: string, stopEvent: AgentWatchEvent, op
       // developer through git alone, reading the config verbatim here would
       // ship a turn attributed to nobody.
       developerId: await developerIdentity(options.config.developerEmail, options.cwd, { home: options.env.home }),
+      developerName: await developerDisplayName(options.config.developerName, options.cwd, { home: options.env.home }),
       installationId: options.config.installationId,
       git: stopEvent.git,
       featureCandidates: stopEvent.feature?.candidates,

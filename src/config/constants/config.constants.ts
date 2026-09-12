@@ -82,6 +82,7 @@ export const GLOBAL_ONLY_KEYS: ReadonlySet<string> = new Set([
   'token',
   'installationId',
   'developerEmail',
+  'developerName',
   'endpoint',
   'eventsUrl',
   'otlpUrl',

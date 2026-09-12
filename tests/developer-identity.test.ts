@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { resolveDeveloperEmail, runSetup } from '../src/cli/setup.js';
+import { resolveDeveloperEmail, resolveDeveloperName, runSetup } from '../src/cli/setup.js';
 import { runDoctor } from '../src/cli/doctor.js';
 import { symbols } from '../src/cli/ui.js';
 import { defaultConfig } from '../src/config/config.js';
@@ -194,5 +194,101 @@ describe('doctor developer identity check', () => {
     const check = JSON.parse(stdout).checks.find((entry: { name: string }) => entry.name === 'developer identity');
 
     expect(check).toEqual({ name: 'developer identity', level: 'ok', detail: 'dev@company.com' });
+  });
+});
+
+/** A git that answers `config --get user.name` with exactly this. */
+function gitNaming(name: string | undefined): GitRunner {
+  return async (args) => (args.includes('user.name') ? name : undefined);
+}
+
+describe('resolveDeveloperName', () => {
+  let world: TempWorld;
+
+  beforeEach(async () => {
+    world = await makeTempEnv();
+  });
+
+  afterEach(() => world.cleanup());
+
+  it('prefers the --developer-name flag over git and the stored config', async () => {
+    const resolved = await resolveDeveloperName(
+      { env: world.env, developerName: 'Yonatan Krieger', gitRun: gitNaming('Git Name') },
+      { ...defaultConfig(), developerName: 'Stored Name' }
+    );
+
+    expect(resolved).toBe('Yonatan Krieger');
+  });
+
+  it('falls back to git config user.name when nothing is configured', async () => {
+    const resolved = await resolveDeveloperName(
+      { env: world.env, gitRun: gitNaming('Git Name') },
+      defaultConfig()
+    );
+
+    expect(resolved).toBe('Git Name');
+  });
+
+  it('answers undefined when nobody knows a name', async () => {
+    // Undefined rather than an empty string on purpose: the platform coalesces
+    // on write, so "no name" must not arrive as a value that could replace the
+    // name a commit author already established there.
+    const resolved = await resolveDeveloperName(
+      { env: world.env, gitRun: gitNaming(undefined) },
+      defaultConfig()
+    );
+
+    expect(resolved).toBeUndefined();
+  });
+
+  it('stores the name beside the identity, and stores nothing when there is none', async () => {
+    // Setup refuses an install with no agent to instrument, so give it one.
+    await fs.mkdir(path.join(world.home, '.claude'), { recursive: true });
+
+    const named = await captureOut(() =>
+      runSetup({
+        env: world.env,
+        endpoint: 'https://backend.example.com',
+        token: 'tok',
+        developerEmail: 'demo-yonatan@agent-watch.ai',
+        developerName: 'Yonatan Krieger',
+        yes: true,
+        gitRun: gitNaming(undefined)
+      })
+    );
+
+    expect(named.result).toBe(0);
+
+    const config = await readJson<AgentWatchConfig>(
+      path.join(resolvePaths(world.env).configDir, 'config.json')
+    );
+
+    expect(config.developerEmail).toBe('demo-yonatan@agent-watch.ai');
+    expect(config.developerName).toBe('Yonatan Krieger');
+
+    const anonymous = await makeTempEnv();
+
+    try {
+      await fs.mkdir(path.join(anonymous.home, '.claude'), { recursive: true });
+
+      await captureOut(() =>
+        runSetup({
+          env: anonymous.env,
+          endpoint: 'https://backend.example.com',
+          token: 'tok',
+          developerEmail: 'someone@company.com',
+          yes: true,
+          gitRun: gitNaming(undefined)
+        })
+      );
+
+      const bare = await readJson<AgentWatchConfig>(
+        path.join(resolvePaths(anonymous.env).configDir, 'config.json')
+      );
+
+      expect('developerName' in bare).toBe(false);
+    } finally {
+      await anonymous.cleanup();
+    }
   });
 });

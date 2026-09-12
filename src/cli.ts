@@ -10,7 +10,7 @@ import type { ParsedArgs } from './cli/types/cli.types.js';
 const HELP = `agentwatch — telemetry edge for AI coding agents
 
 Usage:
-  agentwatch setup [enrollment-url] [--endpoint <url>] [--token <token>] [--developer-email <email>] [--root <path>] [--otel <signals>] [--yes]
+  agentwatch setup [enrollment-url] [--endpoint <url>] [--token <token>] [--developer-email <email>] [--developer-name <name>] [--root <path>] [--otel <signals>] [--yes]
   agentwatch status
   agentwatch off
   agentwatch on
@@ -28,6 +28,9 @@ Flags:
   --developer-email <email> identity attached to turn summaries and keyed on by per-developer
                             enforcement (default: git config user.email; setup fails when neither
                             names a developer)
+  --developer-name <name>   what to call this developer in the platform's views (default:
+                            git config user.name). Never an identity: nothing is keyed on it,
+                            and leaving it unset keeps whatever name the platform already has
   --root <path>             file this tenant's identity under a project root instead of the
                             machine default, so one machine can report to two tenants: work
                             at or below <path> uses this token, everything else keeps the
@@ -48,7 +51,8 @@ Configuration:
   global                    ~/.agentwatch/config.json (written by setup)
   per repository            .agentwatch.json in the repo root — overrides the global
                             config for work in that repo; "token", "installationId",
-                            "developerEmail", "endpoint", "eventsUrl", "otlpUrl" and
+                            "developerEmail", "developerName", "endpoint", "eventsUrl",
+                            "otlpUrl" and
                             "roots" are global-only and ignored there
   per project root          "roots" in the global config — absolute path to the identity
                             used beneath it (see --root). Identity only: what is captured
@@ -92,6 +96,7 @@ async function main(): Promise<number> {
         endpoint: stringFlag(parsed, 'endpoint'),
         token: stringFlag(parsed, 'token'),
         developerEmail: stringFlag(parsed, 'developer-email'),
+        developerName: stringFlag(parsed, 'developer-name'),
         root: stringFlag(parsed, 'root'),
         otel: stringFlag(parsed, 'otel'),
         yes: boolFlag(parsed, 'yes') || boolFlag(parsed, 'non-interactive')

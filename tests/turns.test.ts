@@ -294,6 +294,7 @@ describe('buildTurnSummary', () => {
       sessionId: 'sess-1',
       turnId: 'turn-9',
       developerId: 'dev@company.com',
+      developerName: 'Dev Example',
       installationId: 'inst-1',
       git: {
         repository: 'billing-service',
@@ -319,6 +320,9 @@ describe('buildTurnSummary', () => {
     expect(summary.session_id).toBe('sess-1');
     expect(summary.turn_id).toBe('turn-9');
     expect(summary.developer_id).toBe('dev@company.com');
+    // Beside the id, never instead of it: the platform keys on the address and
+    // only shows the name, so a turn carries both or just the address.
+    expect(summary.developer_name).toBe('Dev Example');
     expect(summary.repository).toBe('billing-service');
     expect(summary.branch).toBe('feature/PAY-142');
     expect(summary.commit).toBe('abc123');
@@ -942,5 +946,24 @@ describe('a degraded turn summary names the same developer as a healthy one', ()
 
     expect(degraded).toBeDefined();
     expect(degraded!.developer_id).toBe('git-only@company.com');
+  });
+});
+
+describe('a turn summary for a developer nobody has named', () => {
+  it('omits the name rather than sending an empty one', () => {
+    // The platform coalesces on write, so an empty value would be a claim that
+    // this developer has no name — and would overwrite one a commit had set.
+    const summary = buildTurnSummary({
+      provider: 'claude',
+      surface: 'cli',
+      sessionId: 'sess-2',
+      turnId: 'turn-2',
+      developerId: 'dev@company.com',
+      prompts: [],
+      tools: [],
+      endedAt: '2026-08-06T18:24:00.000Z'
+    });
+
+    expect(summary.developer_name).toBeUndefined();
   });
 });

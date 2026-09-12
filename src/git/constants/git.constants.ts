@@ -21,6 +21,7 @@ export const GIT_COMMIT_ARGS = ['rev-parse', 'HEAD'] as const;
 export const GIT_REMOTE_ARGS = ['config', '--get', 'remote.origin.url'] as const;
 export const GIT_STATUS_ARGS = ['status', '--porcelain'] as const;
 export const GIT_USER_EMAIL_ARGS = ['config', '--get', 'user.email'] as const;
+export const GIT_USER_NAME_ARGS = ['config', '--get', 'user.name'] as const;
 
 /** Where `origin/HEAD` points: the remote's default branch, when it is known locally. */
 export const GIT_ORIGIN_HEAD_ARGS = ['symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD'] as const;

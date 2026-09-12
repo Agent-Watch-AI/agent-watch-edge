@@ -56,6 +56,7 @@ export function buildTurnSummary(input: BuildTurnSummaryInput): TurnSummaryEvent
     session_id: input.sessionId,
     turn_id: turnId,
     developer_id: input.developerId,
+    developer_name: input.developerName,
     repository: input.git?.repository,
     branch: input.git?.branch,
     commit: input.git?.commit,

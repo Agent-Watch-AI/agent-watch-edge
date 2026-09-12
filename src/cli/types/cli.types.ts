@@ -56,6 +56,7 @@ export interface SetupOptions {
   readonly token?: string;
   /** Developer identity for turn summaries; falls back to `git config user.email`. */
   readonly developerEmail?: string;
+  readonly developerName?: string;
   /**
    * Absolute project root to file this identity under, instead of making it the
    * machine's default. This is what lets one machine report to two tenants.

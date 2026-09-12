@@ -10,7 +10,7 @@ import { applyRootOverride, canonicalRoot } from '../config/root-config.js';
 import { transitionDestination } from '../config/destination.js';
 import { asRecord, compact } from '../core/object.js';
 import type { AgentWatchConfig, OtelConfig, RootOverride } from '../config/types/config.types.js';
-import { collectGitContext, developerIdentity } from '../git/git-context.js';
+import { collectGitContext, developerDisplayName, developerIdentity } from '../git/git-context.js';
 import { resolveEnrollment } from '../enrollment/enrollment.js';
 import type { EnrollmentResult } from '../enrollment/types/enrollment.types.js';
 import { providers } from '../providers/registry.js';
@@ -137,7 +137,16 @@ export async function runSetup(options: SetupOptions): Promise<number> {
     return 1;
   }
 
-  const identity: RootOverride = { endpoint: enrolled.endpoint, token: enrolled.token, developerEmail };
+  // Absent is a real answer and must stay absent: writing an empty name would
+  // hand the platform a value to store, and the backend coalesces — it keeps the
+  // name it already has only for as long as nobody sends a worse one.
+  const developerName = await resolveDeveloperName(options, baseConfig);
+  const identity: RootOverride = {
+    endpoint: enrolled.endpoint,
+    token: enrolled.token,
+    developerEmail,
+    ...(developerName ? { developerName } : {})
+  };
   const stored: (RootOverride & Destination) | undefined = rootPath === undefined ? baseConfig : baseConfig.roots?.[rootPath];
   const previous = rootPath === undefined ? baseConfig.endpoint : previousEndpoint(stored, baseConfig);
   const transition = transitionDestination(stored ?? {}, previous, enrolled.endpoint);
@@ -171,6 +180,9 @@ export async function runSetup(options: SetupOptions): Promise<number> {
   }
 
   println(`${symbols.ok} developer: ${developerEmail}`);
+
+  if (developerName) println(`${symbols.ok} name: ${developerName}`);
+
   println(`${symbols.ok} otel signals: ${enabledSignalNames(otel).join(', ') || 'none'}`);
   println(dim(`  config: ${context.paths.configFile}`));
   println();
@@ -383,6 +395,32 @@ async function enroll(
   } catch (error) {
     return { error: (error as Error).message };
   }
+}
+
+/**
+ * What to call this developer: the flag, then the config, then `git config
+ * user.name`.
+ *
+ * Never prompts, unlike the identity above. An install whose developer cannot be
+ * named is still a working install — the platform falls back to the address — so
+ * asking would be one more question for something nothing depends on.
+ *
+ * @param options - Setup options, including the flag and injected git runner.
+ * @param baseConfig - Config the run starts from.
+ * @returns The name, or undefined when nothing knows one.
+ */
+export async function resolveDeveloperName(
+  options: SetupOptions,
+  baseConfig: AgentWatchConfig
+): Promise<string | undefined> {
+  const flag = options.developerName?.trim();
+
+  if (flag) return flag;
+
+  return developerDisplayName(baseConfig.developerName, options.env.cwd, {
+    home: options.env.home,
+    run: options.gitRun
+  });
 }
 
 /**

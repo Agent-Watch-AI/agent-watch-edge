@@ -291,7 +291,8 @@ export const rootOverrideSchema = z
     otlpUrl: deliverableUrl,
     token: z.string().optional(),
     installationId: z.string().optional(),
-    developerEmail: z.string().optional()
+    developerEmail: z.string().optional(),
+    developerName: z.string().optional()
   })
   .strip();
 
@@ -309,6 +310,12 @@ export const configSchema = z
     installationId: z.string().optional(),
     /** Developer identity attached to turn summaries; falls back to `git config user.email`. */
     developerEmail: z.string().optional(),
+    /**
+     * What to call this developer in the platform's views; falls back to
+     * `git config user.name`. Never an identity: nothing is keyed on it, and a
+     * turn is still reported under `developerEmail`.
+     */
+    developerName: z.string().optional(),
     /**
      * Absolute project root -> the identity to use beneath it. Longest match
      * wins, so a nested checkout can override the workspace above it.

@@ -8,6 +8,18 @@ export const MAX_CHANGED_FILES = 50;
 export const GIT_MAX_BUFFER_BYTES = 1024 * 1024;
 
 /**
+ * Cap on the developer display name, matching the backend's `shortText`.
+ *
+ * The backend validates `developer_name` at 500 characters, and the field sits
+ * on the turn summary — so an over-long name fails the parse and drops the
+ * whole summary rather than just the name. The sanitizer's 8192 is no help
+ * here: it is far above the limit that actually decides. A cosmetic value must
+ * never be able to cost a turn, so it is truncated at the boundary that knows
+ * the limit instead of being sent and refused.
+ */
+export const MAX_DEVELOPER_NAME_LENGTH = 500;
+
+/**
  * Argument vectors, named so a reader sees intent instead of flags.
  *
  * `symbolic-ref` rather than `branch --show-current`: the latter needs
@@ -21,6 +33,7 @@ export const GIT_COMMIT_ARGS = ['rev-parse', 'HEAD'] as const;
 export const GIT_REMOTE_ARGS = ['config', '--get', 'remote.origin.url'] as const;
 export const GIT_STATUS_ARGS = ['status', '--porcelain'] as const;
 export const GIT_USER_EMAIL_ARGS = ['config', '--get', 'user.email'] as const;
+export const GIT_USER_NAME_ARGS = ['config', '--get', 'user.name'] as const;
 
 /** Where `origin/HEAD` points: the remote's default branch, when it is known locally. */
 export const GIT_ORIGIN_HEAD_ARGS = ['symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD'] as const;

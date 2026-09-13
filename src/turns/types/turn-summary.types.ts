@@ -43,6 +43,8 @@ export interface TurnSummaryEvent extends AgentWatchEvent<'turn.summary'> {
   readonly session_id?: string;
   readonly turn_id?: string;
   readonly developer_id?: string;
+  /** What to call this developer; the platform keeps its own if this is absent. */
+  readonly developer_name?: string;
   readonly repository?: string;
   readonly branch?: string;
   readonly commit?: string;
@@ -92,6 +94,7 @@ export interface BuildTurnSummaryInput {
   readonly sessionId?: string;
   readonly turnId?: string;
   readonly developerId?: string;
+  readonly developerName?: string;
   readonly installationId?: string;
   readonly git?: EventGit;
   readonly featureCandidates?: readonly FeatureCandidate[];

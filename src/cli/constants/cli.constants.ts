@@ -5,7 +5,7 @@
  * itself into a boolean — which is how `--otel none` once ignored the selection
  * entirely.
  */
-export const VALUE_FLAGS: ReadonlySet<string> = new Set(['agent', 'endpoint', 'token', 'developer-email', 'otel', 'root']);
+export const VALUE_FLAGS: ReadonlySet<string> = new Set(['agent', 'endpoint', 'token', 'developer-email', 'developer-name', 'otel', 'root']);
 
 export const FLAG_PREFIX = '--';
 
@@ -25,6 +25,18 @@ export const DEVELOPER_IDENTITY_CHECK = 'developer identity';
 export const NO_DEVELOPER_IDENTITY = 'no developer identity: `git config user.email` is unset here and --developer-email was not given';
 export const DEVELOPER_IDENTITY_REMEDIES
   = 'set one with `git config --global user.email you@company.com`, or re-run setup with `--developer-email you@company.com`';
+
+/**
+ * What doctor says when the install works but every view will print an address.
+ *
+ * Not a failure: a nameless install ships turns and nothing depends on the
+ * name. It is reported because otherwise the condition is invisible — turns
+ * come out labelled by email indefinitely with nothing on this machine saying
+ * why.
+ */
+export const NO_DEVELOPER_NAME = 'no display name; turns will be labelled by address';
+export const DEVELOPER_NAME_REMEDIES
+  = 'set one with `git config --global user.name "Your Name"`, or re-run setup with `--developer-name "Your Name"`';
 
 /** Said on the failure path, because a half-written config is worse than none. */
 export const NO_CONFIG_WRITTEN = 'no configuration was written; re-run setup once the identity resolves';

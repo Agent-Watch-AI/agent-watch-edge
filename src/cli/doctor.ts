@@ -11,7 +11,7 @@ import type { AgentWatchConfig, CaptureConfig, OtelConfig, OtelSignalName } from
 import type { Env } from '../core/types/core.types.js';
 import { meetsMinVersion, parseVersion } from '../core/version.js';
 import { findExecutable } from '../core/which.js';
-import { developerIdentity } from '../git/git-context.js';
+import { developerDisplayName, developerIdentity } from '../git/git-context.js';
 import { providers } from '../providers/registry.js';
 import type { AgentProvider, SetupContext } from '../providers/types/provider.types.js';
 import { SECRET_FILE_MODE } from '../storage/constants/storage.constants.js';
@@ -28,9 +28,11 @@ import {
   CLAUDE_VERSION_TIMEOUT_MS,
   DEVELOPER_IDENTITY_CHECK,
   DEVELOPER_IDENTITY_REMEDIES,
+  DEVELOPER_NAME_REMEDIES,
   GIT_VERSION_TIMEOUT_MS,
   MIN_NODE_MAJOR,
   NO_DEVELOPER_IDENTITY,
+  NO_DEVELOPER_NAME,
   STALE_QUEUE_AGE_MS
 } from './constants/cli.constants.js';
 import type { Check, CliContext, DoctorOptions } from './types/cli.types.js';
@@ -270,11 +272,21 @@ function endpointDetail(endpoint: string | null | undefined, via: string): strin
  * @returns The check.
  */
 async function developerIdentityCheck(env: Env, context: CliContext, options: DoctorOptions): Promise<Check> {
-  const identity = await developerIdentity(context.identityConfig.developerEmail, env.cwd, { home: env.home, run: options.gitRun });
+  // Together, not in turn: each can cost its own git timeout, and doctor has no
+  // reason to pay both in sequence.
+  const [identity, name] = await Promise.all([
+    developerIdentity(context.identityConfig.developerEmail, env.cwd, { home: env.home, run: options.gitRun }),
+    developerDisplayName(context.identityConfig.developerName, env.cwd, { home: env.home, run: options.gitRun })
+  ]);
 
   if (!identity) return { name: DEVELOPER_IDENTITY_CHECK, level: 'fail', detail: `${NO_DEVELOPER_IDENTITY}; ${DEVELOPER_IDENTITY_REMEDIES}` };
 
-  return { name: DEVELOPER_IDENTITY_CHECK, level: 'ok', detail: identity };
+  // The name is reported beside the identity, never instead of it: the address
+  // is what a turn is keyed on, and a reader has to be able to see the value
+  // policy will match.
+  if (!name) return { name: DEVELOPER_IDENTITY_CHECK, level: 'ok', detail: `${identity}; ${NO_DEVELOPER_NAME} (${DEVELOPER_NAME_REMEDIES})` };
+
+  return { name: DEVELOPER_IDENTITY_CHECK, level: 'ok', detail: `${identity} (${name})` };
 }
 
 /**

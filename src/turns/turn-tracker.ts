@@ -291,14 +291,21 @@ async function closeTurnLocked(
   // should come from the transcript when the transcript knows better, and
   // rewriting an event another stage may still be reading is not an option.
   const resolvedStop = withResolvedUsage(stopEvent, usage, billingMode);
+  // Together, not in turn: each shells out to git and each can cost its own
+  // GIT_TIMEOUT_MS, so taken in order a slow machine pays both inside the
+  // lock on every close. The pre-turn path resolves the same pair this way.
+  const [developerId, developerName] = await Promise.all([
+    developerIdentity(options.config.developerEmail, options.cwd, { home: options.env.home }),
+    developerDisplayName(options.config.developerName, options.cwd, { home: options.env.home })
+  ]);
 
   const summary = buildTurnSummary({
     provider: stopEvent.agent.provider,
     surface: resolveSurface(stopEvent.agent.provider, options.env),
     sessionId,
     turnId: stopTurnId,
-    developerId: await developerIdentity(options.config.developerEmail, options.cwd, { home: options.env.home }),
-    developerName: await developerDisplayName(options.config.developerName, options.cwd, { home: options.env.home }),
+    developerId,
+    developerName,
     installationId: options.config.installationId,
     git: stopEvent.git,
     featureCandidates: stopEvent.feature?.candidates,
@@ -331,16 +338,20 @@ async function closeTurnLocked(
  */
 async function fallbackSummary(sessionId: string, stopEvent: AgentWatchEvent, options: TrackTurnOptions): Promise<TurnSummaryEvent | undefined> {
   try {
+    // The same resolvers the healthy close uses, and resolved together for the
+    // same reason: on a machine that names its developer through git alone,
+    // reading the config verbatim here would ship a turn attributed to nobody.
+    const [developerId, developerName] = await Promise.all([
+      developerIdentity(options.config.developerEmail, options.cwd, { home: options.env.home }),
+      developerDisplayName(options.config.developerName, options.cwd, { home: options.env.home })
+    ]);
     const summary = buildTurnSummary({
       provider: stopEvent.agent.provider,
       surface: resolveSurface(stopEvent.agent.provider, options.env),
       sessionId,
       turnId: stopEvent.session.turnId,
-      // The same resolver the healthy close uses: on a machine that names its
-      // developer through git alone, reading the config verbatim here would
-      // ship a turn attributed to nobody.
-      developerId: await developerIdentity(options.config.developerEmail, options.cwd, { home: options.env.home }),
-      developerName: await developerDisplayName(options.config.developerName, options.cwd, { home: options.env.home }),
+      developerId,
+      developerName,
       installationId: options.config.installationId,
       git: stopEvent.git,
       featureCandidates: stopEvent.feature?.candidates,

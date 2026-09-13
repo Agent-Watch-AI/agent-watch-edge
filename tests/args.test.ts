@@ -3,7 +3,19 @@ import { parseArgs } from '../src/cli/args.js';
 
 describe('CLI argument parsing', () => {
   it('parses every documented value flag as a value, not a boolean', () => {
-    const parsed = parseArgs(['setup', '--endpoint', 'https://b.example', '--token', 't', '--developer-email', 'd@x.com', '--otel', 'none']);
+    const parsed = parseArgs([
+      'setup',
+      '--endpoint',
+      'https://b.example',
+      '--token',
+      't',
+      '--developer-email',
+      'd@x.com',
+      '--developer-name',
+      'Ada Lovelace',
+      '--otel',
+      'none'
+    ]);
 
     expect(parsed.command).toBe('setup');
     expect(parsed.flags['endpoint']).toBe('https://b.example');
@@ -11,6 +23,9 @@ describe('CLI argument parsing', () => {
     expect(parsed.flags['developer-email']).toBe('d@x.com');
     // Regression: --otel was missing from valueFlags, so `--otel none` became
     // a boolean flag plus a stray positional and the selection was ignored.
+    // --developer-name arrived the same way: the name fell through to
+    // positional[0], where setup reads it as an enrollment URL and refuses.
+    expect(parsed.flags['developer-name']).toBe('Ada Lovelace');
     expect(parsed.flags['otel']).toBe('none');
     expect(parsed.positional).toEqual([]);
   });

@@ -8,6 +8,7 @@ import { symbols } from '../src/cli/ui.js';
 import { defaultConfig } from '../src/config/config.js';
 import { saveConfig } from '../src/config/config-store.js';
 import type { AgentWatchConfig } from '../src/config/types/config.types.js';
+import { MAX_DEVELOPER_NAME_LENGTH } from '../src/git/constants/git.constants.js';
 import type { GitRunner } from '../src/git/types/git.types.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { captureStdout as captureOut, makeTempEnv, readJson, type TempWorld } from './helpers.js';
@@ -186,14 +187,34 @@ describe('doctor developer identity check', () => {
     expect(check.detail).toContain('--developer-email');
   });
 
-  it('passes once the config names a developer', async () => {
+  it('passes once the config names a developer, and says the turns will be nameless', async () => {
     await saveConfig(resolvePaths(world.env), { ...defaultConfig(), developerEmail: 'dev@company.com', installationId: 'inst-t' });
 
     const { stdout } = await captureStdout(() => runDoctor(world.env, { json: true, gitRun: gitSaying(undefined) }));
 
     const check = JSON.parse(stdout).checks.find((entry: { name: string }) => entry.name === 'developer identity');
 
-    expect(check).toEqual({ name: 'developer identity', level: 'ok', detail: 'dev@company.com' });
+    // Still ok: a nameless install ships turns. Reported because otherwise the
+    // condition is invisible — views print the address and nothing says why.
+    expect(check.level).toBe('ok');
+    expect(check.detail).toContain('dev@company.com');
+    expect(check.detail).toContain('no display name');
+    expect(check.detail).toContain('git config --global user.name');
+  });
+
+  it('reports the resolved name beside the identity, never instead of it', async () => {
+    await saveConfig(resolvePaths(world.env), {
+      ...defaultConfig(),
+      developerEmail: 'dev@company.com',
+      developerName: 'Ada Lovelace',
+      installationId: 'inst-t'
+    });
+
+    const { stdout } = await captureStdout(() => runDoctor(world.env, { json: true, gitRun: gitSaying(undefined) }));
+
+    const check = JSON.parse(stdout).checks.find((entry: { name: string }) => entry.name === 'developer identity');
+
+    expect(check).toEqual({ name: 'developer identity', level: 'ok', detail: 'dev@company.com (Ada Lovelace)' });
   });
 });
 
@@ -227,6 +248,22 @@ describe('resolveDeveloperName', () => {
     );
 
     expect(resolved).toBe('Git Name');
+  });
+
+  it('truncates a name the backend would refuse, from either source', async () => {
+    // The backend validates developer_name at 500 characters and the field sits
+    // on the turn summary, so an over-long name costs the whole summary rather
+    // than just the name. Truncated here, where the limit is known.
+    const overLong = 'A'.repeat(600);
+
+    const fromConfig = await resolveDeveloperName(
+      { env: world.env, gitRun: gitNaming(undefined) },
+      { ...defaultConfig(), developerName: overLong }
+    );
+    const fromGit = await resolveDeveloperName({ env: world.env, gitRun: gitNaming(overLong) }, defaultConfig());
+
+    expect(fromConfig).toHaveLength(MAX_DEVELOPER_NAME_LENGTH);
+    expect(fromGit).toHaveLength(MAX_DEVELOPER_NAME_LENGTH);
   });
 
   it('answers undefined when nobody knows a name', async () => {

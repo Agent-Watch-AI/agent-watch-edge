@@ -14,6 +14,7 @@ import {
   GIT_USER_EMAIL_ARGS,
   GIT_USER_NAME_ARGS,
   MAX_CHANGED_FILES,
+  MAX_DEVELOPER_NAME_LENGTH,
   PORCELAIN_ESCAPES,
   PORCELAIN_PREFIX_LENGTH,
   PORCELAIN_RENAME_SEPARATOR,
@@ -112,6 +113,9 @@ export async function gitUserName(cwd: string, options: GitUserEmailOptions = {}
  * must not disagree. Undefined is a real answer — the backend keeps whatever
  * name it already had rather than being told there is none.
  *
+ * Truncated to {@link MAX_DEVELOPER_NAME_LENGTH}: the backend refuses a longer
+ * name, and it refuses the turn summary carrying it along with it.
+ *
  * @param configuredName - `developerName` from the effective config, if set.
  * @param cwd - Directory to fall back to `git config user.name` in.
  * @param options - Timeout, injected HOME and runner override.
@@ -124,9 +128,25 @@ export async function developerDisplayName(
 ): Promise<string | undefined> {
   const configured = configuredName?.trim();
 
-  if (configured) return configured;
+  if (configured) return capDeveloperName(configured);
 
-  return gitUserName(cwd, options);
+  const name = await gitUserName(cwd, options);
+
+  return name === undefined ? undefined : capDeveloperName(name);
+}
+
+/**
+ * The name at the length the backend will accept.
+ *
+ * Never returns an empty string: both callers pass a value that already
+ * survived a `trim() || undefined`, and slicing a non-empty string cannot
+ * empty it.
+ *
+ * @param name - A trimmed, non-empty name.
+ * @returns The name, truncated when it exceeds the contract's limit.
+ */
+function capDeveloperName(name: string): string {
+  return name.length > MAX_DEVELOPER_NAME_LENGTH ? name.slice(0, MAX_DEVELOPER_NAME_LENGTH) : name;
 }
 
 /**

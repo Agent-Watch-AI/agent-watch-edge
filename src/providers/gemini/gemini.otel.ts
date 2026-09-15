@@ -278,8 +278,8 @@ export class GeminiOtelConfigurator implements NativeTelemetryConfigurator {
    * Signals Gemini was asked for but will not be given under current consent.
    *
    * Its usage logs always carry function arguments, and its detailed traces can
-   * carry prompts and tool results — two different consent bars, so the answer
-   * is per signal rather than all-or-nothing.
+   * carry prompts — so logs wait on tool-content consent and traces are never
+   * given, which is why the answer is per signal rather than all-or-nothing.
    *
    * @param config - Effective configuration.
    * @returns The requested signals that are held back; empty when none are.
@@ -292,18 +292,16 @@ export class GeminiOtelConfigurator implements NativeTelemetryConfigurator {
 }
 
 /**
- * Gemini logs always carry function arguments and detailed traces can carry
- * prompts and tool results. Keep only signals whose content has global consent.
+ * Gemini logs always carry function arguments, so they need tool-content
+ * consent. Detailed traces can carry prompts, and developer prompts are never
+ * collected, so no configuration makes them safe.
  * @param config - Global, consent-gated configuration.
  * @returns The signals safe to materialize in Gemini settings.
  */
 function safeGeminiSignals(config: AgentWatchConfig): OtelConfig {
-  const toolContent = toolContentConsented(config);
-  const detailedContent = toolContent && config.capture.prompts && config.capture.responses;
-
   return {
-    logs: config.otel.logs && toolContent,
-    traces: config.otel.traces && detailedContent,
+    logs: config.otel.logs && toolContentConsented(config),
+    traces: false,
     metrics: config.otel.metrics
   };
 }

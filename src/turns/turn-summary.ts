@@ -2,16 +2,14 @@ import { compact } from '../core/object.js';
 import { deriveEventId, sha256Hex } from '../events/event-id.js';
 import { EVENT_SCHEMA_VERSION } from '../events/constants/events.constants.js';
 import type { FeatureCandidate } from '../events/types/events.types.js';
-import { contentEvidence } from '../providers/shared/tooling.js';
-import { MAX_TURN_FILES, PROMPT_JOIN_SEPARATOR, PROVIDER_LABELS, UNKNOWN_TOOL_NAME } from './constants/turns.constants.js';
-import type { PromptRecord, ToolRecord } from './types/turn-state.types.js';
+import { MAX_TURN_FILES, PROVIDER_LABELS, UNKNOWN_TOOL_NAME } from './constants/turns.constants.js';
+import type { ToolRecord } from './types/turn-state.types.js';
 import type { BuildTurnSummaryInput, TouchedFiles, TurnSummaryEvent } from './types/turn-summary.types.js';
 
 export type {
   AgentUsageSummary,
   BuildTurnSummaryInput,
   TouchedFiles,
-  TurnResponse,
   TurnSummaryEvent,
   TurnUsageStatus
 } from './types/turn-summary.types.js';
@@ -29,7 +27,6 @@ export type {
  */
 export function buildTurnSummary(input: BuildTurnSummaryInput): TurnSummaryEvent {
   const files = collectToolUsage(input.tools);
-  const promptText = joinPrompts(input.prompts);
   const startedAt = input.prompts[0]?.at;
   const turnId = input.turnId ?? input.prompts.find((prompt) => prompt.turnId)?.turnId;
   const jiraIds = ticketValues(input.featureCandidates);
@@ -64,10 +61,8 @@ export function buildTurnSummary(input: BuildTurnSummaryInput): TurnSummaryEvent
     files_changed: input.git?.changedFiles,
     files_touched: files.filesTouched.length > 0 ? files.filesTouched : undefined,
     files_read: files.filesRead.length > 0 ? files.filesRead : undefined,
-    prompt: promptText,
     prompt_evidence: input.prompts[0]?.evidence,
-    response: input.response?.text,
-    response_evidence: input.response?.evidence,
+    response_evidence: input.response,
     tool_calls: input.tools.length,
     tools_used: files.toolsUsed,
     model: input.usage?.model ?? input.model,
@@ -81,26 +76,6 @@ export function buildTurnSummary(input: BuildTurnSummaryInput): TurnSummaryEvent
     started_at: startedAt,
     ended_at: input.endedAt
   });
-}
-
-/**
- * Recompute content evidence from the text that is actually transmitted.
- *
- * Evidence is captured before sanitization, but the sanitizer truncates and
- * redacts; a backend verifying length or hash against the received text would
- * then reject honest events. When the text is absent (capture disabled), the
- * capture-time evidence still describes the content the developer saw, and is
- * kept as the only description there is.
- *
- * @param summary - Summary about to be sent.
- * @returns A copy whose evidence matches its own text.
- */
-export function alignContentEvidence(summary: TurnSummaryEvent): TurnSummaryEvent {
-  return {
-    ...summary,
-    prompt_evidence: typeof summary.prompt === 'string' ? contentEvidence(summary.prompt) : summary.prompt_evidence,
-    response_evidence: typeof summary.response === 'string' ? contentEvidence(summary.response) : summary.response_evidence
-  };
 }
 
 /**
@@ -154,24 +129,6 @@ function addCapped(paths: Set<string>, filePath: string): void {
   if (paths.size >= MAX_TURN_FILES && !paths.has(filePath)) return;
 
   paths.add(filePath);
-}
-
-/**
- * The turn's prompt text, joining several submissions into one.
- *
- * @param prompts - The turn's prompt records.
- * @returns The joined text, or undefined when none was captured.
- */
-function joinPrompts(prompts: readonly PromptRecord[]): string | undefined {
-  const present: string[] = [];
-
-  for (const prompt of prompts) {
-    if (typeof prompt.text === 'string' && prompt.text.length > 0) present.push(prompt.text);
-  }
-
-  if (present.length === 0) return undefined;
-
-  return present.join(PROMPT_JOIN_SEPARATOR);
 }
 
 /**

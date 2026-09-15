@@ -191,10 +191,10 @@ describe('turn state store', () => {
   });
   afterEach(() => world.cleanup());
 
-  it('writes state files with 0600: they hold raw prompt text', async () => {
+  it('writes state files with 0600: they hold session ids, timings and file paths', async () => {
     const store = new TurnStateStore(path.join(world.home, 'turns'));
 
-    await store.append('sess-priv', 'r1', { kind: 'prompt', at: '2026-08-06T18:00:00.000Z', text: 'secret prompt' });
+    await store.append('sess-priv', 'r1', { kind: 'prompt', at: '2026-08-06T18:00:00.000Z', turnId: 'secret' });
     const dirs = await fs.readdir(path.join(world.home, 'turns'));
     const files = await fs.readdir(path.join(world.home, 'turns', dirs[0]!));
     const stat = await fs.stat(path.join(world.home, 'turns', dirs[0]!, files[0]!));
@@ -205,8 +205,8 @@ describe('turn state store', () => {
   it('sweeps sessions whose records are older than the TTL', async () => {
     const store = new TurnStateStore(path.join(world.home, 'turns'));
 
-    await store.append('sess-stale', 'r1', { kind: 'prompt', at: '2026-08-05T18:00:00.000Z', text: 'old' });
-    await store.append('sess-fresh', 'r1', { kind: 'prompt', at: '2026-08-06T18:00:00.000Z', text: 'new' });
+    await store.append('sess-stale', 'r1', { kind: 'prompt', at: '2026-08-05T18:00:00.000Z', turnId: 'old' });
+    await store.append('sess-fresh', 'r1', { kind: 'prompt', at: '2026-08-06T18:00:00.000Z', turnId: 'new' });
 
     // Age the stale session's files on disk.
     const staleDirs = await fs.readdir(path.join(world.home, 'turns'));
@@ -216,7 +216,7 @@ describe('turn state store', () => {
       const [record] = await fs.readdir(full);
       const content = JSON.parse(await fs.readFile(path.join(full, record!), 'utf8'));
 
-      if (content.text === 'old') {
+      if (content.turnId === 'old') {
         const past = new Date(Date.now() - 48 * 3600 * 1000);
 
         await fs.utimes(path.join(full, record!), past, past);
@@ -236,7 +236,7 @@ describe('turn state store', () => {
     await store.rememberModel('sess-model', 'claude-sonnet-5');
     expect(await store.readModel('sess-model')).toBe('claude-sonnet-5');
 
-    await store.append('sess-model', 'r1', { kind: 'prompt', at: '2026-08-06T18:00:00.000Z', text: 'hello' });
+    await store.append('sess-model', 'r1', { kind: 'prompt', at: '2026-08-06T18:00:00.000Z' });
     // The memo is not a turn record: it must never reach a summary.
     expect(await store.collect('sess-model')).toHaveLength(1);
 
@@ -273,7 +273,7 @@ describe('turn state store', () => {
     const store = new TurnStateStore(path.join(world.home, 'turns'));
 
     await store.append('sess-1', 'b-tool', { kind: 'tool', at: '2026-08-06T18:01:00.000Z', tool: 'Bash' });
-    await store.append('sess-1', 'a-prompt', { kind: 'prompt', at: '2026-08-06T18:00:00.000Z', text: 'hello' });
+    await store.append('sess-1', 'a-prompt', { kind: 'prompt', at: '2026-08-06T18:00:00.000Z' });
     await store.append('sess-other', 'x', { kind: 'tool', at: '2026-08-06T18:00:30.000Z', tool: 'Edit' });
 
     const records = await store.collect('sess-1');
@@ -303,13 +303,13 @@ describe('buildTurnSummary', () => {
         changedFiles: ['src/payments/refund.ts']
       },
       featureCandidates: [{ type: 'ticket', value: 'PAY-142', source: 'git.branch' }],
-      prompts: [{ kind: 'prompt', at: '2026-08-06T18:00:00.000Z', text: 'fix refunds', evidence: { length: 11, sha256: 'x' } }],
+      prompts: [{ kind: 'prompt', at: '2026-08-06T18:00:00.000Z', evidence: { length: 11, sha256: 'x' } }],
       tools: [
         { kind: 'tool', at: '2026-08-06T18:01:00.000Z', tool: 'Bash' },
         { kind: 'tool', at: '2026-08-06T18:02:00.000Z', tool: 'Edit', filePath: 'src/payments/refund.ts' },
         { kind: 'tool', at: '2026-08-06T18:03:00.000Z', tool: 'Edit', filePath: 'src/payments/refund.ts' }
       ],
-      response: { text: 'done', evidence: { length: 4, sha256: 'y' } },
+      response: { length: 4, sha256: 'y' },
       usage: { model: 'claude-sonnet-4', inputTokens: 300, cachedInputTokens: 150, cacheCreationInputTokens: 10, outputTokens: 50 },
       endedAt: '2026-08-06T18:24:00.000Z'
     });
@@ -329,8 +329,8 @@ describe('buildTurnSummary', () => {
     expect(summary.jira_ids).toEqual(['PAY-142']);
     expect(summary.files_changed).toEqual(['src/payments/refund.ts']);
     expect(summary.files_touched).toEqual(['src/payments/refund.ts']);
-    expect(summary.prompt).toBe('fix refunds');
-    expect(summary.response).toBe('done');
+    expect(summary.prompt_evidence).toEqual({ length: 11, sha256: 'x' });
+    expect(summary.response_evidence).toEqual({ length: 4, sha256: 'y' });
     expect(summary.tool_calls).toBe(3);
     expect(summary.tools_used).toEqual({ Bash: 1, Edit: 2 });
     expect(summary.model).toBe('claude-sonnet-4');
@@ -362,19 +362,19 @@ describe('buildTurnSummary', () => {
     expect(summary.files_read).toEqual(['src/auth.ts']);
   });
 
-  it('omits prompt/response text when not captured but keeps evidence', () => {
+  it('carries prompt/response evidence and no text field', () => {
     const summary = buildTurnSummary({
       provider: 'claude',
       surface: 'cli',
       sessionId: 'sess-1',
       prompts: [{ kind: 'prompt', at: '2026-08-06T18:00:00.000Z', evidence: { length: 11, sha256: 'x' } }],
       tools: [],
-      response: { evidence: { length: 4, sha256: 'y' } },
+      response: { length: 4, sha256: 'y' },
       endedAt: '2026-08-06T18:24:00.000Z'
     });
 
-    expect(summary.prompt).toBeUndefined();
-    expect(summary.response).toBeUndefined();
+    expect('prompt' in summary).toBe(false);
+    expect('response' in summary).toBe(false);
     expect(summary.prompt_evidence).toEqual({ length: 11, sha256: 'x' });
     expect(summary.response_evidence).toEqual({ length: 4, sha256: 'y' });
     expect(summary.tool_calls).toBe(0);
@@ -474,8 +474,8 @@ describe('turn tracking through the hook pipeline', () => {
     // OTel prompt.id for cost correlation.
     expect(summary.turn_id).toBe('p1');
     expect(summary.developer_id).toBe('dev@company.com');
-    expect(summary.prompt).toBe('fix the refund bug');
-    expect(summary.response).toBe('Fixed the refund bug.');
+    expect(summary.prompt_evidence).toMatchObject({ length: 'fix the refund bug'.length });
+    expect(summary.response_evidence).toMatchObject({ length: 'Fixed the refund bug.'.length });
     expect(summary.tool_calls).toBe(1);
     expect(summary.tools_used).toEqual({ Edit: 1 });
     // Not a git repo: privacy enrichment degrades the path to its basename.
@@ -518,7 +518,7 @@ describe('turn tracking through the hook pipeline', () => {
     expect(summary).toBeDefined();
     expect(summary.session_id).toBe('sess-broken');
     expect(summary.turn_id).toBe('p9');
-    expect(summary.response).toBe('done anyway');
+    expect(summary.response_evidence).toMatchObject({ length: 'done anyway'.length });
     // No prompts/tools/usage: the backend finalizes from the llm.call ledger.
     expect(summary.usage_status).toBe('pending');
   });
@@ -535,7 +535,7 @@ describe('turn tracking through the hook pipeline', () => {
     const firstSummary = first.events.find((event: any) => event.event.type === 'turn.summary');
 
     expect(firstSummary.turn_id).toBe('p1');
-    expect(firstSummary.prompt).toBe('first prompt');
+    expect(firstSummary.prompt_evidence).toMatchObject({ length: 'first prompt'.length });
     expect(firstSummary.tools_used).toEqual({ Edit: 1 });
 
     // p2's records survived p1's close and produce their own summary.
@@ -543,7 +543,7 @@ describe('turn tracking through the hook pipeline', () => {
     const secondSummary = second.events.find((event: any) => event.event.type === 'turn.summary');
 
     expect(secondSummary.turn_id).toBe('p2');
-    expect(secondSummary.prompt).toBe('second prompt');
+    expect(secondSummary.prompt_evidence).toMatchObject({ length: 'second prompt'.length });
     expect(secondSummary.tools_used).toEqual({ Bash: 1 });
   });
 
@@ -572,8 +572,8 @@ describe('turn tracking through the hook pipeline', () => {
     expect(summary.output_tokens).toBe(3);
   });
 
-  it('keeps prompt text out of the summary when capture is explicitly off', async () => {
-    await configure({ capture: { ...defaultConfig().capture, prompts: false, responses: false } });
+  it('keeps prompt text out of the summary even when a legacy config asks for it', async () => {
+    await configure({ capture: { ...defaultConfig().capture, prompts: true, responses: true } });
     await hookDryRun({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-p', prompt: 'secret prompt', cwd: world.home });
     const result = await hookDryRun({ hook_event_name: 'Stop', session_id: 'sess-p', last_assistant_message: 'reply', cwd: world.home });
     const summary = result.events.find((event: any) => event.event.type === 'turn.summary');
@@ -800,7 +800,7 @@ describe('turn tracking through the hook pipeline', () => {
     expect(after.some((name) => name.startsWith('usage-claim--'))).toBe(false);
   });
 
-  it('caps prompt text stored on disk but keeps true length in evidence', async () => {
+  it('stores no prompt text on disk but keeps true length in evidence', async () => {
     await configure();
     const big = 'x'.repeat(200_000);
 
@@ -812,7 +812,7 @@ describe('turn tracking through the hook pipeline', () => {
     const [recordFile] = await fs.readdir(path.join(turnsDir, sessionDir!));
     const record = JSON.parse(await fs.readFile(path.join(turnsDir, sessionDir!, recordFile!), 'utf8'));
 
-    expect(record.text.length).toBeLessThanOrEqual(65536);
+    expect(record.text).toBeUndefined();
     expect(record.evidence.length).toBe(200_000);
   });
 

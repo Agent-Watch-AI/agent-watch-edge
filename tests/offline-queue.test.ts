@@ -98,7 +98,6 @@ describe('public event offline queue', () => {
     await writeJson(paths.configFile, {
       ...defaultConfig(),
       endpoint: 'http://127.0.0.1:9',
-      capture: { ...defaultConfig().capture, prompts: true },
       delivery: { ...defaultConfig().delivery, timeoutMs: 300 }
     });
 

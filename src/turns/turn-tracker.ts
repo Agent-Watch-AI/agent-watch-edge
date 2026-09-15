@@ -19,9 +19,7 @@ import {
   IDE_SURFACE_PROVIDERS,
   LOCK_KEY_HASH_LENGTH,
   PROMPT_EVIDENCE_KEY,
-  PROMPT_TEXT_KEY,
   RESPONSE_EVIDENCE_KEY,
-  RESPONSE_TEXT_KEY,
   TOOL_COMPLETION_TYPES,
   TRANSCRIPT_PATH_KEY,
   TURN_STATE_TTL_MS,
@@ -30,10 +28,10 @@ import {
   USAGE_RETRY
 } from './constants/turns.constants.js';
 import { TurnStateStore } from './turn-state.js';
-import { alignContentEvidence, buildTurnSummary } from './turn-summary.js';
+import { buildTurnSummary } from './turn-summary.js';
 import type { PromptRecord, ResponseRecord, ToolRecord, TurnRecord, TurnStateEntry } from './types/turn-state.types.js';
 import type { TranscriptReader, TurnUsage } from './types/transcript.types.js';
-import type { TurnResponse, TurnSummaryEvent } from './types/turn-summary.types.js';
+import type { TurnSummaryEvent } from './types/turn-summary.types.js';
 import type { TrackTurnOptions, TurnWindow } from './types/turn-tracker.types.js';
 
 export type { TrackTurnOptions } from './types/turn-tracker.types.js';
@@ -321,7 +319,7 @@ async function closeTurnLocked(
   // Consume exactly what went into the summary; other prompts' records stay.
   if (!readOnly) await store.remove(mine.map((entry) => entry.file));
 
-  return alignContentEvidence(sanitizeValue(summary));
+  return sanitizeValue(summary);
 }
 
 /**
@@ -362,7 +360,7 @@ async function fallbackSummary(sessionId: string, stopEvent: AgentWatchEvent, op
       endedAt: stopEvent.timestamp
     });
 
-    return alignContentEvidence(sanitizeValue(summary));
+    return sanitizeValue(summary);
   } catch (error) {
     debugLog('fallback turn summary failed:', error);
 
@@ -520,18 +518,10 @@ function filterTurn(entries: readonly TurnStateEntry[], stopTurnId: string | und
  *
  * @param stopEvent - The closing event.
  * @param records - The turn's records.
- * @returns The response, or undefined when none was captured.
+ * @returns The response's evidence, or undefined when none was recorded.
  */
-function resolveResponse(stopEvent: AgentWatchEvent, records: readonly TurnRecord[]): TurnResponse | undefined {
-  const fromStop = responseFrom(stopEvent);
-
-  if (fromStop) return fromStop;
-
-  const last = recordsOfKind<ResponseRecord>(records, 'response').at(-1);
-
-  if (!last) return undefined;
-
-  return { text: last.text, evidence: last.evidence };
+function resolveResponse(stopEvent: AgentWatchEvent, records: readonly TurnRecord[]): ContentEvidence | undefined {
+  return responseFrom(stopEvent) ?? recordsOfKind<ResponseRecord>(records, 'response').at(-1)?.evidence;
 }
 
 /**
@@ -571,14 +561,11 @@ function withResolvedUsage(stopEvent: AgentWatchEvent, usage: TurnUsage | undefi
  * @returns The record.
  */
 function promptRecord(event: AgentWatchEvent): PromptRecord {
-  const metadata = event.metadata ?? {};
-
   return {
     kind: 'prompt',
     at: event.timestamp,
     turnId: event.session.turnId,
-    text: typeof metadata[PROMPT_TEXT_KEY] === 'string' ? (metadata[PROMPT_TEXT_KEY] as string) : undefined,
-    evidence: asEvidence(metadata[PROMPT_EVIDENCE_KEY])
+    evidence: asEvidence(event.metadata?.[PROMPT_EVIDENCE_KEY])
   };
 }
 
@@ -625,31 +612,22 @@ function accessFor(type: AgentWatchEvent['event']['type']): ToolRecord['access']
  * @returns The record.
  */
 function responseRecord(event: AgentWatchEvent): ResponseRecord {
-  const response = responseFrom(event);
-
   return {
     kind: 'response',
     at: event.timestamp,
     turnId: event.session.turnId,
-    text: response?.text,
-    evidence: response?.evidence
+    evidence: responseFrom(event)
   };
 }
 
 /**
- * Response text and evidence carried on an event's metadata.
+ * Response evidence carried on an event's metadata.
  *
  * @param event - Any canonical event.
- * @returns The response, or undefined when the event carries none.
+ * @returns The evidence, or undefined when the event carries none.
  */
-function responseFrom(event: AgentWatchEvent): TurnResponse | undefined {
-  const metadata = event.metadata ?? {};
-  const text = typeof metadata[RESPONSE_TEXT_KEY] === 'string' ? (metadata[RESPONSE_TEXT_KEY] as string) : undefined;
-  const evidence = asEvidence(metadata[RESPONSE_EVIDENCE_KEY]);
-
-  if (text === undefined && evidence === undefined) return undefined;
-
-  return { text, evidence };
+function responseFrom(event: AgentWatchEvent): ContentEvidence | undefined {
+  return asEvidence(event.metadata?.[RESPONSE_EVIDENCE_KEY]);
 }
 
 /**

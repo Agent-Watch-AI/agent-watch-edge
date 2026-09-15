@@ -87,18 +87,20 @@ agentwatch otel-headers                                   # print OTel headers f
 
 One global file: `~/.agentwatch/config.json`, written by `agentwatch setup`.
 
-### Content capture is off by default
+### Developer prompts are never collected
 
-Prompts, responses, tool inputs and tool outputs stay on the machine. Turning one on takes **two**
-things — the global `contentCaptureConsent` marker *and* the individual flag. The marker alone
-enables nothing; a flag alone collects nothing.
+Prompt and response text never leaves the machine, and no setting changes that. A prompt or
+response is recorded only as a length and a SHA-256, so turn counts and cost attribution work
+without the text.
+
+Tool inputs and tool outputs are off by default. Turning one on takes **two** things — the global
+`contentCaptureConsent` marker *and* the individual flag. The marker alone enables nothing; a flag
+alone collects nothing.
 
 ```json
 {
   "contentCaptureConsent": true,
   "capture": {
-    "prompts": false,
-    "responses": false,
     "toolInput": false,
     "toolOutput": false,
     "git": true,
@@ -109,26 +111,26 @@ enables nothing; a flag alone collects nothing.
 
 `git` and `files` are on because they carry metadata, not content: remote, branch, SHA, and the
 *path* of a file the agent touched — which is what feature and project attribution is built from.
-A prompt is always recorded as a length and a SHA-256, never as text, so turn counts and cost
-attribution work with capture fully off.
 
-**Upgrading from an earlier release?** Its config has all six flags written into it, but without the
-consent marker the four content flags read as `false` — replacing the CLI cannot carry an old
-decision forward silently. Your flags are kept as written, so adding the marker later turns them
-back on rather than starting over; `setup` names the ones that are set but inert. `agentwatch doctor`
-reports the effective posture for the directory you are in.
+**Upgrading from an earlier release?** `capture.prompts` and `capture.responses` no longer exist. A
+config that still sets them collects nothing; the next `agentwatch setup` removes them and says so,
+and `agentwatch doctor` names them until it does. Summaries an older release queued with text in
+them are sent without it. The two tool flags without the consent marker read as `false`, are kept as
+written, and `setup` names the ones that are set but inert.
 
-**Native exporters are gated separately.** Codex and Gemini usage logs can carry tool arguments and
-results with no per-field filter, so setup configures them only when consent covers both
-`toolInput` and `toolOutput` — which can leave `llm.call` usage unavailable for those two in
-metadata-only mode. Claude's own content-logging switches are forced off either way.
+**Native exporters never log prompts.** Setup forces prompt and response logging off in every agent
+it configures (Claude `OTEL_LOG_USER_PROMPTS=0`, Codex `log_user_prompt = false`, Gemini
+`GEMINI_TELEMETRY_LOG_PROMPTS=false`), whatever the consent state, and never enables Gemini traces,
+which can carry prompts. Codex and Gemini usage logs can carry tool arguments and results with no
+per-field filter, so setup configures them only when consent covers both `toolInput` and
+`toolOutput` — which can leave `llm.call` usage unavailable for those two in metadata-only mode.
 
 ### Repository overrides
 
 A `.agentwatch.json` in a repository root can only turn capture **down** for that repository:
 
 ```json
-{ "capture": { "prompts": false, "toolOutput": false } }
+{ "capture": { "toolOutput": false, "files": false } }
 ```
 
 A committed file that asks for *more* than the machine allows is ignored with a warning, so
@@ -211,7 +213,7 @@ To try it locally: `BLOCK=1 npm run example` refuses every check.
 
 | Record | How | Contents |
 |---|---|---|
-| `turn.summary` | Edge hooks → `POST <backend>/v1/events` | One completed turn: prompt/response length and hash, tool counts, file paths, Git branch, ticket keys. Raw text only with consent *and* the flag. |
+| `turn.summary` | Edge hooks → `POST <backend>/v1/events` | One completed turn: prompt/response length and hash, tool counts, file paths, Git branch, ticket keys. Never prompt or response text. |
 | `llm.call` | The agent's own OTLP → `POST <backend>/v1/otlp/v1/logs` | Token usage, cost and latency per model request. The edge does not proxy this. |
 | `repo.snapshot` | Edge hooks, after a closed turn | Changed branch/commit metadata, including commit subjects, when Git capture is on. |
 

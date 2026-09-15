@@ -10,15 +10,16 @@ require root, proxy model requests, or enforce an administrator-proof policy.
 
 ## Defaults and upgrade consent
 
-AgentWatch does not collect prompt text, response text, tool input bodies, or tool
-output bodies through its hooks by default. Default capture is:
+**Developer prompts are never collected.** AgentWatch never sends prompt text or
+response text, under any configuration: there is no capture flag for either. A
+prompt or response is represented only by its length and SHA-256.
+
+Tool input and tool output bodies are not collected by default. Default capture is:
 
 ```json
 {
   "contentCaptureConsent": false,
   "capture": {
-    "prompts": false,
-    "responses": false,
     "toolInput": false,
     "toolOutput": false,
     "git": true,
@@ -27,43 +28,48 @@ output bodies through its hooks by default. Default capture is:
 }
 ```
 
-Old configurations with all four content flags explicitly `true` are interpreted
-as metadata-only unless the global `contentCaptureConsent` marker is exactly
-`true`. Neither loading nor `agentwatch setup` rewrites those four flags: the
-gate is applied in memory on every read, so adding the marker later restores the
-values already on disk rather than finding them erased. Missing, unreadable,
-invalid, and corrupt global configuration do not authorize content capture. Git and file-path capture remain
-enabled unless separately disabled.
+Configurations written by earlier releases may still carry `capture.prompts` or
+`capture.responses`. Those keys are ignored on load whatever their value, the next
+`agentwatch setup` removes them from the file and says so once, and `doctor`
+reports them while they remain.
 
-Intentional opt-in requires editing the **global** `~/.agentwatch/config.json`:
-set `contentCaptureConsent` to `true` and explicitly set each desired content
-capture field to `true`. The marker alone does not enable fields that are false.
-Set the marker to `false` to revoke consent. `config`, `status`, and `doctor`
-report consent and capture state without printing captured content. Repository
-`.agentwatch.json` files cannot grant consent, increase any capture field, alter
-identity, redirect delivery, or change enforcement/delivery/native OTel settings.
-They may reduce individual capture fields. Because loading gates the flags, the
-next `agentwatch setup` persists the gated values, and prints which flags it is
-about to save as `false` so that rewrite is visible rather than silent.
+Old configurations with both tool flags explicitly `true` are interpreted as
+metadata-only unless the global `contentCaptureConsent` marker is exactly `true`.
+Neither loading nor `agentwatch setup` rewrites those flags: the gate is applied in
+memory on every read, so adding the marker later restores the values already on
+disk rather than finding them erased. Missing, unreadable, invalid, and corrupt
+global configuration do not authorize content capture. Git and file-path capture
+remain enabled unless separately disabled.
 
-Current policy is reapplied to prompt and response text in old turn state before
-queueing, and to every queued record before HTTP delivery: summaries lose text
-whose flag is off, and repository snapshots are dropped entirely once `capture.git`
-is off. Old files are not erased by an upgrade; their original content may remain
-locally until consumed or expired. An intentional later opt-in can permit delivery
-of retained queued text.
+Intentional tool-content opt-in requires editing the **global**
+`~/.agentwatch/config.json`: set `contentCaptureConsent` to `true` and explicitly
+set `toolInput` and/or `toolOutput` to `true`. The marker alone does not enable
+fields that are false. Set the marker to `false` to revoke consent. `config`,
+`status`, and `doctor` report consent and capture state without printing captured
+content. Repository `.agentwatch.json` files cannot grant consent, increase any
+capture field, alter identity, redirect delivery, or change
+enforcement/delivery/native OTel settings. They may reduce individual capture
+fields.
+
+Current policy is reapplied to old turn state before queueing, and to every queued
+record before HTTP delivery: summaries always lose `prompt` and `response` text an
+older release may have written, and repository snapshots are dropped entirely once
+`capture.git` is off. Old files are not erased by an upgrade; their original content
+may remain locally until consumed or expired, but it is never sent.
 
 **Upgrade native telemetry separately:** rerun `agentwatch setup` after upgrading,
 then restart every running coding agent. Existing native exporter configuration
 and in-memory exporters do not change merely because npm replaces the CLI.
 Use `agentwatch off` and close agents before upgrading if export must be stopped
-during the transition. Setup explicitly disables native prompt logging and Claude
-tool detail/content logging even when hook content capture is opted in. Codex and
-Gemini usage logs can contain tool arguments/results without a reliable per-field
-filter, so the Edge configures those logs only when global consent exists and both
-`toolInput` and `toolOutput` are enabled. Gemini detailed traces additionally
-require prompt and response capture. Gemini metrics may run without content
-consent. This can leave `llm.call` usage unavailable by default for Codex and Gemini.
+during the transition. Setup always disables native prompt logging (Claude
+`OTEL_LOG_USER_PROMPTS=0`, Codex `log_user_prompt = false`, Gemini
+`GEMINI_TELEMETRY_LOG_PROMPTS=false`) and Claude tool detail/content logging,
+whatever the consent state, and never enables Gemini detailed traces, which can
+carry prompts. Codex and Gemini usage logs can contain tool arguments/results
+without a reliable per-field filter, so the Edge configures those logs only when
+global consent exists and both `toolInput` and `toolOutput` are enabled. Gemini
+metrics may run without content consent. This can leave `llm.call` usage
+unavailable by default for Codex and Gemini.
 
 ## Outbound records
 
@@ -84,18 +90,18 @@ availability determines which identifiers and usage values exist.
 
 The hook-generated flat fields are `provider`, `surface`, `session_id`, `turn_id`,
 `developer_id`, `repository`, `branch`, `commit`, `jira_ids`, `files_changed`,
-`files_touched`, `files_read`, `prompt`, `prompt_evidence`, `response`,
-`response_evidence`, `tool_calls`, `tools_used`, `model`, `billing_mode`,
-`input_tokens`, `cached_input_tokens`, `cache_creation_input_tokens`,
-`output_tokens`, `usage_status`, `started_at`, and `ended_at`. The nested `session`
-contains `id`, `providerId`, and optionally `turnId`.
+`files_touched`, `files_read`, `prompt_evidence`, `response_evidence`,
+`tool_calls`, `tools_used`, `model`, `billing_mode`, `input_tokens`,
+`cached_input_tokens`, `cache_creation_input_tokens`, `output_tokens`,
+`usage_status`, `started_at`, and `ended_at`. The nested `session` contains `id`,
+`providerId`, and optionally `turnId`.
 
-Only `prompt` and `response` carry raw conversational text, and only with consent
-and their enabled flags. Evidence contains `length` and `sha256`; it is not raw
-text, but hashes and lengths can still reveal information about guessable text.
-Evidence is aligned to sanitized text when text is sent. Tool input/output capture
-affects internal adapter data; current summaries transmit tool names/counts and
-file paths, not tool bodies. Enabling tool flags does not add a tool event stream.
+No field carries prompt or response text. Evidence contains `length` and `sha256`
+of the text the developer typed and the agent answered; it is not raw text, but
+hashes and lengths can still reveal information about short or guessable text.
+Tool input/output capture affects internal adapter data; current summaries transmit
+tool names/counts and file paths, not tool bodies. Enabling tool flags does not add
+a tool event stream.
 
 The public summary type additionally supports backend-derived `llm_calls`,
 `agent_usage`, `reasoning_output_tokens`, `total_tokens`, and `cost_usd`.

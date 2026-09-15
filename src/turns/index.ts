@@ -7,7 +7,6 @@ export type {
   AgentUsageSummary,
   BuildTurnSummaryInput,
   TouchedFiles,
-  TurnResponse,
   TurnSummaryEvent,
   TurnUsageStatus
 } from './types/turn-summary.types.js';
@@ -17,7 +16,7 @@ export type { TrackTurnOptions, TurnWindow } from './types/turn-tracker.types.js
 export type { AggregateTurnUsageOptions, UsageTotals } from './types/aggregate-usage.types.js';
 
 export { PROVIDER_LABELS, TURN_STATE_TTL_MS, USAGE_RETRY } from './constants/turns.constants.js';
-export { alignContentEvidence, buildTurnSummary } from './turn-summary.js';
+export { buildTurnSummary } from './turn-summary.js';
 export { TurnStateStore } from './turn-state.js';
 export { readTurnUsage } from './claude-transcript.js';
 export { readCursorTurnUsage } from './cursor-transcript.js';

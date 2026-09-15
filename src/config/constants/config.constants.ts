@@ -107,20 +107,28 @@ export const GLOBAL_ONLY_BLOCKS = ['delivery', 'otel', 'enforcement'] as const;
 /**
  * Emission toggles a repo file may not narrow. `llm.call` is the mandatory
  * usage ledger and `turn.summary` is the only hook-path usage record: a repo
- * file may narrow *capture* (prompts, responses, files) but must never be able
+ * file may narrow *capture* (tool content, git, files) but must never be able
  * to silence usage telemetry for everyone who clones the repository.
  */
 export const GLOBAL_ONLY_EMIT_KEYS: ReadonlySet<string> = new Set(['llmCalls', 'turnSummaries']);
 
 /**
- * The four capture flags that carry raw content off the machine.
+ * The capture flags that carry raw content off the machine: tool arguments and
+ * results. Prompt and response text is not here because nothing can send it.
  *
  * Named once because two rules key on exactly this set: the consent gate zeroes
  * them on load, and `saveConfig` preserves the user's own values rather than the
  * gated ones, so granting consent later restores a choice instead of finding it
  * erased.
  */
-export const CONTENT_CAPTURE_KEYS = ['prompts', 'responses', 'toolInput', 'toolOutput'] as const;
+export const CONTENT_CAPTURE_KEYS = ['toolInput', 'toolOutput'] as const;
+
+/**
+ * Capture flags earlier releases honoured and this one never will: developer
+ * prompts and the agent's replies are not collected. Stripped on load; named so
+ * `setup` can remove them from the file once and `doctor` can say they remain.
+ */
+export const RETIRED_CAPTURE_KEYS = ['prompts', 'responses'] as const;
 
 /** The capture block, which a repo file may narrow but never widen. */
 export const CAPTURE_KEY = 'capture';

@@ -70,7 +70,7 @@ export class EventQueue {
 
       const at = this.now().toISOString();
 
-      // 0600: a queued turn summary holds prompt and response text.
+      // 0600: a queued turn summary holds developer identity, branches and file paths.
       await writeFileAtomic(file, JSON.stringify({ event, attempts: 0, firstQueuedAt: at, nextAttemptAt: at, destination }), SECRET_FILE_MODE);
     }
 

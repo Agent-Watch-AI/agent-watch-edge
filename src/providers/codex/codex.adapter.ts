@@ -80,7 +80,7 @@ function hookPatch(payload: CodexPayload, providerEventType: string, context: Ho
 
   if (providerEventType === 'SessionEnd') return { metadata: { sessionEndReason: payload.reason } };
 
-  if (providerEventType === 'UserPromptSubmit') return promptPatch(payload.prompt ?? '', capture);
+  if (providerEventType === 'UserPromptSubmit') return promptPatch(payload.prompt ?? '');
 
   if (CODEX_TOOL_EVENTS.has(providerEventType)) {
     return toolPatch(
@@ -97,7 +97,7 @@ function hookPatch(payload: CodexPayload, providerEventType: string, context: Ho
   }
 
   if (providerEventType === 'Stop') {
-    const response = responsePatch(payload.last_assistant_message ?? '', capture);
+    const response = responsePatch(payload.last_assistant_message ?? '');
 
     return { ...response, metadata: { stopHookActive: payload.stop_hook_active, ...response.metadata } };
   }

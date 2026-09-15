@@ -123,7 +123,7 @@ describe('effective config for two tenants on one machine', () => {
       }
     });
     // A committed repo file inside one project tries to claim the other's token.
-    await writeJson(path.join(trip, '.agentwatch.json'), { token: 'watch-token', capture: { prompts: false } });
+    await writeJson(path.join(trip, '.agentwatch.json'), { token: 'watch-token', capture: { files: false } });
 
     const fromTrip = await loadEffectiveConfig(paths, path.join(trip, 'src'));
     const fromWatch = await loadEffectiveConfig(paths, watch);
@@ -137,7 +137,7 @@ describe('effective config for two tenants on one machine', () => {
     expect(fromElsewhere.rootPath).toBeUndefined();
 
     // The repo file narrowed capture, which it may, and was refused the token.
-    expect(fromTrip.config.capture.prompts).toBe(false);
+    expect(fromTrip.config.capture.files).toBe(false);
     expect(fromTrip.warnings.join(' ')).toMatch(/"token" is global-only/);
 
     // Both tenants share one backend; only the bearer differs.

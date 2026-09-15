@@ -104,37 +104,26 @@ export function providerPatch(fields: UnknownRecord): EventPatch {
 }
 
 /**
- * Patch for a captured prompt: always its evidence, the text only when the
- * effective config permits it.
+ * Patch for a submitted prompt: its length and SHA-256, never the text.
+ *
+ * Takes no capture policy because there is nothing to decide: developer prompt
+ * text is never collected, so the text stops here, before turn state or the queue.
  *
  * @param prompt - The prompt text as the agent reported it.
- * @param capture - What the effective config allows.
  * @returns The patch.
  */
-export function promptPatch(prompt: string, capture: CapturePolicy): EventPatch {
-  return {
-    metadata: compact({
-      prompt: contentEvidence(prompt),
-      promptText: capture.prompts && prompt ? prompt : undefined
-    })
-  };
+export function promptPatch(prompt: string): EventPatch {
+  return { metadata: { prompt: contentEvidence(prompt) } };
 }
 
 /**
- * Patch for a captured response: always its evidence, the text only when the
- * effective config permits it.
+ * Patch for an agent response: its length and SHA-256, never the text.
  *
  * @param response - The response text as the agent reported it.
- * @param capture - What the effective config allows.
  * @returns The patch.
  */
-export function responsePatch(response: string, capture: CapturePolicy): EventPatch {
-  return {
-    metadata: compact({
-      response: response ? contentEvidence(response) : undefined,
-      responseText: capture.responses && response ? response : undefined
-    })
-  };
+export function responsePatch(response: string): EventPatch {
+  return { metadata: compact({ response: response ? contentEvidence(response) : undefined }) };
 }
 
 /**

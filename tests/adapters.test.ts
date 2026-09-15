@@ -30,8 +30,8 @@ describe('Claude adapter', () => {
     expect(event!.ai?.model).toBe('claude-sonnet-5');
   });
 
-  it('excludes prompt text when capture.prompts is off but keeps length+hash evidence', () => {
-    const [event] = parseClaudeHookEvent(claude.claudeUserPromptSubmit, context({ prompts: false }));
+  it('never carries prompt text, only length+hash evidence', () => {
+    const [event] = parseClaudeHookEvent(claude.claudeUserPromptSubmit, context());
     const json = JSON.stringify(event);
 
     expect(event!.event.type).toBe('prompt.submitted');
@@ -40,12 +40,6 @@ describe('Claude adapter', () => {
 
     expect(prompt.length).toBe(claude.claudeUserPromptSubmit.prompt.length);
     expect(prompt.sha256).toMatch(/^[0-9a-f]{64}$/);
-  });
-
-  it('includes prompt text when capture.prompts is on', () => {
-    const [event] = parseClaudeHookEvent(claude.claudeUserPromptSubmit, context());
-
-    expect(event!.metadata?.['promptText']).toContain('Refactor the auth middleware');
   });
 
   it('carries prompt_id as the turn id on every event of the turn', () => {
@@ -107,8 +101,8 @@ describe('Claude adapter', () => {
     expect(JSON.stringify(event)).not.toContain('Command failed');
   });
 
-  it('maps Stop to generation.completed without response text when capture.responses is off', () => {
-    const [event] = parseClaudeHookEvent(claude.claudeStop, context({ responses: false }));
+  it('maps Stop to generation.completed without response text', () => {
+    const [event] = parseClaudeHookEvent(claude.claudeStop, context());
 
     expect(event!.event.type).toBe('generation.completed');
     expect(JSON.stringify(event)).not.toContain('refactored the middleware');
@@ -169,8 +163,8 @@ describe('Codex adapter', () => {
     expect(patch!.metadata?.['filePath']).toBe('/Users/dev/acme/src/users.ts');
   });
 
-  it('excludes prompt and tool output when capture is off', () => {
-    const off = { prompts: false, toolInput: false, toolOutput: false };
+  it('never carries prompt text, and excludes tool output when capture is off', () => {
+    const off = { toolInput: false, toolOutput: false };
     const [prompt] = parseCodexHookEvent(codex.codexUserPromptSubmit, context(off));
 
     expect(JSON.stringify(prompt)).not.toContain('pagination');

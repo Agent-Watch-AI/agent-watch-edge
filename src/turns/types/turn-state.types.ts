@@ -1,11 +1,10 @@
 import type { ContentEvidence } from '../../events/types/events.types.js';
 
-/** A prompt the developer submitted. */
+/** A prompt the developer submitted: when, and its length and SHA-256 — never its text. */
 export interface PromptRecord {
   readonly kind: 'prompt';
   readonly at: string;
   readonly turnId?: string;
-  readonly text?: string;
   readonly evidence?: ContentEvidence;
 }
 
@@ -23,12 +22,11 @@ export interface ToolRecord {
   readonly access?: 'read' | 'edit';
 }
 
-/** Response text delivered outside the Stop event (Cursor's afterAgentResponse). */
+/** A response delivered outside the Stop event (Cursor's afterAgentResponse); evidence only. */
 export interface ResponseRecord {
   readonly kind: 'response';
   readonly at: string;
   readonly turnId?: string;
-  readonly text?: string;
   readonly evidence?: ContentEvidence;
 }
 

@@ -44,11 +44,11 @@ Decide these first — the templates carry a placeholder for each:
   only by the process owner and root. Better, not secret — the token is a
   credential on a machine its user administers either way. The flag still exists
   and still wins, for the interactive case where none of this matters.
-- **Content capture.** It is off unless the global config carries
-  `contentCaptureConsent: true` *and* the individual flags. Nothing in these
-  templates turns it on, and a repository `.agentwatch.json` cannot. If your
-  organization has decided to collect prompt or response text, that is a
-  deliberate edit to `~/.agentwatch/config.json` — see
+- **Content capture.** Developer prompt and response text is never collected;
+  no configuration enables it. Tool input/output capture is off unless the
+  global config carries `contentCaptureConsent: true` *and* the individual
+  flags. Nothing in these templates turns it on, and a repository
+  `.agentwatch.json` cannot — see
   [docs/DATA_HANDLING.md](../../docs/DATA_HANDLING.md).
 
 ## What an admin cannot lock

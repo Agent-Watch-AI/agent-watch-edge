@@ -71,9 +71,6 @@ export const CLAUDE_ENTRYPOINT_VAR = 'CLAUDE_CODE_ENTRYPOINT';
 export const DEFAULT_SURFACE = 'cli';
 export const IDE_SURFACE = 'ide';
 
-/** Separator between several prompts collapsed into one turn. */
-export const PROMPT_JOIN_SEPARATOR = '\n---\n';
-
 /**
  * Cap on `files_touched` and `files_read`, matching the platform's own limit on
  * either list.
@@ -90,10 +87,8 @@ export const MAX_TURN_FILES = 500;
 /** Fallback tool name for a call the provider did not name. */
 export const UNKNOWN_TOOL_NAME = 'unknown';
 
-/** Metadata keys the tracker reads off canonical events. */
-export const PROMPT_TEXT_KEY = 'promptText';
+/** Metadata keys the tracker reads off canonical events. Evidence only: no text key exists. */
 export const PROMPT_EVIDENCE_KEY = 'prompt';
-export const RESPONSE_TEXT_KEY = 'responseText';
 export const RESPONSE_EVIDENCE_KEY = 'response';
 export const FILE_PATH_KEY = 'filePath';
 

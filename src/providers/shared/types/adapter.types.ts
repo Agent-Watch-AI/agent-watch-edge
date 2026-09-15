@@ -47,8 +47,6 @@ export interface ToolCallInput {
 
 /** What the effective config allows to be captured. */
 export interface CapturePolicy {
-  readonly prompts: boolean;
-  readonly responses: boolean;
   readonly toolInput: boolean;
   readonly toolOutput: boolean;
   readonly files: boolean;

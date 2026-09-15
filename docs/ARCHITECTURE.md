@@ -26,8 +26,9 @@ OpenTelemetry traces/logs. Key ideas worth reusing **[ref]**:
   `"hook:" + sha256(canonical-JSON of stable fields)`, with an `event_id_source` marker.
 - **Dedup + correlation state.** Bounded per-session dedup ledger; PreToolUse/PostToolUse matched
   through a persisted `tool_invocations` record; subagent start/stop matched via agent IDs.
-- **Privacy: content off by default.** Raw prompt/response text is stripped at the adapter and
-  replaced by `length` + `sha256`. Git remotes emitted only as a SHA-256 of the normalized,
+- **Privacy: developer prompts never collected; tool content off by default.** Raw prompt/response
+  text is dropped at the adapter under every configuration — there is no flag for it — and replaced
+  by `length` + `sha256`; the HTTP boundary strips any text an older release queued. Git remotes emitted only as a SHA-256 of the normalized,
   credential-free URL. Doctor sanitizes endpoints; delivery errors stored as hash+length.
 - **Diagnostics with a stable JSON schema.** `doctor --json` reports registrations, exporter
   health, state-dir writability; exit 1 on degraded.
@@ -203,8 +204,9 @@ total and degrades only to an agent-type or `unattributed` group. Calls are idem
    changing setup.
 4. Per detected agent: install hooks (merge, idempotent, backup + atomic write + post-write
    validation) and configure native OTel where the requested signals are safe under explicit
-   global content consent. Codex and Gemini usage logs remain off in metadata-only mode because
-   current provider logs can contain tool arguments/results.
+   global tool-content consent. Native prompt logging is always forced off, and Gemini traces
+   (which can carry prompts) are never configured. Codex and Gemini usage logs remain off in
+   metadata-only mode because current provider logs can contain tool arguments/results.
 5. Print summary + any manual steps (e.g. Codex hook approval, restarting agents).
 
 ## 10. Risks & unknowns

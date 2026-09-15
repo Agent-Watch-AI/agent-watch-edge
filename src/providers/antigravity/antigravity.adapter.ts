@@ -167,7 +167,7 @@ function hookPatch(payload: AntigravityPayload, hook: AntigravityHookEvent, cont
     // invocations are model calls inside the same turn.
     if (!isFirstInvocation(payload.preInvocationHookArgs?.invocationNum)) return {};
 
-    return promptPatch(payload.common?.lastUserInput ?? '', context.config.capture);
+    return promptPatch(payload.common?.lastUserInput ?? '');
   }
 
   if (hook === 'PostInvocation') {
@@ -176,7 +176,7 @@ function hookPatch(payload: AntigravityPayload, hook: AntigravityHookEvent, cont
 
   if (hook === 'PreToolUse' || hook === 'PostToolUse') return antigravityToolPatch(payload, hook, context);
 
-  if (hook === 'Stop') return responsePatch(payload.stopHookArgs?.finalModelOutput ?? '', context.config.capture);
+  if (hook === 'Stop') return responsePatch(payload.stopHookArgs?.finalModelOutput ?? '');
 
   return {};
 }

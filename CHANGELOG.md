@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### New: `agent-watch-otel`, a Python OpenTelemetry span processor
+
+`python/agent-watch-otel/` is this repository's first Python package and its
+second published artefact. It is versioned and released on its own
+(`python-release.yml`, PyPI trusted publishing with attestations); the npm
+package's version is unaffected.
+
+A Phoenix customer adds one line after `phoenix.otel.register()` and their
+production LLM spend reaches Agent Watch hashed in their own process. It reports
+`service.name` and `service.version`, which Phoenix drops at ingest and no poller
+can recover. Prompt text, tool arguments and responses never leave the process:
+digests are computed in `on_end`, so the send queue holds only hashes. `on_end`
+never touches the network and never raises; the queue is bounded and drops are
+counted. Phoenix keeps receiving every span unchanged.
+
+Depends on `opentelemetry-sdk` and nothing else, which a test enforces.
+
 ## 0.3.0
 
 ### Behaviour change: hook delivery timeout

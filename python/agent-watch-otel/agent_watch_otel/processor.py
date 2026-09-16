@@ -45,6 +45,13 @@ DEFAULT_MAX_QUEUE = 2048
 DEFAULT_FLUSH_SECONDS = 5.0
 DEFAULT_TIMEOUT_SECONDS = 10.0
 
+#: The whole budget `shutdown` may spend, however many times it is called.
+#:
+#: Deliberately shorter than the socket timeout. Shutdown is a courtesy to work
+#: already queued, and an unresponsive endpoint must not be able to turn it into
+#: the thing that outlasts a process's grace period.
+DEFAULT_SHUTDOWN_SECONDS = 3.0
+
 _SHUTDOWN = object()
 
 
@@ -66,6 +73,8 @@ class AgentWatchSpanProcessor(SpanProcessor):
         bound in the customer's process.
     :param flush_seconds: How long a partial batch waits before it is sent.
     :param timeout_seconds: Network timeout for one POST.
+    :param shutdown_seconds: The whole budget ``shutdown`` may spend waiting for
+        the sender, across every call to it.
     :raises ValueError: No token or no endpoint. This is raised at construction,
         on the application's startup path, where a missing credential is a
         configuration error the operator can see — never later, from ``on_end``.
@@ -80,6 +89,7 @@ class AgentWatchSpanProcessor(SpanProcessor):
         max_queue: int = DEFAULT_MAX_QUEUE,
         flush_seconds: float = DEFAULT_FLUSH_SECONDS,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        shutdown_seconds: float = DEFAULT_SHUTDOWN_SECONDS,
     ) -> None:
         resolved_token = token or os.environ.get("AGENT_WATCH_TOKEN") or ""
         resolved_endpoint = endpoint or os.environ.get("AGENT_WATCH_ENDPOINT") or ""
@@ -95,6 +105,7 @@ class AgentWatchSpanProcessor(SpanProcessor):
         self._instance_id = instance_id or ""
         self._timeout = timeout_seconds
         self._flush_seconds = flush_seconds
+        self._shutdown_seconds = shutdown_seconds
         self._counters = {
             "sent": 0,
             "dropped_queue_full": 0,
@@ -183,17 +194,23 @@ class AgentWatchSpanProcessor(SpanProcessor):
             LOGGER.debug("agent-watch: span dropped", exc_info=True)
 
     def shutdown(self) -> None:
-        """Stop reading spans and let the sender drain what is already queued.
+        """Stop reading spans and give the sender a bounded moment to drain.
 
-        Idempotent, because a ``TracerProvider`` is shut down both explicitly and
-        again from ``atexit``. A second sentinel would be queued after the sender
-        had already stopped, and nothing would ever mark it done — so a later
-        ``force_flush`` would wait out its whole timeout on a queue that is in
-        fact empty.
+        **Bounded, and spent once.** A ``TracerProvider`` is shut down explicitly
+        and then again from ``atexit``, and an endpoint that accepts the
+        connection but never answers — a load balancer with no healthy backend, a
+        firewall dropping silently — holds each in-flight request for the full
+        socket timeout. Joining on that timeout per call measured
+        ``first=10.00s second=10.01s total=20.01s``, which can outlast a short
+        ``SIGTERM`` grace period and turn a tidy stop into a kill.
+
+        So the budget is `shutdown_seconds`, it covers every call together, and a
+        second call returns at once. Anything still in flight when the budget runs
+        out is abandoned rather than waited on; the sender is a daemon thread, so
+        it never holds the interpreter open. Use :meth:`force_flush` when what you
+        want is delivery rather than a prompt exit.
         """
         if self._stopped.is_set():
-            self._worker.join(timeout=self._timeout)
-
             return
 
         self._stopped.set()
@@ -201,9 +218,10 @@ class AgentWatchSpanProcessor(SpanProcessor):
         try:
             self._queue.put_nowait(_SHUTDOWN)
         except queue.Full:
+            # No room for the sentinel, so `_next_batch` reads `_stopped` instead.
             pass
 
-        self._worker.join(timeout=self._timeout)
+        self._worker.join(timeout=self._shutdown_seconds)
 
     def force_flush(self, timeout_millis: int = 30_000) -> bool:
         """Wait for every queued call to have been sent or dropped.
@@ -224,11 +242,20 @@ class AgentWatchSpanProcessor(SpanProcessor):
         while True:
             batch, taken, done = self._next_batch()
 
-            if batch:
-                self._send(batch)
-
-            for _ in range(taken):
-                self._queue.task_done()
+            try:
+                if batch:
+                    self._send(batch)
+            except Exception:  # noqa: BLE001 - this thread is the only sender there is
+                # `_send` handles its own network failures; reaching here means
+                # something else did, and a sender that died here would leave
+                # `sent` at zero while every later call queued silently behind it.
+                self._count("dropped_send_failed", len(batch))
+                LOGGER.warning("agent-watch: %d calls dropped, sender error", len(batch))
+            finally:
+                # In `finally`, so a raise cannot leave the queue holding
+                # unfinished tasks and hang `force_flush` on work nobody owns.
+                for _ in range(taken):
+                    self._queue.task_done()
 
             if done:
                 return
@@ -273,18 +300,18 @@ class AgentWatchSpanProcessor(SpanProcessor):
         the upgrade path is one bounded retry with backoff before the drop, which
         needs the queue to stay drainable while it waits.
         """
-        request = urllib.request.Request(
-            self._url,
-            data=json.dumps({"calls": batch}).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self._token}",
-                "User-Agent": "agent-watch-otel",
-            },
-            method="POST",
-        )
-
         try:
+            request = urllib.request.Request(
+                self._url,
+                data=json.dumps({"calls": batch}).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self._token}",
+                    "User-Agent": "agent-watch-otel",
+                },
+                method="POST",
+            )
+
             with urllib.request.urlopen(request, timeout=self._timeout) as response:
                 response.read()
 

@@ -54,6 +54,10 @@ Nothing you can measure, and nothing you can trip over.
   rather than buffered without limit inside your process.
 - **It survives `fork()`.** Under gunicorn `--preload`, uWSGI or Celery prefork, each child gets
   its own sender thread rather than silently dropping every call.
+- **Shutting down is bounded.** An endpoint that accepts the connection and never answers cannot
+  stretch `shutdown()` past `shutdown_seconds`, however many times it is called — so stopping
+  your process stays inside a short `SIGTERM` grace period. Call `force_flush()` instead when
+  what you want is delivery rather than a prompt exit.
 
 ```python
 processor.stats()
@@ -76,6 +80,7 @@ is visibly missing.
 | `max_queue` | 2048 | Calls held while the sender is behind |
 | `flush_seconds` | 5.0 | How long a partial batch waits |
 | `timeout_seconds` | 10.0 | Network timeout for one POST |
+| `shutdown_seconds` | 3.0 | The whole budget `shutdown()` may spend, across every call |
 
 A missing token or endpoint raises at construction — on your startup path, where a misconfiguration
 is visible — never later from `on_end`.

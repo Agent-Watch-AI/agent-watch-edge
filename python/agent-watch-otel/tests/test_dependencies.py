@@ -38,13 +38,18 @@ def _roots(module: Path) -> set[str]:
 class Dependencies(unittest.TestCase):
     """What the shipped package is allowed to import."""
 
+    def test_every_shipped_module_is_examined(self) -> None:
+        """`rglob`, not `glob`: a subpackage added later must not escape the check."""
+        self.assertEqual(sorted(PACKAGE.rglob("*.py")), sorted(PACKAGE.glob("**/*.py")))
+        self.assertIn("processor.py", [module.name for module in PACKAGE.rglob("*.py")])
+
     def test_nothing_beyond_the_standard_library_and_opentelemetry(self) -> None:
         stdlib = getattr(sys, "stdlib_module_names", None)
 
         if stdlib is None:
             self.skipTest("sys.stdlib_module_names needs Python 3.10; CI runs this on the release runtime")
 
-        for module in sorted(PACKAGE.glob("*.py")):
+        for module in sorted(PACKAGE.rglob("*.py")):
             with self.subTest(module=module.name):
                 outside = _roots(module) - set(stdlib) - ALLOWED_THIRD_PARTY
 

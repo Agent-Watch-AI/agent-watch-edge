@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import threading
 import time
 import unittest
 from unittest import mock
@@ -292,6 +293,114 @@ class Counters(unittest.TestCase):
 
             self.assertEqual(ours.stats()["dropped_error"], 1)
             self.assertEqual(ours.dropped, 1)
+
+
+class BlackHole:
+    """An endpoint that completes the TCP handshake and then never answers.
+
+    A load balancer with no healthy backend, or a firewall dropping silently.
+    Unlike a refused connection it fails slowly, so it is what turns a shutdown
+    into a wait.
+    """
+
+    def __init__(self) -> None:
+        self._held: list[socket.socket] = []
+        self._listener = socket.socket()
+        self._listener.bind(("127.0.0.1", 0))
+        self._listener.listen(16)
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self) -> None:
+        while True:
+            try:
+                connection, _ = self._listener.accept()
+            except OSError:
+                return
+
+            self._held.append(connection)
+
+    @property
+    def endpoint(self) -> str:
+        return f"http://127.0.0.1:{self._listener.getsockname()[1]}"
+
+    def close(self) -> None:
+        self._listener.close()
+
+        for connection in self._held:
+            connection.close()
+
+    def __enter__(self) -> "BlackHole":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
+class ShutdownBudget(unittest.TestCase):
+    """Shutting down must not be the thing that outlasts a SIGTERM grace period."""
+
+    def test_a_hung_endpoint_cannot_stretch_shutdown_past_its_budget(self) -> None:
+        with BlackHole() as hung:
+            ours = processor(hung.endpoint, timeout_seconds=10.0, shutdown_seconds=1.0, max_queue=600)
+            provider = spans.provider(ours)
+
+            for index in range(600):
+                spans.emit(provider, name=f"llm.call.{index}")
+
+            time.sleep(0.3)  # let the sender get stuck mid-request
+
+            started = time.monotonic()
+            ours.shutdown()
+            first = time.monotonic() - started
+
+            started = time.monotonic()
+            ours.shutdown()  # what atexit does after an explicit provider.shutdown()
+            second = time.monotonic() - started
+
+            # Before the budget existed this measured first=10.00s second=10.01s.
+            self.assertLess(first, 3.0, f"first shutdown took {first:.2f}s")
+            self.assertLess(second, 0.5, f"second shutdown took {second:.2f}s")
+            self.assertLess(first + second, 3.0)
+
+
+class SenderSurvival(unittest.TestCase):
+    """The docstring promises one sender thread that never dies. This is that promise."""
+
+    def test_a_raising_send_does_not_kill_the_sender(self) -> None:
+        with Sink() as sink:
+            ours = processor(sink.endpoint)
+            provider = spans.provider(ours)
+            failures = {"left": 1}
+            original = ours._send
+
+            def explode(batch: object) -> None:
+                if failures["left"]:
+                    failures["left"] -= 1
+
+                    raise RuntimeError("something _send does not catch")
+
+                original(batch)
+
+            ours._send = explode  # type: ignore[method-assign]
+            spans.emit(provider, name="llm.call.first")
+            ours.force_flush(timeout_millis=5_000)
+            spans.emit(provider, name="llm.call.second")
+            provider.shutdown()
+
+            self.assertEqual(ours.stats()["dropped_send_failed"], 1)
+            self.assertEqual(ours.stats()["sent"], 1, "the sender kept working after the raise")
+
+    def test_an_unserialisable_call_is_counted_not_fatal(self) -> None:
+        """`json.dumps` sits inside `_send`'s guard, not outside it."""
+        with Sink() as sink:
+            ours = processor(sink.endpoint)
+            ours._queue.put_nowait({"type": "runtime.call", "bad": {1, 2}})  # a set is not JSON
+            ours.force_flush(timeout_millis=5_000)
+            spans.emit(spans.provider(ours), name="llm.call.after")
+            ours.shutdown()
+
+            self.assertEqual(ours.stats()["dropped_send_failed"], 1)
+            self.assertEqual(ours.stats()["sent"], 1)
 
 
 class Configuration(unittest.TestCase):

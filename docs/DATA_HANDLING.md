@@ -115,6 +115,18 @@ Normalized calls carry `provider`, `surface`, `call_id`, `provider_request_id`,
 also apply. These are identity, usage, timing and development metadata; the
 normalized call schema does not include prompt/response text or tool bodies.
 
+Two request headers are added to the managed native exporters, and nothing else
+on that route is ours: `Authorization`, carrying the ingest token, and
+`x-agentwatch-installation`, carrying this installation's id. That id is a random
+UUID generated locally on first use; it is not derived from a user, a machine
+name or any account, and it identifies nothing without the backend that issued
+the token. It is what lets measured per-call usage be traced back to a sender
+when the turn summary that would have named a developer never arrives. Claude
+Code receives both through its `otelHeadersHelper`, so neither is written to its
+settings file; Codex and Gemini receive them in the config files described under
+"Identity, local storage, and credentials". No developer identity is placed in a
+native exporter header or resource attribute.
+
 Native OTLP is a separate trust boundary: provider logs, resource attributes,
 trace/span IDs, and optional traces/metrics reach the receiver **before** this
 normalization. The Edge hook sanitizer and consent marker cannot filter that

@@ -4,6 +4,7 @@ import { loadEffectiveConfig } from '../config/repo-config.js';
 import { applyRootOverride } from '../config/root-config.js';
 import type { Env } from '../core/types/core.types.js';
 import { providers } from '../providers/registry.js';
+import { INSTALLATION_HEADER } from '../transport/constants/transport.constants.js';
 import { buildCliContext } from './context.js';
 import { REDACTED_TOKEN } from './constants/cli.constants.js';
 import { bold, dim, println, symbols } from './ui.js';
@@ -85,7 +86,25 @@ export async function runOtelHeaders(env: Env): Promise<number> {
   // at all rather than presenting its credential to the other tenant's collector.
   const rooted = applyRootOverride(context.config, env.cwd).config;
   const token = sharesOtlpCollector(context.config, rooted) ? rooted.token : undefined;
-  const headers = !context.disabled && token ? { Authorization: `Bearer ${token}` } : {};
+  // The installation id rides with the bearer and on the same condition: an
+  // export that carries no credential names no machine either. It is what lets
+  // measured per-call usage be traced back to a sender at all — the exporter is
+  // the agent's own, so this header is the only thing on that route we set.
+  //
+  // Not `edgeHeaders()`, though the header list belongs there: that builder also
+  // sets User-Agent, and what it would override here is the exporting agent's
+  // own, not ours to replace.
+  const headers
+    = !context.disabled && token
+      ? {
+          // Spelled out, not `AUTHORIZATION_HEADER`: that constant is lower
+          // case for the transport's own requests, and this map is handed to
+          // Claude Code rather than to fetch. Its output is what the exporter
+          // sends, so the spelling stays the one that has always gone out.
+          Authorization: `Bearer ${token}`,
+          ...(rooted.installationId ? { [INSTALLATION_HEADER]: rooted.installationId } : {})
+        }
+      : {};
 
   process.stdout.write(JSON.stringify(headers));
 

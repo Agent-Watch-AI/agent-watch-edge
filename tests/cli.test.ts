@@ -668,8 +668,9 @@ describe('CLI commands', () => {
   });
 
   describe('otel-headers', () => {
-    it('prints exactly the auth header JSON', async () => {
+    it('prints exactly the auth and installation headers', async () => {
       await setupOnce();
+      const stored = await readJson(resolvePaths(world.env).configFile);
       const logs: string[] = [];
       const original = process.stdout.write.bind(process.stdout);
 
@@ -685,7 +686,12 @@ describe('CLI commands', () => {
         process.stdout.write = original;
       }
 
-      expect(JSON.parse(logs.join(''))).toEqual({ Authorization: 'Bearer tok-1' });
+      // The installation id is what lets a call the summary never claimed be
+      // traced to a machine; the exporter sends nothing else of ours.
+      expect(JSON.parse(logs.join(''))).toEqual({
+        Authorization: 'Bearer tok-1',
+        'x-agentwatch-installation': (stored as { installationId: string }).installationId
+      });
     });
   });
 });
@@ -1131,7 +1137,7 @@ describe('setup --root: a second tenant on one machine', () => {
 
     expect(result).toBe(0);
     expect(stdout).not.toContain('native OTLP');
-    expect(JSON.parse((await captureStdout(() => runOtelHeaders({ ...world.env, cwd: repo }))).stdout)).toEqual({ Authorization: 'Bearer tok-seat' });
+    expect(JSON.parse((await captureStdout(() => runOtelHeaders({ ...world.env, cwd: repo }))).stdout)).toEqual({ Authorization: 'Bearer tok-seat', 'x-agentwatch-installation': expect.any(String) });
   });
 
   it('otel-headers signs with the root token on the shared collector, and with nothing for a foreign one', async () => {
@@ -1145,11 +1151,14 @@ describe('setup --root: a second tenant on one machine', () => {
 
     const headersIn = async (cwd: string) => JSON.parse((await captureStdout(() => runOtelHeaders({ ...world.env, cwd }))).stdout);
 
-    expect(await headersIn(shared)).toEqual({ Authorization: 'Bearer tok-shared' });
+    expect(await headersIn(shared)).toEqual({ Authorization: 'Bearer tok-shared', 'x-agentwatch-installation': expect.any(String) });
     // The agent exports to the machine's collector, which must never see the
     // foreign tenant's credential.
     expect(await headersIn(foreign)).toEqual({});
-    expect(await headersIn(world.env.cwd)).toEqual({ Authorization: 'Bearer tok-machine' });
+    expect(await headersIn(world.env.cwd)).toEqual({
+      Authorization: 'Bearer tok-machine',
+      'x-agentwatch-installation': expect.any(String)
+    });
   });
 
   // Re-enrolling a root replaced its whole override, so every key the run does
@@ -1213,7 +1222,7 @@ describe('setup --root: a second tenant on one machine', () => {
 
     expect(eventsUrl(rooted)).toBe('https://ingest.backend.example.com/v1/events');
     expect(rooted.token).toBe('tok-seat2');
-    expect(JSON.parse((await captureStdout(() => runOtelHeaders({ ...world.env, cwd: repo }))).stdout)).toEqual({ Authorization: 'Bearer tok-seat2' });
+    expect(JSON.parse((await captureStdout(() => runOtelHeaders({ ...world.env, cwd: repo }))).stdout)).toEqual({ Authorization: 'Bearer tok-seat2', 'x-agentwatch-installation': expect.any(String) });
   });
 
   // The carry-over must not keep a *live* route from the previous engagement:

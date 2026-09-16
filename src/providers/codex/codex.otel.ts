@@ -8,6 +8,7 @@ import { backupFile, currentMode, writeFileAtomic } from '../../storage/atomic-f
 import { SECRET_FILE_MODE } from '../../storage/constants/storage.constants.js';
 import { withOtelInstall, withoutOtelInstall } from '../shared/install-record.js';
 import type { NativeTelemetryConfigurator, NativeTelemetryStatus, SetupContext, SetupOutcome } from '../types/provider.types.js';
+import { INSTALLATION_HEADER } from '../../transport/constants/transport.constants.js';
 import { codexConfigTomlPath } from './codex.detect.js';
 import { CODEX_PROVIDER_ID } from './constants/codex.constants.js';
 import {
@@ -95,7 +96,12 @@ export class CodexOtelConfigurator implements NativeTelemetryConfigurator {
 
     const configPath = codexConfigTomlPath(context.env);
     const raw = (await readFileOrUndefined(configPath)) ?? '';
-    const block = renderBlock(otlpBase, context.config.token, context.config.otel);
+    const block = renderBlock(
+      otlpBase,
+      context.config.token,
+      context.config.otel,
+      context.config.installationId
+    );
     const next = raw.includes(BLOCK_START) ? replaceBlock(raw, block) : appendBlock(raw, block);
 
     if (typeof next !== 'string') return { ok: false, changed: false, messages: [next.error(configPath)] };
@@ -273,7 +279,7 @@ function inspectManagedBlock(raw: string, config: AgentWatchConfig): NativeTelem
   if (!otlpBase) return { supported: true, configured: false, detail: 'no backend endpoint configured' };
 
   const actual = extractBlock(raw);
-  const expected = renderBlock(otlpBase, config.token, config.otel).trim();
+  const expected = renderBlock(otlpBase, config.token, config.otel, config.installationId).trim();
 
   if (actual === expected) return { supported: true, configured: true };
 
@@ -291,8 +297,19 @@ function inspectManagedBlock(raw: string, config: AgentWatchConfig): NativeTelem
  * @param signals - The signal selection.
  * @returns The block text, newline-terminated.
  */
-function renderBlock(otlpBase: string, token: string | undefined, signals: OtelConfig): string {
-  const headers = token ? `, headers = { "Authorization" = "Bearer ${escapeTomlString(token)}" }` : '';
+function renderBlock(
+  otlpBase: string,
+  token: string | undefined,
+  signals: OtelConfig,
+  installationId: string | undefined
+): string {
+  // Codex has no header helper, so this map is written once at install and is
+  // whatever the exporter sends until setup runs again. The installation id is
+  // fixed for the life of the config, so that suits it; a developer identity
+  // would not, which is why one is never put here.
+  const headers = token
+    ? `, headers = { ${tomlHeaders(token, installationId)} }`
+    : '';
 
   return [
     BLOCK_START,
@@ -309,6 +326,24 @@ function renderBlock(otlpBase: string, token: string | undefined, signals: OtelC
     BLOCK_END,
     ''
   ].join('\n');
+}
+
+/**
+ * The `key = "value"` pairs of a Codex exporter's header map.
+ *
+ * Bearer first, so a reader of the config sees the credential where the other
+ * agents put it. The installation id is omitted rather than written empty: an
+ * absent header and a header naming nothing are different claims, and only the
+ * first is true before an install has an id.
+ */
+function tomlHeaders(token: string, installationId: string | undefined): string {
+  const pairs = [`"Authorization" = "Bearer ${escapeTomlString(token)}"`];
+
+  if (installationId) {
+    pairs.push(`"${INSTALLATION_HEADER}" = "${escapeTomlString(installationId)}"`);
+  }
+
+  return pairs.join(', ');
 }
 
 /**

@@ -206,7 +206,11 @@ describe('Gemini provider', () => {
       // Gemini CLI has no otelHeadersHelper (that is a Claude Code setting), so
       // the exporter previously posted with no Authorization header and the
       // fail-closed gateway answered 401 to every batch.
-      expect(settings.env.OTEL_EXPORTER_OTLP_HEADERS).toBe('Authorization=Bearer token-123');
+      // The installation id rides the same list, so a Gemini call that no turn
+      // summary claimed can still be traced to the machine that made it.
+      expect(settings.env.OTEL_EXPORTER_OTLP_HEADERS).toBe(
+        'Authorization=Bearer token-123,x-agentwatch-installation=inst-1'
+      );
       expect(settings.otelHeadersHelper).toBeUndefined();
     });
 

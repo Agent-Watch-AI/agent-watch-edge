@@ -288,7 +288,7 @@ def _storable(value: Any, limit: int) -> str | None:
     """A trimmed, length-capped string with nothing in it the gateway would refuse.
 
     :param value: Any attribute value; anything but a string reads as absent.
-    :param limit: The contract's maximum length for this field.
+    :param limit: The contract's maximum length for this field, in UTF-16 units.
     :returns: The storable text, or ``None`` when nothing is left of it.
     """
     if not isinstance(value, str):
@@ -296,7 +296,40 @@ def _storable(value: Any, limit: int) -> str | None:
 
     kept = "".join(char for char in value if unicodedata.category(char) not in _UNSTORABLE)
 
-    return kept.strip()[:limit].strip() or None
+    return _cap_utf16(kept.strip(), limit).strip() or None
+
+
+def _cap_utf16(text: str, limit: int) -> str:
+    """Cut ``text`` to ``limit`` **UTF-16 code units**, which is what the gateway counts.
+
+    Zod's ``.max()`` is JavaScript's ``String.length``, so one emoji costs two
+    units there and one character here. Truncating on Python characters let a
+    200-character span name arrive as 395 units, and because the runtime schema is
+    strict a single over-length field refuses the *whole* batch with a ``400`` —
+    measured at 161 calls lost to one emoji, 160 of them from other agents.
+
+    Whole code points are copied, so a surrogate pair is never split in half.
+
+    :param text: Storable text, already trimmed.
+    :param limit: Maximum UTF-16 code units.
+    :returns: ``text``, or its longest prefix fitting the limit.
+    """
+    if len(text.encode("utf-16-le")) // 2 <= limit:
+        return text
+
+    kept: list[str] = []
+    units = 0
+
+    for char in text:
+        width = 2 if ord(char) > 0xFFFF else 1
+
+        if units + width > limit:
+            break
+
+        kept.append(char)
+        units += width
+
+    return "".join(kept)
 
 
 def _put(target: dict[str, Any], key: str, value: Any) -> None:

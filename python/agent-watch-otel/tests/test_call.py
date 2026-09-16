@@ -10,9 +10,11 @@ from __future__ import annotations
 import unittest
 from typing import Any
 
-from opentelemetry.sdk.trace import SpanProcessor
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 
 from agent_watch_otel import build_call, is_llm_span
+from agent_watch_otel.call import _cap_utf16
 
 from . import spans
 
@@ -63,6 +65,62 @@ class Identity(unittest.TestCase):
     def test_control_characters_never_reach_the_gateway(self) -> None:
         """A NUL in a span name is a 400 for the whole batch, so it is removed here."""
         self.assertEqual(call(__name__="llm.call\x00.planner  ")["agent_name"], "llm.call.planner")
+
+
+#: One emoji is one Python character and two UTF-16 code units.
+ASTRAL = "\U0001f600"
+
+
+class Utf16Lengths(unittest.TestCase):
+    """The gateway counts UTF-16 code units, so this has to count them too.
+
+    Zod's `.max()` is JavaScript's `String.length`. Capping on Python characters
+    sent a 200-character span name as 395 units, and because the runtime schema is
+    strict that refused the whole batch: 161 calls lost to one emoji, 160 of them
+    belonging to other agents.
+    """
+
+    def _units(self, text: str) -> int:
+        return len(text.encode("utf-16-le")) // 2
+
+    def test_every_storable_field_is_capped_in_utf16_units(self) -> None:
+        """Not just `agent_name` — each of these is customer-controlled text."""
+        long_astral = ASTRAL * 300
+        built = call(
+            __name__=long_astral,
+            **{
+                "llm.model": long_astral,
+                "llm.provider": long_astral,
+            },
+        )
+
+        for field, limit in (("agent_name", 200), ("model", 200), ("provider", 200), ("instance_id", 200)):
+            with self.subTest(field=field):
+                self.assertLessEqual(self._units(built[field]), limit)
+
+    def test_the_resource_fields_are_capped_too(self) -> None:
+        capture = Capture()
+        long_astral = ASTRAL * 300
+        provider = TracerProvider(
+            resource=Resource.create({"service.name": long_astral, "service.version": long_astral})
+        )
+        provider.add_span_processor(capture)
+        spans.emit(provider)
+        built = build_call(capture.spans[0], ASTRAL * 300)
+
+        for field in ("service_name", "service_version", "instance_id"):
+            with self.subTest(field=field):
+                self.assertLessEqual(self._units(built[field]), 200)
+
+    def test_a_surrogate_pair_is_never_cut_in_half(self) -> None:
+        """Half a pair is an unpaired surrogate, which the contract refuses outright."""
+        capped = _cap_utf16(ASTRAL * 300, 201)
+
+        self.assertEqual(self._units(capped), 200)
+        self.assertEqual(capped, ASTRAL * 100)
+
+    def test_text_inside_the_limit_is_untouched(self) -> None:
+        self.assertEqual(_cap_utf16("llm.call.planner", 200), "llm.call.planner")
 
 
 class Model(unittest.TestCase):

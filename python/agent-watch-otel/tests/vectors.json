@@ -1,0 +1,798 @@
+{
+  "scheme": "agent-watch-fingerprint/1",
+  "about": "Golden vectors for @agent-watch/fingerprint. Every producer (TypeScript poller and source indexer, Python span processor) must reproduce every `expected` exactly. Strings are hashed as UTF-8. Digests are lowercase hex. The package exports the same scheme string as FINGERPRINT_SCHEME; digests from different schemes never compare.",
+  "rules": {
+    "whitespace": "Unicode White_Space: U+0009-U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F, U+3000.",
+    "normalise": "NFC; replace every CRLF with LF; split on LF; strip trailing whitespace from each line; join with LF; strip trailing whitespace from the end. Never change case. Implementations must strip trailing whitespace in linear time (e.g. a match anchored after a non-whitespace character).",
+    "prefixText": "Take the leading run of messages whose role is exactly `system` or `developer`. Message content that is a string is used as is; a list keeps the parts that are objects with `type` \"text\" and a string `text`, joined with \"\\n\\n\" (every other part is ignored); anything else (missing, null, an object, a number) is the empty string. Join the run's contents with \"\\n\\n\" and normalise. No leading instruction message: null. Producers shingle a prefix with shingleDigests(prefixText(messages)); joining with anything else changes the shingles (a quote ending one message and a quote starting the next form a concatenation seam across the blank line).",
+    "prefixDigest": "prefixText(messages); null gives {digest: null, cause: \"no_instructions\"}; the empty string gives {digest: null, cause: \"empty_instructions\"}; otherwise {digest: sha256 hex of the text, full 32 bytes, cause: null}.",
+    "toolsetDigest": "Empty list: null. Each tool's name is `name` if it is a string, else `function.name` if a string, else \"\". Canonical JSON: object keys sorted by UTF-16 code units, no whitespace, strings escaped as JSON.stringify does (non-ASCII unescaped; Python json.dumps(s, ensure_ascii=False)); numbers written as ECMAScript Number::toString writes them (1.0 is \"1\", 1e21 is \"1e+21\", 1e-7 is \"1e-7\", 0.000001 is \"0.000001\"; integers beyond 2^53 are first read as doubles). Sort tools by (name, canonical JSON) comparing UTF-16 code units, join canonical JSON with \"\\n\", sha256, full 32 bytes.",
+    "tokens": "normalise; then in order: (1) remove every match of /[\"'`][ \\t]*(?:[+\\\\][ \\t]*)?\\n[ \\t\\n]*(?:\\+[ \\t]*)?[bfruBFRU]{0,2}[\"'`]/ (concatenation seam); (2) replace every match of /[\"'`][ \\t]*,[ \\t]*\\n[ \\t\\n]*[bfruBFRU]{0,2}[\"'`]/ with one space (array-element seam); (3) replace every match of /(?<!\\\\)\\\\+[ntr]/ (a whole run of backslashes, then n, t or r) with one space; (4) remove every match of /(?<!\\\\)\\\\+(?=[\"'`])/ (a whole run of backslashes before a quote); (5) replace every run of two or more backslashes with one backslash; (6) replace \"{{\" with \"{\" then \"}}\" with \"}\"; (7) delete every \" ' `; (8) split on runs of whitespace and drop empty tokens. Escapes are undone whatever the backslash count, so the source literal \"C:\\\\new\" and the runtime text C:\\new both read as C: ew. Each regex is applied as one left-to-right non-overlapping global replace.",
+    "shingleDigests": "tokens(text); every window of 8 consecutive tokens joined by one space; sha256 truncated to the first 16 bytes; deduplicated keeping first occurrence; stop once 512 distinct digests are held. Fewer than 8 tokens: [].",
+    "sourceSkipReason": "ext (with the dot, compared lowercased) must be one of .py .md .txt .j2 .jinja .yaml .yml .json .ts .tsx .js .jsx .mjs .cjs, else \"unsupported_extension\" (checked first). A byte length over 1048576 gives \"too_large\". Otherwise null.",
+    "sourceShingleDigests": "sourceSkipReason(ext, UTF-8 byte length of fileText); when not null, {digests: [], skipped: that reason}. Otherwise the shingleDigests rule with a cap of 20000 and skipped: null.",
+    "rekey": "Server side only. HMAC-SHA256 keyed by the tenant key (at least 32 bytes) over the raw bytes of the hex digest (32 or 64 lowercase hex chars), truncated to the first 16 bytes.",
+    "sharedShingles": "Test helper, not exported: the number of shingleDigests(runtimeText) that also appear in sourceShingleDigests(fileText, ext).digests. Shows the seam rules let a runtime prompt meet the file that built it.",
+    "prefixShingles": "Test helper, not exported: shingleDigests(prefixText(messages)), or shingleDigests(\"\") when prefixText is null. Locks the join producers must use."
+  },
+  "cases": [
+    {
+      "name": "CRLF becomes LF and trailing whitespace goes",
+      "function": "normalise",
+      "input": {
+        "text": "You are a planner.  \r\nBe brief.\t\r\n\r\n"
+      },
+      "expected": "You are a planner.\nBe brief."
+    },
+    {
+      "name": "decomposed accents become NFC",
+      "function": "normalise",
+      "input": {
+        "text": "Café in München"
+      },
+      "expected": "Café in München"
+    },
+    {
+      "name": "case and leading indentation are kept",
+      "function": "normalise",
+      "input": {
+        "text": "  RETURN ONLY JSON\n\tNo Prose"
+      },
+      "expected": "  RETURN ONLY JSON\n\tNo Prose"
+    },
+    {
+      "name": "one system message",
+      "function": "prefixDigest",
+      "input": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a travel planner. Return ONLY JSON."
+          },
+          {
+            "role": "user",
+            "content": "Rome, 3 days"
+          }
+        ]
+      },
+      "expected": {
+        "digest": "e520eb182dc4c3a515a221545f96659b63eb3195e08ddc08b94b54c405eb3872",
+        "cause": null
+      }
+    },
+    {
+      "name": "developer role counts as instructions",
+      "function": "prefixDigest",
+      "input": {
+        "messages": [
+          {
+            "role": "developer",
+            "content": "You are a travel planner. Return ONLY JSON."
+          },
+          {
+            "role": "user",
+            "content": "Rome, 3 days"
+          }
+        ]
+      },
+      "expected": {
+        "digest": "e520eb182dc4c3a515a221545f96659b63eb3195e08ddc08b94b54c405eb3872",
+        "cause": null
+      }
+    },
+    {
+      "name": "a developer then system run joins with a blank line",
+      "function": "prefixDigest",
+      "input": {
+        "messages": [
+          {
+            "role": "developer",
+            "content": "You are a travel planner."
+          },
+          {
+            "role": "system",
+            "content": "Return ONLY JSON."
+          },
+          {
+            "role": "user",
+            "content": "Rome"
+          },
+          {
+            "role": "system",
+            "content": "ignored"
+          }
+        ]
+      },
+      "expected": {
+        "digest": "7924b4cd45af94215f48c0e9bda0bce34d9b0244de1ba5f56bdb40c12fef5b54",
+        "cause": null
+      }
+    },
+    {
+      "name": "CRLF and NFC variants hash like the clean text",
+      "function": "prefixDigest",
+      "input": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a travel planner.  \r\nCafé stops only.\r\n"
+          }
+        ]
+      },
+      "expected": {
+        "digest": "d8968a014b9e4860218c937246a386c8e93bda84437134e0b32c33ee7a507d2f",
+        "cause": null
+      }
+    },
+    {
+      "name": "clean counterpart of the CRLF and NFC variant",
+      "function": "prefixDigest",
+      "input": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a travel planner.\nCafé stops only."
+          }
+        ]
+      },
+      "expected": {
+        "digest": "d8968a014b9e4860218c937246a386c8e93bda84437134e0b32c33ee7a507d2f",
+        "cause": null
+      }
+    },
+    {
+      "name": "leading developer and system run, normalised",
+      "function": "prefixText",
+      "input": {
+        "messages": [
+          {
+            "role": "developer",
+            "content": "You are a travel planner.  \r\n"
+          },
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "Café stops only."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": "Rome"
+          }
+        ]
+      },
+      "expected": "You are a travel planner.\n\n\nCafé stops only."
+    },
+    {
+      "name": "no leading instruction message",
+      "function": "prefixText",
+      "input": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Rome"
+          },
+          {
+            "role": "system",
+            "content": "late"
+          }
+        ]
+      },
+      "expected": null
+    },
+    {
+      "name": "a quote ending one message and a quote starting the next",
+      "function": "prefixText",
+      "input": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "Always answer with the literal word \"done\""
+          },
+          {
+            "role": "developer",
+            "content": "\"Never\" add prose around the JSON object you return to the caller."
+          }
+        ]
+      },
+      "expected": "Always answer with the literal word \"done\"\n\n\"Never\" add prose around the JSON object you return to the caller."
+    },
+    {
+      "name": "shingles of the quote pair join across the blank line",
+      "function": "prefixShingles",
+      "input": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "Always answer with the literal word \"done\""
+          },
+          {
+            "role": "developer",
+            "content": "\"Never\" add prose around the JSON object you return to the caller."
+          }
+        ]
+      },
+      "expected": [
+        "4584e2e836c038580f5b8f9d97b9cb9b",
+        "21ee4bfbe3207aff92ef358506e9694f",
+        "8b0f2cabf6bdc39218b9edb9886f7889",
+        "9c2353b9f061bc3db2d6731fca54baed",
+        "3edb21d53da6661efbea3279b3107351",
+        "dcc9048884a6d2c9b189a36ac969c2fe",
+        "b6bb3c6cbad8c970d967760075e345a6",
+        "8023a4793250eb2fb0378b7849b7ceb5",
+        "e1adf0099fcd5079bd934bd148953fd9",
+        "f0862e867b05fbf5087a9dbca545f416",
+        "f6f28bb2fb76f720f4face92db9dccf0"
+      ]
+    },
+    {
+      "name": "content parts keep text parts only",
+      "function": "prefixDigest",
+      "input": {
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a travel planner."
+              },
+              {
+                "type": "image_url"
+              },
+              {
+                "type": "text",
+                "text": "Return ONLY JSON."
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "digest": "7924b4cd45af94215f48c0e9bda0bce34d9b0244de1ba5f56bdb40c12fef5b54",
+        "cause": null
+      }
+    },
+    {
+      "name": "no leading instruction message",
+      "function": "prefixDigest",
+      "input": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Rome"
+          },
+          {
+            "role": "system",
+            "content": "late"
+          }
+        ]
+      },
+      "expected": {
+        "digest": null,
+        "cause": "no_instructions"
+      }
+    },
+    {
+      "name": "instructions that are only whitespace",
+      "function": "prefixDigest",
+      "input": {
+        "messages": [
+          {
+            "role": "system",
+            "content": null
+          },
+          {
+            "role": "developer",
+            "content": " \r\n"
+          }
+        ]
+      },
+      "expected": {
+        "digest": null,
+        "cause": "empty_instructions"
+      }
+    },
+    {
+      "name": "malformed content reads as empty, stray parts are ignored",
+      "function": "prefixDigest",
+      "input": {
+        "messages": [
+          {
+            "role": "system"
+          },
+          {
+            "role": "developer",
+            "content": {
+              "text": "not a list"
+            }
+          },
+          {
+            "role": "system",
+            "content": [
+              null,
+              7,
+              {
+                "type": "text",
+                "text": "Plan trips."
+              },
+              {
+                "type": "text",
+                "text": 3
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "digest": "d97dc34a3a089ab438b1fb22b4c842a0dfcd7a3310ae66646dc31b77c71c93ce",
+        "cause": null
+      }
+    },
+    {
+      "name": "OpenAI function tool",
+      "function": "toolsetDigest",
+      "input": {
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "search_places",
+              "description": "Find places",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "string"
+                  }
+                },
+                "required": ["query"]
+              }
+            }
+          }
+        ]
+      },
+      "expected": "3c4c8a33440cff0c75254ab7934546e6c96f5ea3fb503330afc1813a743d63e1"
+    },
+    {
+      "name": "Anthropic tool",
+      "function": "toolsetDigest",
+      "input": {
+        "tools": [
+          {
+            "name": "search_places",
+            "description": "Find places",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                }
+              },
+              "required": ["query"]
+            }
+          }
+        ]
+      },
+      "expected": "8c2b10a48ced74e5370a31d4f2e8661c2b721c45706f29a1d3402e140e05dc63"
+    },
+    {
+      "name": "mixed shapes sort by extracted name, key order does not matter",
+      "function": "toolsetDigest",
+      "input": {
+        "tools": [
+          {
+            "name": "zoom_map",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "function": {
+              "parameters": {
+                "type": "object"
+              },
+              "name": "add_stop"
+            },
+            "type": "function"
+          }
+        ]
+      },
+      "expected": "82bbfd5da4075196467a9c168bd59fe0af2222019f17bef24c582d3b4f29f1f5"
+    },
+    {
+      "name": "same two tools in the other order",
+      "function": "toolsetDigest",
+      "input": {
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "add_stop",
+              "parameters": {
+                "type": "object"
+              }
+            }
+          },
+          {
+            "input_schema": {
+              "type": "object"
+            },
+            "name": "zoom_map"
+          }
+        ]
+      },
+      "expected": "82bbfd5da4075196467a9c168bd59fe0af2222019f17bef24c582d3b4f29f1f5"
+    },
+    {
+      "name": "non-ASCII text in a schema",
+      "function": "toolsetDigest",
+      "input": {
+        "tools": [
+          {
+            "name": "geocode",
+            "description": "Ort in München finden"
+          }
+        ]
+      },
+      "expected": "f0491ccae9a2008e218ae8a59a064f9668170cbb9b7be8c56d9908b57c0694d7"
+    },
+    {
+      "name": "numbers use ECMAScript formatting",
+      "function": "toolsetDigest",
+      "input": {
+        "tools": [
+          {
+            "name": "rank",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "score": {
+                  "type": "number",
+                  "minimum": 0.5,
+                  "maximum": 1.0,
+                  "multipleOf": 1e-7
+                },
+                "budget": {
+                  "type": "integer",
+                  "maximum": 10000000000000000000001
+                },
+                "count": {
+                  "default": 3,
+                  "tiny": 1e-6,
+                  "huge": 1e21
+                }
+              }
+            }
+          }
+        ]
+      },
+      "expected": "141b355edbc13007b770ebab77797b53e1c6a0a17604b9dab1cddc1347a8c1bb"
+    },
+    {
+      "name": "no tools",
+      "function": "toolsetDigest",
+      "input": {
+        "tools": []
+      },
+      "expected": null
+    },
+    {
+      "name": "twelve tokens make five shingles",
+      "function": "shingleDigests",
+      "input": {
+        "text": "You are a travel planner. Return ONLY a JSON object, no prose."
+      },
+      "expected": [
+        "b30c69366c9a795e602e2d3b6d8ebe7c",
+        "934b7bf4460c87efce22b10661cde46e",
+        "f21f5228bf99152b72d2e220d3b94a95",
+        "e23c1451eee2fa944eb01140e49a30bb",
+        "cda068e5fbf3376daaf9d49446ffdf90"
+      ]
+    },
+    {
+      "name": "CRLF and extra spacing give the same shingles",
+      "function": "shingleDigests",
+      "input": {
+        "text": "You are a travel   planner.\r\nReturn ONLY a JSON\r\n\r\nobject, no prose.  "
+      },
+      "expected": [
+        "b30c69366c9a795e602e2d3b6d8ebe7c",
+        "934b7bf4460c87efce22b10661cde46e",
+        "f21f5228bf99152b72d2e220d3b94a95",
+        "e23c1451eee2fa944eb01140e49a30bb",
+        "cda068e5fbf3376daaf9d49446ffdf90"
+      ]
+    },
+    {
+      "name": "NFC before tokens",
+      "function": "shingleDigests",
+      "input": {
+        "text": "Suggest a café near the Marienplatz in München for breakfast"
+      },
+      "expected": [
+        "86a072fbdd06e9a963647483f815a15a",
+        "10ab3569b783417a810778c661e0aefc",
+        "3453f8d7d82fb2ed32431efe84d52672"
+      ]
+    },
+    {
+      "name": "NFC counterpart",
+      "function": "shingleDigests",
+      "input": {
+        "text": "Suggest a café near the Marienplatz in München for breakfast"
+      },
+      "expected": [
+        "86a072fbdd06e9a963647483f815a15a",
+        "10ab3569b783417a810778c661e0aefc",
+        "3453f8d7d82fb2ed32431efe84d52672"
+      ]
+    },
+    {
+      "name": "repeated windows are deduplicated",
+      "function": "shingleDigests",
+      "input": {
+        "text": "a b c d e f g h a b c d e f g h"
+      },
+      "expected": [
+        "1b6548f6b3c51dba45b79a649dca9145",
+        "ff9418d3730d15764cdc15b537883f0f",
+        "2cb7e4f8941f493559f55f3f06ca4917",
+        "93dd2c12eb4fb5d1611508439912436c",
+        "054b96b32eb77fef7dfdd687f112d9a8",
+        "1e0060382475def5f48136b56f72fbbb",
+        "566c78adf92e2c38f45cac3a68d566b8",
+        "e2845d53efd08a1db63a32753e3080dc"
+      ]
+    },
+    {
+      "name": "under eight tokens",
+      "function": "shingleDigests",
+      "input": {
+        "text": "Return ONLY a JSON object."
+      },
+      "expected": []
+    },
+    {
+      "name": "backslash escapes whatever their count",
+      "function": "shingleDigests",
+      "input": {
+        "text": "Save exports to C:\\\\new\\\\table, match \\\\d+ ids and write \\\"done\\\" on the last line\\n"
+      },
+      "expected": [
+        "36f17fe0c5abfa130a66ac76e4a5f9c2",
+        "0191043d145726a3f5bd12f999db046c",
+        "a336c5ccb5325e704f6929f82201089b",
+        "94a30ea75fbb1777b18de7c9cf36df2c",
+        "05e44e8715c5def5ed73fbc7841ce7c1",
+        "6135d20e909d3f930aeb2d6211294d24",
+        "7398d31ce507881ca7e7985aba0ff733",
+        "16532e20982ff1ab8913d912ca1776bb",
+        "ee8697026edd5f2d196835ef13d11f26"
+      ]
+    },
+    {
+      "name": "Python module with implicitly concatenated f-strings",
+      "function": "sourceShingleDigests",
+      "input": {
+        "ext": ".py",
+        "fileText": "def system(city):\n    return (\n        f\"You plan trips to {city}. \"\n        \"Return ONLY a JSON object, \"\n        \"no prose and no code fences.\"\n    )\n"
+      },
+      "expected": {
+        "digests": [
+          "c8a17581183f8c75ebe04f082a57f400",
+          "719cfbd0cc414b774ce8f4859e8304c2",
+          "f408b07eadf88932cc5a44d85b3799d8",
+          "b45950caec7a3da62db9c8fdddab62c4",
+          "8dffc91e9cc113f6ecf7d9932ba7586a",
+          "c1eba1878cbb9d6c3924908beb8f00fd",
+          "a124106cae79aaffc05aa14eda398385",
+          "1ab75772bcd200199167ef519654fc9b",
+          "b4d01b39cc915a40fad357a7489980ca",
+          "7b8153e3161c487c8afa7b80b21c389e",
+          "d2d175c0d31f50361124a20023e87a38",
+          "ff9e9c20cd160a63d5e29ba1a82d2bc3",
+          "3b5fe0ab56a02763937560980d97cced",
+          "0f128c9f5e1d454308a958b14006b838"
+        ],
+        "skipped": null
+      }
+    },
+    {
+      "name": "TypeScript array joined with newlines",
+      "function": "sourceShingleDigests",
+      "input": {
+        "ext": ".ts",
+        "fileText": "const SYSTEM = [\r\n  \"You resolve attraction names to places.\",\r\n  'Return ONLY a JSON object with \"query\".',\r\n].join(\"\\n\");\r\n"
+      },
+      "expected": {
+        "digests": [
+          "bb2df1b1b005ee58e1db80412d171ea9",
+          "0b78be7c7151125cfbea003b4851384a",
+          "516ad8e6c4fb8661a3e72629dad1a190",
+          "c40b4c4dfe2f56b98c0c96ea5cb12b40",
+          "1abdf0f59b23c578f74b86708b632460",
+          "98864df277349e0c52803ad315b09db9",
+          "2761469afbb173ef2fcf56b81bc933a4",
+          "40a718d07a91937e7e28f80f4472086a",
+          "0073abf7c955379432e93c2b7b7213cc",
+          "2de378a03bda8e9bef3680380996526d",
+          "eb84db664d1083e2c2d13aa45491611a",
+          "889806d52cac19da8f7a0296f0b6e37d"
+        ],
+        "skipped": null
+      }
+    },
+    {
+      "name": "unsupported extension",
+      "function": "sourceShingleDigests",
+      "input": {
+        "ext": ".png",
+        "fileText": "You are a travel planner. Return ONLY a JSON object, no prose."
+      },
+      "expected": {
+        "digests": [],
+        "skipped": "unsupported_extension"
+      }
+    },
+    {
+      "name": "uppercase extension at exactly 1 MiB is read",
+      "function": "sourceSkipReason",
+      "input": {
+        "ext": ".TS",
+        "byteLength": 1048576
+      },
+      "expected": null
+    },
+    {
+      "name": "one byte over 1 MiB",
+      "function": "sourceSkipReason",
+      "input": {
+        "ext": ".py",
+        "byteLength": 1048577
+      },
+      "expected": "too_large"
+    },
+    {
+      "name": "extension is checked before size",
+      "function": "sourceSkipReason",
+      "input": {
+        "ext": ".png",
+        "byteLength": 2097152
+      },
+      "expected": "unsupported_extension"
+    },
+    {
+      "name": "no extension",
+      "function": "sourceSkipReason",
+      "input": {
+        "ext": "",
+        "byteLength": 10
+      },
+      "expected": "unsupported_extension"
+    },
+    {
+      "name": "a shingle digest",
+      "function": "rekey",
+      "input": {
+        "tenantKeyHex": "0707070707070707070707070707070707070707070707070707070707070707",
+        "digest": "00112233445566778899aabbccddeeff"
+      },
+      "expected": "046a30b381e4968196eae7e3bdba71ab"
+    },
+    {
+      "name": "a full prefix digest",
+      "function": "rekey",
+      "input": {
+        "tenantKeyHex": "0707070707070707070707070707070707070707070707070707070707070707",
+        "digest": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+      },
+      "expected": "86b78d8fbc830d1dbf8ab8021255ed74"
+    },
+    {
+      "name": "Python f-string seams: windows around the interpolation match",
+      "function": "sharedShingles",
+      "input": {
+        "ext": ".py",
+        "runtimeText": "You plan trips to Lisbon for families. Return ONLY a JSON object, no prose and no code fences.",
+        "fileText": "def system(city):\n    return (\n        f\"You plan trips to {city} for families. \"\n        \"Return ONLY a JSON object, \"\n        f\"no prose and no code fences.\"\n    )\n"
+      },
+      "expected": 6
+    },
+    {
+      "name": "Python implicitly concatenated literals split mid-sentence",
+      "function": "sharedShingles",
+      "input": {
+        "ext": ".py",
+        "runtimeText": "Draft the itinerary day by day and keep every stop within walking distance of the previous one.",
+        "fileText": "PROMPT = (\n    \"Draft the itinerary day by day and keep every \"\n    \"stop within walking distance \"\n    \"of the previous one.\"\n)\n"
+      },
+      "expected": 10
+    },
+    {
+      "name": "Python triple-quoted prompt with an escaped brace",
+      "function": "sharedShingles",
+      "input": {
+        "ext": ".py",
+        "runtimeText": "Answer with {\"days\": []} and nothing else. Keep the list ordered by date and never invent opening hours.",
+        "fileText": "PROMPT = f\"\"\"\nAnswer with {{\"days\": []}} and nothing else.\nKeep the list ordered by date and never invent opening hours.\n\"\"\"\n"
+      },
+      "expected": 11
+    },
+    {
+      "name": "TypeScript template literal with an interpolation",
+      "function": "sharedShingles",
+      "input": {
+        "ext": ".ts",
+        "runtimeText": "You write replies for the itinerary chat about Kyoto.\nKeep answers under 80 words and never repeat the user's question back to them.",
+        "fileText": "export function compose(city: string): string {\n  return `You write replies for the itinerary chat about ${city}.\n  Keep answers under 80 words and never repeat the user's question back to them.`;\n}\n"
+      },
+      "expected": 7
+    },
+    {
+      "name": "TypeScript array-joined strings",
+      "function": "sharedShingles",
+      "input": {
+        "ext": ".ts",
+        "runtimeText": "You resolve travel-attraction names to real-world locations.\nYou receive an attraction name, often AI-generated,\n\nReturn ONLY a JSON object (no prose, no code fences) with \"query\".",
+        "fileText": "const SYSTEM_PROMPT = [\n  \"You resolve travel-attraction names to real-world locations.\",\n  \"You receive an attraction name, often AI-generated,\",\n  \"\",\n  'Return ONLY a JSON object (no prose, no code fences) with \"query\".',\n].join(\"\\n\");\n"
+      },
+      "expected": 18
+    },
+    {
+      "name": "TypeScript strings joined with plus",
+      "function": "sharedShingles",
+      "input": {
+        "ext": ".ts",
+        "runtimeText": "Pick the candidate that IS the attraction, not a region, lake or town that merely contains it.",
+        "fileText": "const PICK =\n  'Pick the candidate that IS the attraction, ' +\n  'not a region, lake or town ' +\n  \"that merely contains it.\";\n"
+      },
+      "expected": 9
+    },
+    {
+      "name": "CRLF source file against an LF runtime prompt",
+      "function": "sharedShingles",
+      "input": {
+        "ext": ".py",
+        "runtimeText": "Summarise the day plan in two sentences and mention the first stop by its name.",
+        "fileText": "NARRATION = (\r\n    \"Summarise the day plan in two sentences \"\r\n    \"and mention the first stop by its name.\"\r\n)\r\n"
+      },
+      "expected": 8
+    },
+    {
+      "name": "NFC: a decomposed source literal meets a composed runtime prompt",
+      "function": "sharedShingles",
+      "input": {
+        "ext": ".md",
+        "runtimeText": "Recommend one café near the Marienplatz in München and say why it suits breakfast.",
+        "fileText": "Recommend one café near the Marienplatz in München and say why it suits breakfast.\n"
+      },
+      "expected": 7
+    },
+    {
+      "name": "doubled backslashes in a Python literal meet a runtime Windows path",
+      "function": "sharedShingles",
+      "input": {
+        "ext": ".py",
+        "runtimeText": "Save every export to C:\\new\\table and never overwrite a file that already exists there.",
+        "fileText": "EXPORT = (\n    \"Save every export to C:\\\\new\\\\table \"\n    \"and never overwrite a file that already exists there.\"\n)\n"
+      },
+      "expected": 9
+    },
+    {
+      "name": "an escaped regex in a TypeScript literal meets the runtime pattern",
+      "function": "sharedShingles",
+      "input": {
+        "ext": ".ts",
+        "runtimeText": "Extract every booking id that matches \\d{6} and return them as a list without duplicates.",
+        "fileText": "const IDS = \"Extract every booking id that matches \\\\d{6} and return them as a list without duplicates.\";\n"
+      },
+      "expected": 7
+    }
+  ]
+}

@@ -27,6 +27,19 @@ Restart any running agent afterwards: hooks and exporters are read at startup.
 
 ---
 
+## Also here: `agent-watch-otel` (Python)
+
+[`python/agent-watch-otel/`](python/agent-watch-otel) is a separate, separately
+released package for **production** LLM spend rather than coding agents. One line
+beside a Phoenix registration sends digests of your prompts — never the prompts —
+to Agent Watch, including the `service.name` and `service.version` Phoenix drops.
+
+```python
+tracer_provider.add_span_processor(AgentWatchSpanProcessor(token="..."))
+```
+
+---
+
 ## Supported Agents
 
 | Agent | Hooks configured in | Native OTel signals | Token usage |

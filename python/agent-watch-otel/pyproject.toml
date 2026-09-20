@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-watch-otel"
+description = "Agent Watch's OpenTelemetry span processor: production LLM spend as digests, never prompt text."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+authors = [{ name = "Agent Watch" }]
+keywords = ["opentelemetry", "phoenix", "openinference", "llm", "cost", "observability"]
+dynamic = ["version"]
+
+# The only dependency, and the package promises it stays that way: this runs
+# inside the customer's production application, where every transitive dependency
+# is a version they now have to resolve against their own. Everything else it
+# needs — hashing, JSON, HTTP, threads — is in the standard library.
+dependencies = ["opentelemetry-sdk>=1.20"]
+
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: System :: Monitoring",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://agent-watch.ai"
+Source = "https://github.com/Agent-Watch-AI/agent-watch-edge"
+
+[tool.setuptools]
+packages = ["agent_watch_otel"]
+
+[tool.setuptools.package-data]
+agent_watch_otel = ["py.typed"]
+
+[tool.setuptools.dynamic]
+version = { attr = "agent_watch_otel.__version__" }

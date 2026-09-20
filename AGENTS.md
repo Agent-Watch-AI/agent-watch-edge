@@ -32,7 +32,29 @@ These are not style; breaking one is a bug, whatever the code looks like.
 - Only AgentWatch-owned entries are ever removed from an agent's config. When ownership is unclear, refuse and tell the user.
 - Usage is attributed **exactly once**. Any change touching turn windows, transcript claims or the ledger join must keep it that way.
 
-## 5. Verification Workflow
+## 5. The Python package
+
+`python/agent-watch-otel/` is a separate artefact with a separate release, and
+**sections 1-4 above are about the TypeScript**. In Python, follow PEP 8 and the
+conventions already in that package; `else` and `for`-over-`map` are ordinary
+Python and are not banned there.
+
+What does carry across, because it is not style:
+
+- **Stdlib plus `opentelemetry-sdk`, and nothing else.** It runs inside the
+  customer's production application. `tests/test_dependencies.py` enforces it.
+- **The processor never fails the host application.** `on_end` never blocks on
+  the network and never raises — the same invariant as "a hook never fails the
+  coding agent".
+- **Prompt text never leaves the process.** The canary in
+  `tests/test_processor.py` is the evidence, and it is written to be able to
+  fail; read its docstring before changing it.
+- `tests/vectors.json` is a byte copy of core's golden fingerprint vectors. Do
+  not edit it to make a test pass — a mismatch means the port drifted.
+
+Verify with `python -m unittest` from `python/agent-watch-otel`.
+
+## 6. Verification Workflow
 After making any code changes, verify your work. All three must be clean — `lint` reports zero errors *and* zero warnings:
 ```bash
 npm run typecheck

@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Behaviour change: developer prompts are never collected
+
+- `capture.prompts` and `capture.responses` are removed. Prompt and response text
+  is never sent, queued or kept in turn state, whatever the config says; a prompt
+  or response is still recorded as a length and a SHA-256.
+- A config that still sets either key collects nothing. `agentwatch setup` removes
+  them and warns once; `agentwatch doctor` reports them until then.
+- Turn summaries an older release queued with `prompt` / `response` text are sent
+  without it.
+- Gemini detailed traces, which can carry prompts, are no longer configured.
+  Native prompt logging stays forced off for Claude, Codex and Gemini.
+- `contentCaptureConsent` now gates tool input/output only.
+
 ## 0.3.0
 
 ### Behaviour change: hook delivery timeout

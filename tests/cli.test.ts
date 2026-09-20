@@ -155,20 +155,15 @@ describe('CLI commands', () => {
 
       expect(config.endpoint).toBe('https://backend.example.com');
       expect(config.installationId).toBeTruthy();
-      // Setup never turns content capture on: prompts and tool I/O stay on the
-      // machine until someone edits the config deliberately.
-      expect(config.capture.prompts).toBe(false);
-      expect(config.capture.responses).toBe(false);
-      expect(config.capture.toolInput).toBe(false);
-      expect(config.capture.toolOutput).toBe(false);
-      // Metadata, which attribution is built from, is on.
-      expect(config.capture.git).toBe(true);
-      expect(config.capture.files).toBe(true);
+      // Setup never turns tool content capture on, and there is no prompt or
+      // response flag to turn on at all.
+      expect(config.capture).toEqual({ toolInput: false, toolOutput: false, git: true, files: true });
 
       const claudeSettings = await readJson(path.join(world.home, '.claude', 'settings.json'));
 
       expect(claudeSettings.hooks.SessionStart[0].hooks[0].command).toContain('agentwatch hook --agent claude');
       expect(claudeSettings.env.CLAUDE_CODE_ENABLE_TELEMETRY).toBe('1');
+      expect(claudeSettings.env.OTEL_LOG_USER_PROMPTS).toBe('0');
       expect(claudeSettings.env.OTEL_LOGS_EXPORTER).toBe('otlp');
       // Logs are the default signal; traces/metrics stay off unless asked for.
       expect(claudeSettings.env.OTEL_TRACES_EXPORTER).toBe('none');
@@ -198,11 +193,12 @@ describe('CLI commands', () => {
       expect(await fs.readFile(path.join(world.home, '.codex', 'config.toml'), 'utf8').catch(() => '')).not.toContain('[otel]');
     });
 
-    it('honors --otel all and persists the selection', async () => {
+    it('honors --otel all and persists the selection, never enabling native prompt logging', async () => {
       await writeJson(resolvePaths(world.env).configFile, {
         ...defaultConfig(),
         contentCaptureConsent: true,
-        capture: { ...CONTENT_CAPTURE_ON, git: true, files: true }
+        // Every flag an older release honoured, including the retired prompt ones.
+        capture: { ...CONTENT_CAPTURE_ON, prompts: true, responses: true, git: true, files: true }
       });
 
       const code = await runSetup({
@@ -224,9 +220,11 @@ describe('CLI commands', () => {
       expect(claudeSettings.env.OTEL_TRACES_EXPORTER).toBe('otlp');
       expect(claudeSettings.env.OTEL_METRICS_EXPORTER).toBe('otlp');
       expect(claudeSettings.env.CLAUDE_CODE_ENHANCED_TELEMETRY_BETA).toBe('1');
+      expect(claudeSettings.env.OTEL_LOG_USER_PROMPTS).toBe('0');
       const codexToml = await fs.readFile(path.join(world.home, '.codex', 'config.toml'), 'utf8');
 
       expect(codexToml).toContain('trace_exporter = { otlp-http');
+      expect(codexToml).toContain('log_user_prompt = false');
     });
 
     it('honors --otel none by writing no agent telemetry config', async () => {
@@ -553,17 +551,18 @@ describe('CLI commands', () => {
       expect(privacy.detail).toContain('Codex (traces)');
     });
 
-    it('reports Gemini traces withheld when tool content is consented but prompts are not', async () => {
-      // Gemini's two consent bars differ: its logs need the tool flags, its
-      // detailed traces need prompts and responses too. One global predicate
-      // could not tell the second case from compatible.
+    it('reports Gemini traces withheld even with full tool-content consent', async () => {
+      // Gemini's logs need the tool flags; its detailed traces can carry prompts,
+      // which are never collected, so no consent releases them. One global
+      // predicate could not tell that case from compatible.
       await fs.mkdir(path.join(world.home, '.gemini'), { recursive: true });
-      await saveConfig(resolvePaths(world.env), {
+      await writeJson(resolvePaths(world.env).configFile, {
         ...defaultConfig(),
         endpoint: 'http://127.0.0.1:9',
         token: 'tok-1',
         contentCaptureConsent: true,
-        capture: { ...defaultConfig().capture, toolInput: true, toolOutput: true },
+        // What an older release would have needed for traces: now inert.
+        capture: { ...defaultConfig().capture, toolInput: true, toolOutput: true, prompts: true, responses: true },
         otel: { logs: true, traces: true, metrics: false }
       });
 

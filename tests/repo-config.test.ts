@@ -32,7 +32,7 @@ describe('repo config merge', () => {
     const global = { ...defaultConfig(), developerEmail: 'global@company.com', endpoint: 'https://global.example.com' };
     const merged = mergeRepoConfig(global, {
       developerEmail: 'repo@company.com',
-      capture: { prompts: false },
+      capture: { files: false },
       emit: { turnSummaries: false, llmCalls: false },
       delivery: { maxQueueEvents: 1, maxAttempts: 1 }
     });
@@ -40,7 +40,7 @@ describe('repo config merge', () => {
     // Attribution cannot be spoofed by a committed repo file.
     expect(merged.config.developerEmail).toBe('global@company.com');
     expect(merged.config.endpoint).toBe('https://global.example.com');
-    expect(merged.config.capture.prompts).toBe(false);
+    expect(merged.config.capture.files).toBe(false);
     // Untouched nested fields keep their global values.
     expect(merged.config.capture.git).toBe(true);
     // A repository cannot silence usage telemetry: neither the mandatory
@@ -56,32 +56,31 @@ describe('repo config merge', () => {
   });
 
   it('refuses a repo file that would turn a capture flag on', () => {
-    // A machine with `prompts` genuinely on is one that granted consent; without
+    // A machine with `toolInput` genuinely on is one that granted consent; without
     // the marker the gate would zero the flag and this would test nothing.
     const global = { ...defaultConfig(), contentCaptureConsent: true };
 
-    global.capture = { ...global.capture, prompts: true };
+    global.capture = { ...global.capture, toolInput: true };
     const merged = mergeRepoConfig(global, {
       capture: { prompts: true, responses: true, toolInput: true, toolOutput: true, git: true, files: false }
     });
 
     // Off on this machine, so the repo file cannot switch it on for whoever
     // clones the repository.
-    expect(merged.config.capture.responses).toBe(false);
-    expect(merged.config.capture.toolInput).toBe(false);
     expect(merged.config.capture.toolOutput).toBe(false);
+    // Retired prompt/response flags do not exist, so there is nothing to switch on.
+    expect('prompts' in merged.config.capture).toBe(false);
+    expect('responses' in merged.config.capture).toBe(false);
     // Already on globally: repeating it is a permitted no-op, not a refusal.
-    expect(merged.config.capture.prompts).toBe(true);
+    expect(merged.config.capture.toolInput).toBe(true);
     expect(merged.config.capture.git).toBe(true);
     // Narrowing is exactly what the repo file is for, and still works.
     expect(merged.config.capture.files).toBe(false);
 
     const warnings = merged.warnings.join(' ');
 
-    expect(warnings).toMatch(/"capture\.responses" may only be narrowed/);
-    expect(warnings).toMatch(/"capture\.toolInput" may only be narrowed/);
     expect(warnings).toMatch(/"capture\.toolOutput" may only be narrowed/);
-    expect(warnings).not.toMatch(/capture\.prompts/);
+    expect(warnings).not.toMatch(/capture\.toolInput/);
     expect(warnings).not.toMatch(/capture\.files/);
   });
 
@@ -175,8 +174,8 @@ describe('effective config through the hook pipeline', () => {
     const global = defaultConfig();
 
     global.capture = { ...global.capture, ...CONTENT_CAPTURE_ON };
-    // Consent is what makes the global `prompts: true` above real; the point of
-    // this test is the repo file narrowing it, not the gate refusing it.
+    // Consent is what makes the global tool flags above real; the point of
+    // this test is the repo file narrowing capture, not the gate refusing it.
     await writeJson(paths.configFile, { ...global, contentCaptureConsent: true, developerEmail: 'global@company.com' });
 
     const repo = path.join(world.home, 'repo');
@@ -184,7 +183,7 @@ describe('effective config through the hook pipeline', () => {
     await fs.mkdir(repo, { recursive: true });
     await writeJson(path.join(repo, '.agentwatch.json'), {
       developerEmail: 'spoofed@evil.com',
-      capture: { responses: false }
+      capture: { files: false }
     });
 
     async function hookDryRun(payload: Record<string, unknown>): Promise<{ events: any[] }> {
@@ -205,10 +204,10 @@ describe('effective config through the hook pipeline', () => {
     const result = await hookDryRun({ hook_event_name: 'Stop', session_id: 'sess-r', last_assistant_message: 'the answer', cwd: repo });
     const summary = result.events.find((event: any) => event.event.type === 'turn.summary');
 
-    // capture narrowing applied, identity override refused
+    // capture narrowing applied, identity override refused, prompt text never sent
     expect(summary.developer_id).toBe('global@company.com');
-    expect(summary.prompt).toBe('repo prompt text');
-    expect(summary.response).toBeUndefined();
+    expect(JSON.stringify(summary)).not.toContain('repo prompt text');
+    expect(JSON.stringify(summary)).not.toContain('the answer');
   });
 
   it('ignores repo overrides entirely while the global config is missing or invalid', async () => {
@@ -224,7 +223,7 @@ describe('effective config through the hook pipeline', () => {
 
     const effective = await loadEffectiveConfig(paths, repo);
 
-    expect(effective.config.capture.prompts).toBe(false);
+    expect('prompts' in effective.config.capture).toBe(false);
     expect(effective.config.capture.toolInput).toBe(false);
     expect('offlineQueue' in effective.config.delivery).toBe(false);
     expect(effective.warnings.join(' ')).toMatch(/global config/);
@@ -240,10 +239,10 @@ describe('effective config through the hook pipeline', () => {
 
     const effective = await loadEffectiveConfig(paths, repo);
 
-    expect(effective.config.capture.prompts).toBe(false);
+    expect('prompts' in effective.config.capture).toBe(false);
     expect(effective.config.capture.toolOutput).toBe(false);
     // Refused, not silently dropped: `agentwatch config` and `doctor` print these.
-    expect(effective.warnings.join(' ')).toMatch(/"capture\.prompts" may only be narrowed/);
+    expect(effective.warnings.join(' ')).toMatch(/"capture\.toolOutput" may only be narrowed/);
   });
 
   it('loadEffectiveConfig without a repo file returns the global config unchanged', async () => {

@@ -84,8 +84,6 @@ function geminiBaseEvent(payload: GeminiPayload, providerEventType: string): Age
  * @returns The patch; empty for a hook we model but read nothing from.
  */
 function hookPatch(payload: GeminiPayload, providerEventType: string, context: HookContext): EventPatch {
-  const capture = context.config.capture;
-
   if (providerEventType === 'SessionStart') {
     return {
       metadata: { sessionSource: payload.source },
@@ -95,14 +93,14 @@ function hookPatch(payload: GeminiPayload, providerEventType: string, context: H
 
   if (providerEventType === 'SessionEnd') return { metadata: { sessionEndReason: payload.reason } };
 
-  if (GEMINI_PROMPT_EVENTS.has(providerEventType)) return promptPatch(payload.prompt ?? '', capture);
+  if (GEMINI_PROMPT_EVENTS.has(providerEventType)) return promptPatch(payload.prompt ?? '');
 
   if (GEMINI_TOOL_EVENTS.has(providerEventType)) return geminiToolPatch(payload, providerEventType, context);
 
   if (GEMINI_STOP_EVENTS.has(providerEventType)) {
     // Gemini reports the answer as `prompt_response`; the other name is what
     // installations registered before the rename still send.
-    const response = responsePatch(payload.prompt_response ?? payload.last_assistant_message ?? '', capture);
+    const response = responsePatch(payload.prompt_response ?? payload.last_assistant_message ?? '');
 
     return { ...response, metadata: { stopHookActive: payload.stop_hook_active, ...response.metadata } };
   }

@@ -54,8 +54,8 @@ describe('Cursor adapter', () => {
     }
   });
 
-  it('excludes prompt text when capture.prompts is off but keeps length+hash evidence', () => {
-    const [event] = parseCursorHookEvent(cursor.cursorBeforeSubmitPrompt, context({ prompts: false }));
+  it('never carries prompt text, only length+hash evidence', () => {
+    const [event] = parseCursorHookEvent(cursor.cursorBeforeSubmitPrompt, context());
 
     expect(event!.event.type).toBe('prompt.submitted');
     expect(JSON.stringify(event)).not.toContain('Refactor the auth middleware');
@@ -63,12 +63,6 @@ describe('Cursor adapter', () => {
 
     expect(prompt.length).toBe(cursor.cursorBeforeSubmitPrompt.prompt.length);
     expect(prompt.sha256).toMatch(/^[0-9a-f]{64}$/);
-  });
-
-  it('includes prompt text when capture.prompts is on', () => {
-    const [event] = parseCursorHookEvent(cursor.cursorBeforeSubmitPrompt, context());
-
-    expect(event!.metadata?.['promptText']).toContain('Refactor the auth middleware');
   });
 
   it('classifies Cursor tool names and starts: Shell -> shell.started', () => {
@@ -184,15 +178,12 @@ describe('Cursor adapter', () => {
     expect(event!.metadata?.['contextUsagePercent']).toBe(85);
   });
 
-  it('captures the response from afterAgentResponse with capture gating', () => {
+  it('records afterAgentResponse as evidence only, never the text', () => {
     const [event] = parseCursorHookEvent(cursor.cursorAfterAgentResponse, context());
 
     expect(event!.event.type).toBe('agent.other');
-    expect(event!.metadata?.['responseText']).toContain('refactored the middleware');
-    const [gated] = parseCursorHookEvent(cursor.cursorAfterAgentResponse, context({ responses: false }));
-
-    expect(JSON.stringify(gated)).not.toContain('refactored the middleware');
-    const evidence = gated!.metadata?.['response'] as { length: number };
+    expect(JSON.stringify(event)).not.toContain('refactored the middleware');
+    const evidence = event!.metadata?.['response'] as { length: number };
 
     expect(evidence.length).toBe(cursor.cursorAfterAgentResponse.text.length);
   });
@@ -465,14 +456,14 @@ describe('Cursor provider files', () => {
       return { events };
     }
 
-    it('closes a Cursor turn with prompt, tools and the afterAgentResponse text, pending usage', async () => {
+    it('closes a Cursor turn with prompt and afterAgentResponse evidence, tools, pending usage', async () => {
       const paths = resolvePaths(world.env);
 
       await writeJson(paths.configFile, {
         ...defaultConfig(),
         developerEmail: 'dev@company.com',
         contentCaptureConsent: true,
-        capture: { ...defaultConfig().capture, prompts: true, responses: true }
+        capture: { ...defaultConfig().capture, ...CONTENT_CAPTURE_ON }
       });
       // Today's Cursor transcript format: no usage anywhere.
       const transcript = path.join(world.home, 'cursor-transcript.jsonl');
@@ -494,9 +485,10 @@ describe('Cursor provider files', () => {
       expect(summary.session_id).toBe('conv-t');
       expect(summary.turn_id).toBe('gen-t');
       expect(summary.developer_id).toBe('dev@company.com');
-      expect(summary.prompt).toBe('fix the refund bug');
-      // Cursor's stop has no response text; it comes from afterAgentResponse.
-      expect(summary.response).toBe('Fixed the refund bug.');
+      expect(summary.prompt_evidence).toMatchObject({ length: 'fix the refund bug'.length });
+      // Cursor's stop has no response; its evidence comes from afterAgentResponse.
+      expect(summary.response_evidence).toMatchObject({ length: 'Fixed the refund bug.'.length });
+      expect(JSON.stringify(summary)).not.toContain('refund bug');
       expect(summary.files_touched).toEqual(['refund.ts']);
       expect(summary.model).toBe('gpt-5.2');
       // No usage source exists for Cursor today: stays pending for the backend.

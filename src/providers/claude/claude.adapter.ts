@@ -79,8 +79,6 @@ function claudeBaseEvent(payload: ClaudePayload, providerEventType: string): Age
  * @returns The patch; empty for a hook we model but read nothing from.
  */
 function hookPatch(payload: ClaudePayload, providerEventType: string, context: HookContext): EventPatch {
-  const capture = context.config.capture;
-
   if (providerEventType === 'SessionStart') {
     return {
       metadata: { sessionSource: payload.source },
@@ -90,12 +88,12 @@ function hookPatch(payload: ClaudePayload, providerEventType: string, context: H
 
   if (providerEventType === 'SessionEnd') return { metadata: { sessionEndReason: payload.reason } };
 
-  if (providerEventType === 'UserPromptSubmit') return promptPatch(payload.prompt ?? '', capture);
+  if (providerEventType === 'UserPromptSubmit') return promptPatch(payload.prompt ?? '');
 
   if (CLAUDE_TOOL_EVENTS.has(providerEventType)) return claudeToolPatch(payload, providerEventType, context);
 
   if (providerEventType === 'Stop') {
-    const response = responsePatch(payload.last_assistant_message ?? '', capture);
+    const response = responsePatch(payload.last_assistant_message ?? '');
 
     return { ...response, metadata: { stopHookActive: payload.stop_hook_active, ...response.metadata } };
   }

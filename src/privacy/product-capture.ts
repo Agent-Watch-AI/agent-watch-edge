@@ -5,11 +5,11 @@ import { sanitizeValue } from './sanitizer.js';
 
 /**
  * Reapply current capture policy to persisted records before queueing or sending.
- * Old turn state and offline events may predate consent or flag changes, so the
- * gate runs again here rather than only where the record was built.
+ * Old turn state and offline events may predate a flag change — or this release —
+ * so the gate runs again here rather than only where the record was built.
  * @param event - Product record, possibly from an older installation.
- * @param capture - Effective, consent-gated capture flags. Absent means no content;
- *   metadata follows the schema defaults, so only an explicit `false` drops it.
+ * @param capture - Effective, consent-gated capture flags. Metadata follows the
+ *   schema defaults, so only an explicit `false` drops it.
  * @returns A sanitized copy, or undefined when the whole record is no longer allowed.
  */
 export function applyProductCapture<T extends ProductEvent>(event: T, capture?: CaptureConfig): T | undefined {
@@ -21,17 +21,19 @@ export function applyProductCapture<T extends ProductEvent>(event: T, capture?: 
 
   const summary = event as TurnSummaryEvent;
 
-  // Evidence (length + sha256) deliberately survives a disabled text flag: it
-  // is what tells the backend a turn had content at all. The rest do not — they
-  // are the per-file and per-repository signals capture.files and capture.git
-  // gate when the record is built, and a queued record can outlive either flag.
+  // Prompt and response text goes unconditionally: this release never builds
+  // it, but a summary queued by an older one can still carry it, and developer
+  // prompts are never collected. Evidence (length + sha256) stays: it is what
+  // tells the backend a turn had content at all. The rest are the per-file and
+  // per-repository signals capture.files and capture.git gate when the record
+  // is built, and a queued record can outlive either flag.
   const git = capture?.git === false;
   const files = capture?.files === false;
 
   return sanitizeValue({
     ...event,
-    prompt: capture?.prompts ? summary.prompt : undefined,
-    response: capture?.responses ? summary.response : undefined,
+    prompt: undefined,
+    response: undefined,
     repository: git ? undefined : summary.repository,
     branch: git ? undefined : summary.branch,
     commit: git ? undefined : summary.commit,

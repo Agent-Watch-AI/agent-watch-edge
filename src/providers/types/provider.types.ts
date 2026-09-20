@@ -70,7 +70,7 @@ export interface NativeTelemetryConfigurator {
    *
    * Doctor reports the gate, and the only truthful answer is the configurator's
    * own rule: Codex takes logs and traces all-or-nothing on the two tool flags,
-   * Gemini additionally drops traces without prompt and response consent. An
+   * Gemini never gets traces, which can carry prompts that are never collected. An
    * agent with no content gate — Claude, which has per-field switches — omits
    * this and is never reported as held back.
    */

@@ -155,20 +155,15 @@ describe('CLI commands', () => {
 
       expect(config.endpoint).toBe('https://backend.example.com');
       expect(config.installationId).toBeTruthy();
-      // Setup never turns content capture on: prompts and tool I/O stay on the
-      // machine until someone edits the config deliberately.
-      expect(config.capture.prompts).toBe(false);
-      expect(config.capture.responses).toBe(false);
-      expect(config.capture.toolInput).toBe(false);
-      expect(config.capture.toolOutput).toBe(false);
-      // Metadata, which attribution is built from, is on.
-      expect(config.capture.git).toBe(true);
-      expect(config.capture.files).toBe(true);
+      // Setup never turns tool content capture on, and there is no prompt or
+      // response flag to turn on at all.
+      expect(config.capture).toEqual({ toolInput: false, toolOutput: false, git: true, files: true });
 
       const claudeSettings = await readJson(path.join(world.home, '.claude', 'settings.json'));
 
       expect(claudeSettings.hooks.SessionStart[0].hooks[0].command).toContain('agentwatch hook --agent claude');
       expect(claudeSettings.env.CLAUDE_CODE_ENABLE_TELEMETRY).toBe('1');
+      expect(claudeSettings.env.OTEL_LOG_USER_PROMPTS).toBe('0');
       expect(claudeSettings.env.OTEL_LOGS_EXPORTER).toBe('otlp');
       // Logs are the default signal; traces/metrics stay off unless asked for.
       expect(claudeSettings.env.OTEL_TRACES_EXPORTER).toBe('none');
@@ -198,11 +193,12 @@ describe('CLI commands', () => {
       expect(await fs.readFile(path.join(world.home, '.codex', 'config.toml'), 'utf8').catch(() => '')).not.toContain('[otel]');
     });
 
-    it('honors --otel all and persists the selection', async () => {
+    it('honors --otel all and persists the selection, never enabling native prompt logging', async () => {
       await writeJson(resolvePaths(world.env).configFile, {
         ...defaultConfig(),
         contentCaptureConsent: true,
-        capture: { ...CONTENT_CAPTURE_ON, git: true, files: true }
+        // Every flag an older release honoured, including the retired prompt ones.
+        capture: { ...CONTENT_CAPTURE_ON, prompts: true, responses: true, git: true, files: true }
       });
 
       const code = await runSetup({
@@ -224,9 +220,11 @@ describe('CLI commands', () => {
       expect(claudeSettings.env.OTEL_TRACES_EXPORTER).toBe('otlp');
       expect(claudeSettings.env.OTEL_METRICS_EXPORTER).toBe('otlp');
       expect(claudeSettings.env.CLAUDE_CODE_ENHANCED_TELEMETRY_BETA).toBe('1');
+      expect(claudeSettings.env.OTEL_LOG_USER_PROMPTS).toBe('0');
       const codexToml = await fs.readFile(path.join(world.home, '.codex', 'config.toml'), 'utf8');
 
       expect(codexToml).toContain('trace_exporter = { otlp-http');
+      expect(codexToml).toContain('log_user_prompt = false');
     });
 
     it('honors --otel none by writing no agent telemetry config', async () => {
@@ -553,17 +551,18 @@ describe('CLI commands', () => {
       expect(privacy.detail).toContain('Codex (traces)');
     });
 
-    it('reports Gemini traces withheld when tool content is consented but prompts are not', async () => {
-      // Gemini's two consent bars differ: its logs need the tool flags, its
-      // detailed traces need prompts and responses too. One global predicate
-      // could not tell the second case from compatible.
+    it('reports Gemini traces withheld even with full tool-content consent', async () => {
+      // Gemini's logs need the tool flags; its detailed traces can carry prompts,
+      // which are never collected, so no consent releases them. One global
+      // predicate could not tell that case from compatible.
       await fs.mkdir(path.join(world.home, '.gemini'), { recursive: true });
-      await saveConfig(resolvePaths(world.env), {
+      await writeJson(resolvePaths(world.env).configFile, {
         ...defaultConfig(),
         endpoint: 'http://127.0.0.1:9',
         token: 'tok-1',
         contentCaptureConsent: true,
-        capture: { ...defaultConfig().capture, toolInput: true, toolOutput: true },
+        // What an older release would have needed for traces: now inert.
+        capture: { ...defaultConfig().capture, toolInput: true, toolOutput: true, prompts: true, responses: true },
         otel: { logs: true, traces: true, metrics: false }
       });
 
@@ -668,8 +667,9 @@ describe('CLI commands', () => {
   });
 
   describe('otel-headers', () => {
-    it('prints exactly the auth header JSON', async () => {
+    it('prints exactly the auth and installation headers', async () => {
       await setupOnce();
+      const stored = await readJson(resolvePaths(world.env).configFile);
       const logs: string[] = [];
       const original = process.stdout.write.bind(process.stdout);
 
@@ -685,7 +685,12 @@ describe('CLI commands', () => {
         process.stdout.write = original;
       }
 
-      expect(JSON.parse(logs.join(''))).toEqual({ Authorization: 'Bearer tok-1' });
+      // The installation id is what lets a call the summary never claimed be
+      // traced to a machine; the exporter sends nothing else of ours.
+      expect(JSON.parse(logs.join(''))).toEqual({
+        Authorization: 'Bearer tok-1',
+        'x-agentwatch-installation': (stored as { installationId: string }).installationId
+      });
     });
   });
 });
@@ -1131,7 +1136,7 @@ describe('setup --root: a second tenant on one machine', () => {
 
     expect(result).toBe(0);
     expect(stdout).not.toContain('native OTLP');
-    expect(JSON.parse((await captureStdout(() => runOtelHeaders({ ...world.env, cwd: repo }))).stdout)).toEqual({ Authorization: 'Bearer tok-seat' });
+    expect(JSON.parse((await captureStdout(() => runOtelHeaders({ ...world.env, cwd: repo }))).stdout)).toEqual({ Authorization: 'Bearer tok-seat', 'x-agentwatch-installation': expect.any(String) });
   });
 
   it('otel-headers signs with the root token on the shared collector, and with nothing for a foreign one', async () => {
@@ -1145,11 +1150,14 @@ describe('setup --root: a second tenant on one machine', () => {
 
     const headersIn = async (cwd: string) => JSON.parse((await captureStdout(() => runOtelHeaders({ ...world.env, cwd }))).stdout);
 
-    expect(await headersIn(shared)).toEqual({ Authorization: 'Bearer tok-shared' });
+    expect(await headersIn(shared)).toEqual({ Authorization: 'Bearer tok-shared', 'x-agentwatch-installation': expect.any(String) });
     // The agent exports to the machine's collector, which must never see the
     // foreign tenant's credential.
     expect(await headersIn(foreign)).toEqual({});
-    expect(await headersIn(world.env.cwd)).toEqual({ Authorization: 'Bearer tok-machine' });
+    expect(await headersIn(world.env.cwd)).toEqual({
+      Authorization: 'Bearer tok-machine',
+      'x-agentwatch-installation': expect.any(String)
+    });
   });
 
   // Re-enrolling a root replaced its whole override, so every key the run does
@@ -1213,7 +1221,7 @@ describe('setup --root: a second tenant on one machine', () => {
 
     expect(eventsUrl(rooted)).toBe('https://ingest.backend.example.com/v1/events');
     expect(rooted.token).toBe('tok-seat2');
-    expect(JSON.parse((await captureStdout(() => runOtelHeaders({ ...world.env, cwd: repo }))).stdout)).toEqual({ Authorization: 'Bearer tok-seat2' });
+    expect(JSON.parse((await captureStdout(() => runOtelHeaders({ ...world.env, cwd: repo }))).stdout)).toEqual({ Authorization: 'Bearer tok-seat2', 'x-agentwatch-installation': expect.any(String) });
   });
 
   // The carry-over must not keep a *live* route from the previous engagement:

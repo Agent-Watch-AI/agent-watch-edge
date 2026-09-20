@@ -2,6 +2,7 @@ import { asRecord, omitKeys } from '../../core/object.js';
 import type { Env, UnknownRecord } from '../../core/types/core.types.js';
 import { enabledSignalNames, otlpBaseUrl, toolContentConsented } from '../../config/config.js';
 import type { AgentWatchConfig, OtelConfig, OtelSignalName } from '../../config/types/config.types.js';
+import { INSTALLATION_HEADER } from '../../transport/constants/transport.constants.js';
 import { backupFile, currentMode } from '../../storage/atomic-file.js';
 import { SECRET_FILE_MODE } from '../../storage/constants/storage.constants.js';
 import { readJsonFile } from '../../storage/json-file.js';
@@ -73,8 +74,33 @@ function desiredGeminiOtelEnv(context: SetupContext): Record<string, string> | u
     OTEL_TRACES_EXPORTER: signals.traces ? OTEL_EXPORTER_OTLP : OTEL_EXPORTER_NONE,
     OTEL_EXPORTER_OTLP_PROTOCOL: STANDARD_OTLP_PROTOCOL,
     OTEL_EXPORTER_OTLP_ENDPOINT: otlpBase,
-    ...(context.config.token ? { [OTLP_HEADERS_KEY]: `Authorization=Bearer ${context.config.token}` } : {})
+    ...(context.config.token
+      ? { [OTLP_HEADERS_KEY]: otlpHeaders(context.config.token, context.config.installationId) }
+      : {})
   };
+}
+
+/**
+ * The `OTEL_EXPORTER_OTLP_HEADERS` value: comma-separated `key=value` pairs.
+ *
+ * Carries the installation id beside the bearer so a Gemini call that no turn
+ * summary claimed can still be traced to the machine that made it. Only the id
+ * — a locally generated UUID — travels here; no developer identity does.
+ *
+ * Takes the token rather than the config it came from, like `tomlHeaders` does
+ * for Codex: a header builder that reads a config can be handed one with no
+ * token and quietly emit `Bearer ` rather than refusing to be called.
+ *
+ * @param token - The ingest token; the caller has already checked there is one.
+ * @param installationId - This installation's id, when one exists.
+ * @returns The header list for the exporter.
+ */
+function otlpHeaders(token: string, installationId: string | undefined): string {
+  const pairs = [`Authorization=Bearer ${token}`];
+
+  if (installationId) pairs.push(`${INSTALLATION_HEADER}=${installationId}`);
+
+  return pairs.join(',');
 }
 
 /** Configures Gemini CLI's own OTLP export. */
@@ -278,8 +304,8 @@ export class GeminiOtelConfigurator implements NativeTelemetryConfigurator {
    * Signals Gemini was asked for but will not be given under current consent.
    *
    * Its usage logs always carry function arguments, and its detailed traces can
-   * carry prompts and tool results — two different consent bars, so the answer
-   * is per signal rather than all-or-nothing.
+   * carry prompts — so logs wait on tool-content consent and traces are never
+   * given, which is why the answer is per signal rather than all-or-nothing.
    *
    * @param config - Effective configuration.
    * @returns The requested signals that are held back; empty when none are.
@@ -292,18 +318,16 @@ export class GeminiOtelConfigurator implements NativeTelemetryConfigurator {
 }
 
 /**
- * Gemini logs always carry function arguments and detailed traces can carry
- * prompts and tool results. Keep only signals whose content has global consent.
+ * Gemini logs always carry function arguments, so they need tool-content
+ * consent. Detailed traces can carry prompts, and developer prompts are never
+ * collected, so no configuration makes them safe.
  * @param config - Global, consent-gated configuration.
  * @returns The signals safe to materialize in Gemini settings.
  */
 function safeGeminiSignals(config: AgentWatchConfig): OtelConfig {
-  const toolContent = toolContentConsented(config);
-  const detailedContent = toolContent && config.capture.prompts && config.capture.responses;
-
   return {
-    logs: config.otel.logs && toolContent,
-    traces: config.otel.traces && detailedContent,
+    logs: config.otel.logs && toolContentConsented(config),
+    traces: false,
     metrics: config.otel.metrics
   };
 }

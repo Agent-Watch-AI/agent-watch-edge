@@ -124,13 +124,14 @@ describe('Antigravity provider', () => {
       const [first] = await antigravityProvider.parseHookEvent(antigravityPreInvocation(1), { env: world.env, config });
 
       expect(first?.event.type).toBe('prompt.submitted');
-      expect(first?.metadata?.['promptText']).toBe(ANTIGRAVITY_COMMON.lastUserInput);
+      expect(first?.metadata?.['prompt']).toMatchObject({ length: ANTIGRAVITY_COMMON.lastUserInput!.length });
+      expect(JSON.stringify(first)).not.toContain(ANTIGRAVITY_COMMON.lastUserInput);
 
       // Invocations 2..n are model calls inside the same turn, not new prompts.
       const [later] = await antigravityProvider.parseHookEvent(antigravityPreInvocation(4), { env: world.env, config });
 
       expect(later?.event.type).toBe('agent.other');
-      expect(later?.metadata?.['promptText']).toBeUndefined();
+      expect(later?.metadata?.['prompt']).toBeUndefined();
     });
 
     it('treats invocation 0 as the first one too: the counter base is not documented', async () => {
@@ -139,11 +140,11 @@ describe('Antigravity provider', () => {
       expect(event?.event.type).toBe('prompt.submitted');
     });
 
-    it('closes the turn on Stop and carries the final response', async () => {
+    it('closes the turn on Stop and records the final response as evidence only', async () => {
       const [event] = await parse(antigravityStop({ finalModelOutput: 'raised it to 30s' }));
 
       expect(event?.event.type).toBe('generation.completed');
-      expect(event?.metadata?.['responseText']).toBe('raised it to 30s');
+      expect(JSON.stringify(event)).not.toContain('raised it to 30s');
       expect(event?.metadata?.['response']).toMatchObject({ length: 'raised it to 30s'.length });
     });
 
@@ -360,8 +361,9 @@ describe('Antigravity provider', () => {
       expect(summary['surface']).toBe('ide');
       expect(summary['session_id']).toBe(ANTIGRAVITY_COMMON.conversationId);
       expect(summary['turn_id']).toBe(ANTIGRAVITY_COMMON.executionId);
-      expect(summary['prompt']).toBe(ANTIGRAVITY_COMMON.lastUserInput);
-      expect(summary['response']).toBe('raised it to 30s');
+      expect(summary['prompt_evidence']).toMatchObject({ length: ANTIGRAVITY_COMMON.lastUserInput!.length });
+      expect(summary['response_evidence']).toMatchObject({ length: 'raised it to 30s'.length });
+      expect(JSON.stringify(summary)).not.toContain('raised it to 30s');
       expect(summary['tool_calls']).toBe(2);
       expect(summary['tools_used']).toEqual({ edit_file: 1, run_command: 1 });
       // Basename only: the workspace is not a git checkout here, and an
@@ -387,7 +389,7 @@ describe('Antigravity provider', () => {
       const queued = await readQueueEntries<{ event: Record<string, unknown> }>(paths.queueDir);
       const summary = queued.map((entry) => entry.event).find((event) => (event['event'] as { type?: string }).type === 'turn.summary');
 
-      expect(summary?.['prompt']).toBe(ANTIGRAVITY_COMMON.lastUserInput);
+      expect(summary?.['prompt_evidence']).toMatchObject({ length: ANTIGRAVITY_COMMON.lastUserInput!.length });
     });
   });
 });

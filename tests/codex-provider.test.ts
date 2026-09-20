@@ -196,6 +196,7 @@ describe('Codex provider', () => {
       expect(parsed.otel.exporter['otlp-http'].endpoint).toBe('https://backend.example.com/v1/otlp/v1/logs');
       expect(parsed.otel.exporter['otlp-http'].protocol).toBe('json');
       expect(parsed.otel.exporter['otlp-http'].headers.Authorization).toBe('Bearer tok-abc');
+      expect(parsed.otel.exporter['otlp-http'].headers['x-agentwatch-installation']).toBe('inst-1');
       // Default signal selection: logs only.
       expect(parsed.otel.trace_exporter).toBe('none');
       expect(parsed.otel.metrics_exporter).toBe('none');
@@ -204,11 +205,32 @@ describe('Codex provider', () => {
     it('enables the trace exporter when otel.traces is on', async () => {
       const context = setupContext();
 
+      context.config.token = 'tok-abc';
       context.config.otel = { logs: true, traces: true, metrics: false };
       await new CodexOtelConfigurator().configure(context);
       const parsed = parseToml(await fs.readFile(codexConfigTomlPath(world.env), 'utf8')) as any;
 
       expect(parsed.otel.trace_exporter['otlp-http'].endpoint).toBe('https://backend.example.com/v1/otlp/v1/traces');
+      // Both exporters or neither: a trace that cannot be traced to a machine
+      // is the gap this closes on the logs route, reopened on the other one.
+      expect(parsed.otel.trace_exporter['otlp-http'].headers['x-agentwatch-installation']).toBe(
+        'inst-1'
+      );
+    });
+
+    it('omits the installation header when the install has no id yet', async () => {
+      const context = setupContext();
+
+      context.config.token = 'tok-abc';
+      context.config.installationId = undefined;
+      await new CodexOtelConfigurator().configure(context);
+      const parsed = parseToml(await fs.readFile(codexConfigTomlPath(world.env), 'utf8')) as any;
+      const headers = parsed.otel.exporter['otlp-http'].headers;
+
+      // Absent, not empty: a header naming nothing is a different claim from no
+      // header at all, and only the second one is true here.
+      expect(headers.Authorization).toBeDefined();
+      expect('x-agentwatch-installation' in headers).toBe(false);
     });
 
     it('otel none removes the managed block and reports configured', async () => {

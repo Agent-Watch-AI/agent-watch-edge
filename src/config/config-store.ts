@@ -4,7 +4,7 @@ import { readJsonFile } from '../storage/json-file.js';
 import { writeFileAtomic } from '../storage/atomic-file.js';
 import { SECRET_FILE_MODE } from '../storage/constants/storage.constants.js';
 import type { AgentWatchPaths } from '../storage/types/storage.types.js';
-import { CONTENT_CAPTURE_KEYS, DELIVERABLE_URL_MESSAGE, ROOT_URL_FIELDS, URL_FIELDS } from './constants/config.constants.js';
+import { CONTENT_CAPTURE_KEYS, DELIVERABLE_URL_MESSAGE, RETIRED_CAPTURE_KEYS, ROOT_URL_FIELDS, URL_FIELDS } from './constants/config.constants.js';
 import { defaultConfig } from './config.js';
 import { configSchema, nonDeliverableUrlFields } from './schemas/config.schema.js';
 import type { AgentWatchConfig, CaptureConfig, ConfigLoadResult } from './types/config.types.js';
@@ -53,6 +53,7 @@ export async function saveConfig(paths: AgentWatchPaths, config: AgentWatchConfi
   // shape would change nothing at runtime and would quietly erase the choice:
   // a machine that later adds `contentCaptureConsent: true` would find every
   // content flag already false and no record that it had ever set them.
+  // Retired prompt/response flags are not carried over, so this write removes them.
   const capture = { ...config.capture, ...(await storedCapture(paths)) };
   const refused = await storedRefusedUrls(paths, config);
 
@@ -128,22 +129,32 @@ function refusedFrom(raw: Record<string, unknown>, parsed: Record<string, unknow
 }
 
 /**
+ * The raw `capture` block on disk, when the file has one.
+ *
+ * Read raw rather than through the schema: the schema is where the gate lives
+ * and where retired keys are stripped, so a parsed value has already lost what
+ * the callers here need to see.
+ *
+ * @param paths - Resolved AgentWatch paths.
+ * @returns The stored block, or undefined.
+ */
+async function rawCapture(paths: AgentWatchPaths): Promise<Record<string, unknown> | undefined> {
+  const result = await readJsonFile(paths.configFile);
+
+  return result.state === 'ok' ? asRecord(asRecord(result.value)?.['capture']) : undefined;
+}
+
+/**
  * The content flags as they are written on disk right now.
  *
- * Read raw rather than through the schema: the schema is where the gate lives,
- * so a parsed value has already lost the distinction this exists to keep.
- * Only the four content flags are carried over — a metadata flag the caller
+ * Only the tool content flags are carried over — a metadata flag the caller
  * changed is a change the caller meant.
  *
  * @param paths - Resolved AgentWatch paths.
  * @returns The stored content flags; empty when the file has none.
  */
 async function storedCapture(paths: AgentWatchPaths): Promise<Partial<CaptureConfig>> {
-  const result = await readJsonFile(paths.configFile);
-
-  if (result.state !== 'ok') return {};
-
-  const capture = asRecord(asRecord(result.value)?.['capture']);
+  const capture = await rawCapture(paths);
 
   if (!capture) return {};
 
@@ -154,6 +165,23 @@ async function storedCapture(paths: AgentWatchPaths): Promise<Partial<CaptureCon
   }
 
   return out as Partial<CaptureConfig>;
+}
+
+/**
+ * The retired prompt/response flags the file on disk still carries.
+ *
+ * They collect nothing whatever their value; this exists so `setup` can say once
+ * that it is removing them and `doctor` can say they are still written.
+ *
+ * @param paths - Resolved AgentWatch paths.
+ * @returns The retired keys present in `capture`; empty when there are none.
+ */
+export async function storedRetiredCapture(paths: AgentWatchPaths): Promise<string[]> {
+  const capture = await rawCapture(paths);
+
+  if (!capture) return [];
+
+  return RETIRED_CAPTURE_KEYS.filter((key) => key in capture);
 }
 
 /**
@@ -171,10 +199,10 @@ export function ensureInstallationId(config: AgentWatchConfig): AgentWatchConfig
 /**
  * Fail-safe runtime config for a missing or corrupt file.
  *
- * Hooks keep running, but content capture is OFF: an accidental config wipe
- * must not silently start collecting prompts and tool I/O. The schema defaults
- * are already off, so this now only pins the guarantee — deliberately, so that
- * a future default cannot quietly widen what a *broken* config collects.
+ * Hooks keep running, but tool content capture is OFF: an accidental config wipe
+ * must not silently start collecting tool I/O. The schema defaults are already
+ * off, so this now only pins the guarantee — deliberately, so that a future
+ * default cannot quietly widen what a *broken* config collects.
  *
  * @returns A metadata-only config.
  */
@@ -183,7 +211,7 @@ function fallbackConfig(): AgentWatchConfig {
 
   return {
     ...config,
-    capture: { ...config.capture, prompts: false, responses: false, toolInput: false, toolOutput: false }
+    capture: { ...config.capture, toolInput: false, toolOutput: false }
   };
 }
 

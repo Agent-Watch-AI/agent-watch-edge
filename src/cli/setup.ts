@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import readline from 'node:readline/promises';
 import { defaultConfig, enabledSignalNames, eventsUrl, parseOtelSignals, sharesOtlpCollector } from '../config/config.js';
-import { ensureInstallationId, saveConfig } from '../config/config-store.js';
+import { ensureInstallationId, saveConfig, storedRetiredCapture } from '../config/config-store.js';
 import { CONTENT_CAPTURE_KEYS } from '../config/constants/config.constants.js';
 import type { Destination } from '../config/types/destination.types.js';
 import { applyRootOverride, canonicalRoot } from '../config/root-config.js';
@@ -278,15 +278,24 @@ async function resolveRoot(options: SetupOptions, baseConfig: AgentWatchConfig):
 /**
  * Name the content flags this machine has set but cannot use.
  *
- * The gate runs on load, so a file whose flags say `true` without the global
- * marker is metadata-only in memory while still reading as opted-in on disk.
- * The flags survive the write, so this is not a warning about losing them — it
- * is the answer to "I set `prompts: true`, why is nothing arriving".
+ * Retired `prompts` / `responses` flags come first: they collected nothing since
+ * this release, and the save that follows removes them, so this is said once.
+ *
+ * The consent gate runs on load, so a file whose tool flags say `true` without
+ * the global marker is metadata-only in memory while still reading as opted-in
+ * on disk. Those flags survive the write, so that warning is not about losing
+ * them — it is the answer to "I set `toolInput: true`, why is nothing arriving".
  *
  * @param context - Resolved paths and the gated config setup started from.
  * @param config - The config about to be saved.
  */
 async function reportContentDowngrade(context: CliContext, config: AgentWatchConfig): Promise<void> {
+  const retired = await storedRetiredCapture(context.paths);
+
+  if (retired.length > 0) {
+    println(`${symbols.warn} removing capture ${retired.join(', ')} from the config: prompt and response text is never collected`);
+  }
+
   if (config.contentCaptureConsent) return;
 
   const read = await readJsonFile(context.paths.configFile);

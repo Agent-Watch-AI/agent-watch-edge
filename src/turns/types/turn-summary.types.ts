@@ -31,8 +31,11 @@ export type TurnUsageStatus = 'pending' | 'provisional' | 'complete' | 'partial'
 
 /**
  * One prompt→response turn, flattened for direct backend consumption: who
- * (developer), where (repo/branch/commit/ticket), what (prompt, response,
- * tools, files) and how much it cost.
+ * (developer), where (repo/branch/commit/ticket), what (prompt and response
+ * evidence, tools, files) and how much it cost.
+ *
+ * There is deliberately no prompt or response text field: developer prompts are
+ * never collected.
  *
  * The only product record the hook path emits; the backend finalizes its usage
  * from the atomic llm.call rows.
@@ -55,9 +58,7 @@ export interface TurnSummaryEvent extends AgentWatchEvent<'turn.summary'> {
   readonly files_touched?: readonly string[];
   /** Files the agent's tools only read during this turn (repo-relative). */
   readonly files_read?: readonly string[];
-  readonly prompt?: string;
   readonly prompt_evidence?: ContentEvidence;
-  readonly response?: string;
   readonly response_evidence?: ContentEvidence;
   readonly tool_calls: number;
   readonly tools_used: Readonly<Record<string, number>>;
@@ -81,12 +82,6 @@ export interface TurnSummaryEvent extends AgentWatchEvent<'turn.summary'> {
   readonly ended_at: string;
 }
 
-/** The response the user actually saw, however the provider delivered it. */
-export interface TurnResponse {
-  readonly text?: string;
-  readonly evidence?: ContentEvidence;
-}
-
 export interface BuildTurnSummaryInput {
   /** Internal provider id ('claude' | 'codex' | ...); mapped to the public label. */
   readonly provider: string;
@@ -100,7 +95,8 @@ export interface BuildTurnSummaryInput {
   readonly featureCandidates?: readonly FeatureCandidate[];
   readonly prompts: readonly PromptRecord[];
   readonly tools: readonly ToolRecord[];
-  readonly response?: TurnResponse;
+  /** Evidence of the response the user actually saw, however the provider delivered it. */
+  readonly response?: ContentEvidence;
   readonly usage?: TurnUsage;
   readonly model?: string;
   readonly billingMode?: UsageBillingMode;

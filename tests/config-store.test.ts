@@ -26,8 +26,8 @@ describe('config load fallback', () => {
   it('the shipped defaults capture metadata but no content', () => {
     const capture = defaultConfig().capture;
 
-    expect(capture.prompts).toBe(false);
-    expect(capture.responses).toBe(false);
+    // No prompt or response flag exists: that text is never collected.
+    expect(Object.keys(capture).sort()).toEqual(['files', 'git', 'toolInput', 'toolOutput']);
     expect(capture.toolInput).toBe(false);
     expect(capture.toolOutput).toBe(false);
     // Repo/branch/SHA and per-file paths are metadata, and are what feature
@@ -36,14 +36,18 @@ describe('config load fallback', () => {
     expect(capture.files).toBe(true);
   });
 
-  it('a parsed config keeps its capture settings', async () => {
+  it('a parsed config drops retired prompt and response flags, even with consent', async () => {
     const paths = resolvePaths(world.env);
 
-    await writeJson(paths.configFile, { ...defaultConfig(), capture: { ...defaultConfig().capture, prompts: true } });
+    await writeJson(paths.configFile, {
+      ...defaultConfig(),
+      contentCaptureConsent: true,
+      capture: { ...defaultConfig().capture, prompts: true, responses: true }
+    });
     const result = await loadConfig(paths);
 
     expect(result.state).toBe('ok');
-    expect(result.config.capture.prompts).toBe(false);
+    expect(result.config.capture).toEqual(defaultConfig().capture);
   });
 
   it('migrates legacy emit.llmCalls=false without invalidating the rest of the config', async () => {
@@ -52,14 +56,14 @@ describe('config load fallback', () => {
     await writeJson(paths.configFile, {
       ...defaultConfig(),
       endpoint: 'https://backend.example.com',
-      capture: { ...defaultConfig().capture, prompts: false },
+      capture: { ...defaultConfig().capture, toolInput: false },
       emit: { turnSummaries: false, llmCalls: false }
     });
     const result = await loadConfig(paths);
 
     expect(result.state).toBe('ok');
     expect(result.config.endpoint).toBe('https://backend.example.com');
-    expect(result.config.capture.prompts).toBe(false);
+    expect(result.config.capture.toolInput).toBe(false);
     expect(result.config.emit.turnSummaries).toBe(false);
     expect(result.config.emit.llmCalls).toBe(true);
   });
@@ -68,8 +72,6 @@ describe('config load fallback', () => {
     const result = await loadConfig(resolvePaths(world.env));
 
     expect(result.state).toBe('missing');
-    expect(result.config.capture.prompts).toBe(false);
-    expect(result.config.capture.responses).toBe(false);
     expect(result.config.capture.toolInput).toBe(false);
     expect(result.config.capture.toolOutput).toBe(false);
   });
@@ -82,7 +84,7 @@ describe('config load fallback', () => {
     const result = await loadConfig(paths);
 
     expect(result.state).toBe('invalid');
-    expect(result.config.capture.prompts).toBe(false);
+    expect(result.config.capture.toolInput).toBe(false);
     expect(result.config.capture.toolOutput).toBe(false);
   });
 });

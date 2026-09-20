@@ -16,44 +16,44 @@ import {
 } from '../constants/config.constants.js';
 
 /**
- * The four content flags, off.
+ * The content flags, off.
  *
- * Keyed on `CONTENT_CAPTURE_KEYS` rather than spelled loose, so a fifth content
- * flag added there fails to compile here instead of quietly escaping the gate.
+ * Keyed on `CONTENT_CAPTURE_KEYS` rather than spelled loose, so a content flag
+ * added there fails to compile here instead of quietly escaping the gate.
  * At module scope because it is a constant, not a per-parse allocation
  * (STYLEGUIDE 3.1).
  */
 const CONTENT_OFF: Readonly<Record<(typeof CONTENT_CAPTURE_KEYS)[number], false>> = {
-  prompts: false,
-  responses: false,
   toolInput: false,
   toolOutput: false
 };
 
 /**
- * Content is opt-IN; metadata stays on.
+ * Developer prompts are never collected; tool content is opt-IN; metadata stays on.
  *
- * The first four flags carry raw content off the machine — what the developer
- * typed, what the agent answered, what went into and came out of a tool. That
- * is the material an IT review will not wave through, so nothing ships it
- * unless someone deliberately turned it on. `git` and `files` are a different
- * kind of thing: they gate the repo/branch/SHA and the per-file *path*, which
- * is metadata about where work happened, not the work itself — and it is what
+ * There is no prompt or response flag, and that is the point: what the developer
+ * typed and what the agent answered never leave the machine, under any
+ * configuration. An older config's `prompts` / `responses` keys are stripped
+ * here, and the next `setup` removes them from the file.
+ *
+ * `toolInput` and `toolOutput` carry what went into and came out of a tool —
+ * material an IT review will not wave through, so nothing ships it unless
+ * someone deliberately turned it on. `git` and `files` are a different kind of
+ * thing: they gate the repo/branch/SHA and the per-file *path*, which is
+ * metadata about where work happened, not the work itself — and it is what
  * feature and project attribution is made of, so it stays on by default.
  *
- * Independent of all six: `contentEvidence()` still records a length and a
+ * Independent of all four: `contentEvidence()` still records a length and a
  * SHA-256 of prompts and responses (never the text), and the sanitizer scrubs
  * secrets from whatever does get sent.
  *
- * The four content flags are gated a second time by the global
- * `contentCaptureConsent` marker below: a config carrying `prompts: true`
+ * The two tool flags are gated a second time by the global
+ * `contentCaptureConsent` marker below: a config carrying `toolInput: true`
  * without it collects nothing, which is what keeps an upgrade of an older
  * install from silently continuing to ship content.
  */
 export const captureSchema = z
   .object({
-    prompts: z.boolean().default(false),
-    responses: z.boolean().default(false),
     toolInput: z.boolean().default(false),
     toolOutput: z.boolean().default(false),
     git: z.boolean().default(true),

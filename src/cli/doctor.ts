@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { selectRoot } from '../config/root-config.js';
 import { enabledSignalNames, enforcementUrl, eventsUrl, otlpBaseUrl } from '../config/config.js';
 import { loadEffectiveConfig } from '../config/repo-config.js';
+import { storedRetiredCapture } from '../config/config-store.js';
 import { CONTENT_CAPTURE_KEYS } from '../config/constants/config.constants.js';
 import type { AgentWatchConfig, CaptureConfig, OtelConfig, OtelSignalName } from '../config/types/config.types.js';
 import type { Env } from '../core/types/core.types.js';
@@ -55,7 +56,8 @@ export async function runDoctor(env: Env, options: DoctorOptions = {}): Promise<
   const gated = await withheldNativeSignals(env, context.config);
   const checks: Check[] = [
     { name: 'AgentWatch operation', level: context.disabled ? 'warn' : 'ok', detail: context.disabled ? 'DISABLED; restart running agents to stop native exporters' : 'enabled' },
-    { name: 'content capture consent', level: 'ok', detail: context.config.contentCaptureConsent ? 'granted globally' : 'absent — content disabled, including legacy capture flags' },
+    { name: 'content capture consent', level: 'ok', detail: context.config.contentCaptureConsent ? 'granted globally (tool content only; prompts and responses are never collected)' : 'absent — tool content disabled; prompts and responses are never collected' },
+    retiredCaptureCheck(await storedRetiredCapture(context.paths)),
     nativePrivacyCheck(gated),
     nodeVersionCheck(),
     configurationCheck(context),
@@ -95,7 +97,7 @@ export async function runDoctor(env: Env, options: DoctorOptions = {}): Promise<
  *
  * Asks every configurator its own rule rather than keying on `otel.logs` and
  * one global predicate: Codex drops logs *and* traces together on the two tool
- * flags, Gemini drops traces without prompt/response consent even when its logs
+ * flags, Gemini never gets traces (they can carry prompts) even when its logs
  * are allowed, and a provider with per-field switches — Claude — answers
  * nothing. Keying on `otel.logs` alone reported "compatible" for both of the
  * cases above while the exporters were in fact being withheld.
@@ -133,8 +135,29 @@ function nativePrivacyCheck(gated: readonly string[]): Check {
     level: gated.length > 0 ? 'warn' : 'ok',
     detail:
       gated.length > 0
-        ? `native signals withheld because provider telemetry can contain prompts and tool arguments/results: ${gated.join('; ')}; grant the matching global capture consent to enable them`
+        ? `native signals withheld because provider telemetry can contain prompts or tool arguments/results: ${gated.join('; ')}; tool-content consent enables Codex and Gemini logs, nothing enables signals that carry prompts`
         : 'requested native signals are compatible with current global content consent'
+  };
+}
+
+/**
+ * Name retired prompt/response flags still written in the global config.
+ *
+ * They collect nothing whatever their value — the schema strips them — but a
+ * file that still says `prompts: true` reads as opted in to anyone auditing the
+ * machine. The next `agentwatch setup` removes them.
+ *
+ * @param retired - Retired keys present on disk.
+ * @returns The check.
+ */
+function retiredCaptureCheck(retired: readonly string[]): Check {
+  return {
+    name: 'retired capture flags',
+    level: retired.length > 0 ? 'warn' : 'ok',
+    detail:
+      retired.length > 0
+        ? `capture ${retired.join(', ')} still in the config but ignored — prompt and response text is never collected; run \`agentwatch setup\` to remove them`
+        : 'none; prompt and response text is never collected'
   };
 }
 

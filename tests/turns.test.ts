@@ -967,3 +967,195 @@ describe('a turn summary for a developer nobody has named', () => {
     expect(summary.developer_name).toBeUndefined();
   });
 });
+
+describe('a turn of a session started above its repositories', () => {
+  let world: TempWorld;
+  let workspace: string;
+
+  /** `<home>/code` holding two real repositories, and no repository itself. */
+  beforeEach(async () => {
+    world = await makeTempEnv();
+    // realpath: on macOS the temp root is a symlink and git reports the
+    // resolved root, which would not relativize against the payload's paths.
+    workspace = path.join(await fs.realpath(world.home), 'code');
+
+    await initRepository('repo-a', 'AWT-75-workspace-sessions');
+    await initRepository('repo-b', 'main');
+
+    const paths = resolvePaths(world.env);
+
+    await writeJson(paths.configFile, { ...defaultConfig(), developerEmail: 'dev@company.com' });
+  });
+  afterEach(() => world.cleanup());
+
+  async function initRepository(name: string, branch: string): Promise<void> {
+    const root = path.join(workspace, name);
+
+    await fs.mkdir(path.join(root, 'src'), { recursive: true });
+    await fs.writeFile(path.join(root, 'README.md'), `# ${name}\n`);
+
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'pipe', env: { ...process.env, HOME: world.home } });
+
+    git('init', '-q', '-b', branch);
+    git('config', 'user.email', 'dev@company.com');
+    git('config', 'user.name', 'Dev');
+    git('add', '.');
+    git('commit', '-qm', 'one');
+  }
+
+  /** One hook invocation from the workspace folder, and the summary it queued. */
+  async function hook(payload: Record<string, unknown>): Promise<any> {
+    const paths = resolvePaths(world.env);
+    const before = new Set(await queueEntryFiles(paths.queueDir));
+
+    expect(await runHook('claude', { env: world.env, input: JSON.stringify({ ...payload, cwd: workspace }) })).toBe(0);
+
+    const added = (await queueEntryFiles(paths.queueDir)).filter((file) => !before.has(file));
+    const events = await Promise.all(added.map(async (file) => JSON.parse(await fs.readFile(file, 'utf8')).event));
+
+    return events.find((event: any) => event.event.type === 'turn.summary');
+  }
+
+  function toolCall(tool: string, filePath: string, id: string): Record<string, unknown> {
+    return {
+      hook_event_name: 'PostToolUse',
+      session_id: 'sess-ws',
+      prompt_id: 'p1',
+      tool_name: tool,
+      tool_use_id: id,
+      tool_input: { file_path: path.join(workspace, filePath) }
+    };
+  }
+
+  const prompt = { hook_event_name: 'UserPromptSubmit', session_id: 'sess-ws', prompt_id: 'p1', prompt: 'fix the totals' };
+  const stop = { hook_event_name: 'Stop', session_id: 'sess-ws', prompt_id: 'p1' };
+
+  it("reports the repository it edited most, with only that repository's paths", async () => {
+    await hook(prompt);
+
+    for (const [index, file] of ['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts'].entries()) {
+      await hook(toolCall('Edit', `repo-a/src/${file}`, `t${index}`));
+    }
+
+    await hook(toolCall('Edit', 'repo-b/src/z.ts', 't5'));
+
+    const summary = await hook(stop);
+
+    expect(summary.repository).toBe('repo-a');
+    expect(summary.branch).toBe('AWT-75-workspace-sessions');
+    expect(summary.commit).toMatch(/^[0-9a-f]{40}$/);
+    // The branch names a ticket, which is what places the session on a feature.
+    expect(summary.jira_ids).toEqual(['AWT-75']);
+    // The turn declares one repository: repo-b's path is a wrong vote in the
+    // placement corpus and is dropped, while the call itself still counts.
+    expect(summary.files_touched).toEqual(['src/a.ts', 'src/b.ts', 'src/c.ts', 'src/d.ts', 'src/e.ts']);
+    expect(summary.tool_calls).toBe(6);
+    expect(summary.tools_used).toEqual({ Edit: 6 });
+    // SOC 2, data minimization: the summary names no absolute path at all.
+    expect(JSON.stringify(summary)).not.toContain(workspace);
+  });
+
+  it('falls back to the repository it read most when it edited nothing', async () => {
+    await hook(prompt);
+    await hook(toolCall('Read', 'repo-a/src/a.ts', 't0'));
+    await hook(toolCall('Read', 'repo-b/src/y.ts', 't1'));
+    await hook(toolCall('Read', 'repo-b/src/z.ts', 't2'));
+
+    const summary = await hook(stop);
+
+    expect(summary.repository).toBe('repo-b');
+    expect(summary.branch).toBe('main');
+    expect(summary.files_read).toEqual(['src/y.ts', 'src/z.ts']);
+    expect(summary.files_touched).toBeUndefined();
+  });
+
+  it('gives a tie on edit count to the repository edited first', async () => {
+    await hook(prompt);
+    await hook(toolCall('Read', 'repo-b/src/z.ts', 't0'));
+    await hook(toolCall('Edit', 'repo-a/src/a.ts', 't1'));
+    await hook(toolCall('Edit', 'repo-b/src/z.ts', 't2'));
+
+    const summary = await hook(stop);
+
+    // One edit each. Reading repo-b first does not make it the winner: only
+    // edits are counted while any edit exists.
+    expect(summary.repository).toBe('repo-a');
+    expect(summary.files_touched).toEqual(['src/a.ts']);
+    expect(summary.files_read).toBeUndefined();
+  });
+
+  it('refuses a repository path out of turn state that climbs out of the start folder', async () => {
+    // Turn state is a file on disk between hook invocations. A record naming
+    // `../repo-a` would point git at a directory outside the session's own
+    // workspace — another project's, possibly another tenant's.
+    const paths = resolvePaths(world.env);
+    const store = new TurnStateStore(paths.turnsDir);
+    const config = configSchema.parse({ ...defaultConfig(), developerEmail: 'dev@company.com' });
+    const inner = path.join(workspace, 'repo-a');
+    const at = new Date().toISOString();
+
+    await store.append('sess-escape', 'p', { kind: 'prompt', at, turnId: 'turn-42' });
+    await store.append('sess-escape', 't', { kind: 'tool', at, turnId: 'turn-42', tool: 'Edit', filePath: 'src/a.ts', repositoryPath: '../repo-b', access: 'edit' });
+
+    const summary = await trackTurn({
+      agentId: 'codex',
+      rawPayload: {},
+      // A session started *inside* repo-a, whose state names a sibling.
+      events: parseCodexHookEvent({ ...codexStop, session_id: 'sess-escape', cwd: inner }, { env: world.env, config }),
+      config,
+      turnsDir: paths.turnsDir,
+      locksDir: paths.locksDir,
+      env: world.env,
+      cwd: inner
+    });
+
+    expect(summary).toBeDefined();
+    expect(summary!.repository).toBeUndefined();
+  });
+
+  it('still emits the summary when a record on disk names a repository of the wrong type', async () => {
+    // Records are read back with only `kind` and `at` validated, so a garbled
+    // write can carry anything. A throw here would lose the whole summary and
+    // leave the turn's records to be folded into the next one.
+    const paths = resolvePaths(world.env);
+    const store = new TurnStateStore(paths.turnsDir);
+    const config = configSchema.parse({ ...defaultConfig(), developerEmail: 'dev@company.com' });
+    const at = new Date().toISOString();
+
+    await store.append('sess-garbled', 'p', { kind: 'prompt', at, turnId: 'turn-42' });
+    await store.append('sess-garbled', 't', { kind: 'tool', at, turnId: 'turn-42', tool: 'Edit', filePath: 'src/a.ts', repositoryPath: 123, access: 'edit' } as any);
+
+    const summary = await trackTurn({
+      agentId: 'codex',
+      rawPayload: {},
+      events: parseCodexHookEvent({ ...codexStop, session_id: 'sess-garbled', cwd: workspace }, { env: world.env, config }),
+      config,
+      turnsDir: paths.turnsDir,
+      locksDir: paths.locksDir,
+      env: world.env,
+      cwd: workspace
+    });
+
+    expect(summary).toBeDefined();
+    expect(summary!.repository).toBeUndefined();
+    expect(summary!.tool_calls).toBe(1);
+  });
+
+  it('reports no repository when the turn touched none beneath the start folder', async () => {
+    // Outside the start folder entirely: the file's own repository, if it has
+    // one, is another project's — possibly another tenant's.
+    const outside = path.join(await fs.realpath(world.home), 'elsewhere');
+
+    await fs.mkdir(outside, { recursive: true });
+    await hook(prompt);
+    await hook({ ...toolCall('Edit', 'loose.md', 't0'), tool_input: { file_path: path.join(outside, 'notes.md') } });
+
+    const summary = await hook(stop);
+
+    expect(summary.repository).toBeUndefined();
+    expect(summary.branch).toBeUndefined();
+    expect(summary.jira_ids).toBeUndefined();
+    // Exactly today's answer for a path the edge cannot place: the basename.
+    expect(summary.files_touched).toEqual(['notes.md']);
+  });
+});

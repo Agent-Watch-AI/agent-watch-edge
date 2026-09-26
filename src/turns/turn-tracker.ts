@@ -1,10 +1,15 @@
+import path from 'node:path';
 import { pollUntil } from '../core/async.js';
 import { debugLog } from '../core/logger.js';
 import { asRecord } from '../core/object.js';
 import { detectBillingMode } from '../billing/billing-mode.js';
-import type { AgentWatchEvent, ContentEvidence, UsageBillingMode } from '../events/types/events.types.js';
+import type { AgentWatchEvent, ContentEvidence, EventGit, FeatureCandidate, UsageBillingMode } from '../events/types/events.types.js';
 import { sha256Hex } from '../events/event-id.js';
-import { developerDisplayName, developerIdentity } from '../git/git-context.js';
+import { REPOSITORY_PATH_METADATA_KEY } from '../events/constants/enrich.constants.js';
+import { featureCandidatesFromBranch } from '../feature/ticket-candidates.js';
+import { collectGitContext, developerDisplayName, developerIdentity } from '../git/git-context.js';
+import { isBeneath } from '../git/repository-root.js';
+import type { GitContext } from '../git/types/git.types.js';
 import { sanitizeValue } from '../privacy/sanitizer.js';
 import { acquireLock } from '../storage/lock.js';
 import type { ReleaseLock } from '../storage/types/storage.types.js';
@@ -285,6 +290,12 @@ async function closeTurnLocked(
   // watched the transcript still belongs to this turn.
   const mine = filterTurn(await store.collectEntries(sessionId), stopTurnId);
   const records = mine.map((entry) => entry.record);
+  const tools = recordsOfKind<ToolRecord>(records, 'tool');
+  // A session started above its repositories arrives with no repository at all.
+  // Which one this turn worked in is answerable only here, where every tool
+  // call of the turn is in hand — and this is the one hook that may pay for a
+  // git process, because it already does.
+  const workspace = stopEvent.git?.repository ? undefined : await resolveWorkspaceRepository(tools, options);
   // Usage is mirrored onto a *copy* of the Stop event: the summary's model
   // should come from the transcript when the transcript knows better, and
   // rewriting an event another stage may still be reading is not an option.
@@ -305,10 +316,10 @@ async function closeTurnLocked(
     developerId,
     developerName,
     installationId: options.config.installationId,
-    git: stopEvent.git,
-    featureCandidates: stopEvent.feature?.candidates,
+    git: workspace?.git ?? stopEvent.git,
+    featureCandidates: workspace?.featureCandidates ?? stopEvent.feature?.candidates,
     prompts: recordsOfKind<PromptRecord>(records, 'prompt'),
-    tools: recordsOfKind<ToolRecord>(records, 'tool'),
+    tools: workspace?.tools ?? tools,
     response: resolveResponse(stopEvent, records),
     usage,
     model: resolvedStop.ai?.model,
@@ -320,6 +331,127 @@ async function closeTurnLocked(
   if (!readOnly) await store.remove(mine.map((entry) => entry.file));
 
   return sanitizeValue(summary);
+}
+
+/** What a workspace session's turn resolved to: one repository, and its paths. */
+interface WorkspaceRepository {
+  readonly git: EventGit;
+  readonly featureCandidates?: readonly FeatureCandidate[];
+  /** The turn's tools with the losing repositories' paths dropped. */
+  readonly tools: readonly ToolRecord[];
+}
+
+/**
+ * The repository a turn worked in, for a session started above its
+ * repositories.
+ *
+ * The turn declares one repository, so the paths it touched in any other are
+ * dropped from its file lists: a path relative to a different root is a wrong
+ * vote in the placement corpus. `tool_calls` and `tools_used` still count every
+ * call — the work happened.
+ *
+ * Every failure here answers "no repository", which is exactly what the turn
+ * reported before this existed.
+ *
+ * @param tools - The turn's tool records.
+ * @param options - Tracking options; `cwd` is the folder the session started in.
+ * @returns The resolved repository, or undefined when no candidate qualifies.
+ */
+async function resolveWorkspaceRepository(tools: readonly ToolRecord[], options: TrackTurnOptions): Promise<WorkspaceRepository | undefined> {
+  const winner = winningRepositoryPath(tools);
+
+  if (winner === undefined) return undefined;
+
+  const root = path.join(options.cwd, winner);
+
+  // Turn state is a file on disk between hook invocations, so the path it
+  // names is checked here too rather than trusted: a repository is always
+  // beneath the folder the session started in, and a value that is not would
+  // point git at somebody else's directory.
+  if (!isBeneath(options.cwd, root)) return undefined;
+
+  const git: GitContext = await collectGitContext({
+    cwd: root,
+    includeChangedFiles: options.config.capture.files
+  }).catch(() => ({}));
+
+  if (!git.repositoryRoot) return undefined;
+
+  const candidates = featureCandidatesFromBranch(git.branch);
+
+  return {
+    // Field by field, and no repositoryRoot: nothing absolute is sent.
+    git: {
+      repository: git.repository,
+      repositoryHash: git.repositoryHash,
+      remote: git.remote,
+      branch: git.branch,
+      commit: git.commit,
+      changedFiles: git.changedFiles
+    },
+    featureCandidates: candidates.length > 0 ? candidates : undefined,
+    tools: tools.map((record) => (record.repositoryPath === winner ? record : { ...record, filePath: undefined }))
+  };
+}
+
+/**
+ * Which repository this turn worked in: the one it edited most, or — having
+ * edited nowhere — the one it read most. A tie goes to the one touched first,
+ * since nothing else about two tied repositories distinguishes them.
+ *
+ * @param tools - The turn's tool records.
+ * @returns The winning repository path, or undefined when no tool named one.
+ */
+function winningRepositoryPath(tools: readonly ToolRecord[]): string | undefined {
+  const edited = new Map<string, Set<string>>();
+  const read = new Map<string, Set<string>>();
+
+  for (const tool of tools) {
+    // Typed, not just truthy: these records are read back off disk, where the
+    // only shape check is `kind` and `at`. A non-string that reached
+    // `path.join` below would throw, and a throw here costs the whole summary.
+    if (typeof tool.repositoryPath !== 'string' || !tool.repositoryPath || typeof tool.filePath !== 'string') continue;
+
+    // Distinct files, not tool calls: five edits of one file is one file's
+    // worth of evidence, and a legacy record without an access marker counts
+    // as an edit exactly as files_touched treats it.
+    const counts = tool.access === 'read' ? read : edited;
+    const files = counts.get(tool.repositoryPath) ?? new Set<string>();
+
+    files.add(tool.filePath);
+    counts.set(tool.repositoryPath, files);
+  }
+
+  return mostFiles(edited) ?? mostFiles(read);
+}
+
+/**
+ * The repository with the most distinct files, first-seen winning a tie.
+ *
+ * @param counts - Repository path → its distinct files, in first-seen order.
+ * @returns The winner, or undefined when nothing was counted.
+ */
+function mostFiles(counts: ReadonlyMap<string, ReadonlySet<string>>): string | undefined {
+  let winner: string | undefined;
+  let best = 0;
+
+  // Insertion order is first-seen order, and the comparison is strict, so the
+  // earliest of the tied repositories keeps the win.
+  //
+  // ponytail: "first" is only as fine-grained as the records are ordered, and
+  // they are sorted by their ISO-millisecond `at`. Two tool calls in different
+  // repositories inside one millisecond fall back to filename order, so a tie
+  // between them is not guaranteed stable. The upgrade path is a monotonic
+  // sequence number on the record, which every other ordering here would want
+  // too.
+  for (const [repositoryPath, files] of counts) {
+    if (files.size <= best) continue;
+
+    winner = repositoryPath;
+    best = files.size;
+  }
+
+  return winner;
 }
 
 /**
@@ -577,6 +709,7 @@ function promptRecord(event: AgentWatchEvent): PromptRecord {
  */
 function toolRecord(event: AgentWatchEvent): ToolRecord {
   const filePath = event.metadata?.[FILE_PATH_KEY];
+  const repositoryPath = event.metadata?.[REPOSITORY_PATH_METADATA_KEY];
 
   return {
     kind: 'tool',
@@ -584,6 +717,7 @@ function toolRecord(event: AgentWatchEvent): ToolRecord {
     turnId: event.session.turnId,
     tool: event.tool?.name,
     filePath: typeof filePath === 'string' ? filePath : undefined,
+    repositoryPath: typeof repositoryPath === 'string' ? repositoryPath : undefined,
     access: accessFor(event.event.type)
   };
 }

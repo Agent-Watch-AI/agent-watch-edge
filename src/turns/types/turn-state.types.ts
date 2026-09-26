@@ -16,6 +16,16 @@ export interface ToolRecord {
   readonly tool?: string;
   readonly filePath?: string;
   /**
+   * Which repository `filePath` is relative to, itself relative to the folder
+   * the session started in — set only for a session started *above* its
+   * repositories, where the start folder is not one.
+   *
+   * Never absolute, in local state as on the wire: it exists so the closing
+   * turn can decide which repository the turn worked in, and the start folder
+   * is the same for every hook of a session.
+   */
+  readonly repositoryPath?: string;
+  /**
    * Reads and edits are different product signals: a file the agent merely
    * read must not appear in the summary's files_touched (modified) list.
    */

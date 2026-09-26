@@ -171,7 +171,9 @@ token — or by hand:
 
 Longest match wins. Point a root at the directory the agent actually opens: a session started one
 level above it does not match. Only identity varies per root — capture and OTel signals stay
-machine-wide, so `--otel` is refused together with `--root`.
+machine-wide, so `--otel` is refused together with `--root`. A session started above its
+repositories reports the repository each turn worked in, but that changes nothing here: the start
+folder alone decides which root, and therefore which tenant, a session belongs to.
 
 The offline queue is partitioned to match (`<data>/queue/<digest-of-token>/`), as are the backend
 cooldown and the loss tally, so a drain only ever sends the backlog belonging to the token it signs

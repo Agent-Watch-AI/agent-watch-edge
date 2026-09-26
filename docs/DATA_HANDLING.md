@@ -165,6 +165,25 @@ Branches, commit SHAs, ticket keys and file paths are metadata, not anonymous da
 Paths are made repository-relative where possible; paths outside the repository
 can remain absolute, with the home prefix abbreviated.
 
+A session started *above* its repositories — in a workspace folder holding
+several, which is not itself a repository — used to send each path as a bare
+basename and no repository at all. It now reports, per turn, the repository
+beneath the start folder that the turn edited most (read most, when it edited
+nothing), that repository's branch and commit, and its paths relative to that
+repository's root: more than a basename, less than an absolute path. No new
+class of data is collected — repository, branch and commit are already sent for
+a session started inside a repository. Only repositories whose root lies beneath
+the start folder are resolved, and a file anywhere else contributes no
+repository; when a turn does report one, its file lists carry that repository's
+paths and nothing else. The repository is named relative to the start folder in
+local turn state as well, so nothing absolute is written there either.
+
+This resolution reads the file paths the agent's tools named, so it follows
+`capture.files`: with `capture.files: false` no path is captured, and a session
+started above its repositories then reports no repository or branch — as it did
+before. A session started inside a repository is unaffected, since its
+repository comes from the start folder rather than from any path.
+
 ## Identity, local storage, and credentials
 
 Developer identity is the configured `developerEmail`, falling back to Git email

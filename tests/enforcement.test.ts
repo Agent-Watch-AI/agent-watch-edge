@@ -12,6 +12,7 @@ import { DecisionCache, decisionKey } from '../src/enforcement/decision-cache.js
 import { ENFORCEMENT_CACHE_FILE_NAME } from '../src/enforcement/constants/enforcement.constants.js';
 import { SESSION_MODEL_FILE } from '../src/turns/constants/turns.constants.js';
 import { resolvePaths } from '../src/storage/paths.js';
+import { IDENTITY_STATE_DIR_NAME } from '../src/transport/constants/transport.constants.js';
 import { TurnStateStore } from '../src/turns/turn-state.js';
 import { antigravityPreTool } from './fixtures/antigravity.js';
 import { cursorBeforeSubmitPrompt } from './fixtures/cursor.js';
@@ -92,6 +93,15 @@ describe('enforcement decision', () => {
   }
 
   describe('only an explicit block blocks', () => {
+    // Each failure trips the breaker and an allow is cached; either would skip
+    // every case after it, so clearing both keeps each one an actual request.
+    const resetState = async () => {
+      const { dataDir } = resolvePaths(world.env);
+
+      await fs.rm(path.join(dataDir, IDENTITY_STATE_DIR_NAME), { recursive: true, force: true });
+      await fs.rm(path.join(dataDir, ENFORCEMENT_CACHE_FILE_NAME), { force: true });
+    };
+
     it('blocks on a decision that carries a message', async () => {
       const server = answering({ decision: 'block', message: MESSAGE });
 
@@ -120,7 +130,10 @@ describe('enforcement decision', () => {
       for (const status of [400, 401, 403, 404, 429, 500, 503]) {
         const server = answering({ decision: 'block', message: MESSAGE }, status);
 
+        await resetState();
+
         expect(await ask({}, server.fetchFn)).toEqual({ decision: 'allow' });
+        expect(server.calls()).toBe(1);
       }
     });
 
@@ -142,7 +155,10 @@ describe('enforcement decision', () => {
       for (const body of bodies) {
         const server = answering(body);
 
+        await resetState();
+
         expect(await ask({}, server.fetchFn)).toEqual({ decision: 'allow' });
+        expect(server.calls()).toBe(1);
       }
     });
 
@@ -189,12 +205,12 @@ describe('enforcement decision', () => {
       const options = { config: config(), paths: resolvePaths(world.env), developerId: DEVELOPER, now: () => clock, fetchFn: server.fetchFn };
 
       await resolveEnforcement(options);
-      clock = new Date('2026-08-26T10:00:59.000Z');
+      clock = new Date('2026-08-26T10:00:04.000Z');
       await resolveEnforcement(options);
 
       expect(server.calls()).toBe(1);
 
-      clock = new Date('2026-08-26T10:01:01.000Z');
+      clock = new Date('2026-08-26T10:00:06.000Z');
 
       expect(await resolveEnforcement(options)).toEqual({ decision: 'block', message: MESSAGE });
       expect(server.calls()).toBe(2);
@@ -226,7 +242,21 @@ describe('enforcement decision', () => {
       const options = { config: config(), paths: resolvePaths(world.env), developerId: DEVELOPER, now: () => clock, fetchFn: server.fetchFn };
 
       await resolveEnforcement(options);
-      clock = new Date('2026-08-26T10:01:01.000Z');
+      clock = new Date('2026-08-26T10:00:06.000Z');
+      await resolveEnforcement(options);
+
+      expect(server.calls()).toBe(2);
+    });
+
+    it('never holds an answer past the promised window, whatever the config says', async () => {
+      let clock = new Date('2026-08-26T10:00:00.000Z');
+      const server = answering({ decision: 'allow' });
+      // What every earlier install wrote into its config file: saveConfig
+      // persists defaults, so the old 60 s default is on disk everywhere.
+      const options = { config: config({ enforcement: { cacheTtlMs: 60_000 } }), paths: resolvePaths(world.env), developerId: DEVELOPER, now: () => clock, fetchFn: server.fetchFn };
+
+      await resolveEnforcement(options);
+      clock = new Date('2026-08-26T10:00:06.000Z');
       await resolveEnforcement(options);
 
       expect(server.calls()).toBe(2);
@@ -238,7 +268,7 @@ describe('enforcement decision', () => {
       const options = { config: config(), paths: resolvePaths(world.env), developerId: DEVELOPER, now: () => clock, fetchFn: server.fetchFn };
 
       await resolveEnforcement(options);
-      clock = new Date('2026-08-26T10:00:30.000Z');
+      clock = new Date('2026-08-26T10:00:04.000Z');
       await resolveEnforcement(options);
 
       expect(server.calls()).toBe(1);
@@ -253,7 +283,7 @@ describe('enforcement decision', () => {
       // how long to keep it does not get a vote on whether it is readable.
       expect(await resolveEnforcement(options)).toEqual({ decision: 'block', message: MESSAGE });
 
-      clock = new Date('2026-08-26T10:00:30.000Z');
+      clock = new Date('2026-08-26T10:00:04.000Z');
       await resolveEnforcement(options);
 
       // And with no usable advice, the configured TTL is what applies.

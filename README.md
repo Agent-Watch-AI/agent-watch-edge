@@ -205,7 +205,7 @@ before the agent's first LLM call, in the agent's own protocol (Claude Code, Cod
 CLI), with the backend's explanation shown to the developer.
 
 ```json
-{ "enforcement": { "enabled": true, "timeoutMs": 300, "cacheTtlMs": 60000 } }
+{ "enforcement": { "enabled": true, "timeoutMs": 300, "cacheTtlMs": 5000 } }
 ```
 
 The check **fails open, always.** A turn stops only on an explicit

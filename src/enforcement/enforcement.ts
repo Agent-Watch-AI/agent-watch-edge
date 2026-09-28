@@ -1,8 +1,19 @@
 import path from 'node:path';
 import { enforcementUrl } from '../config/config.js';
+import { ENFORCEMENT_WINDOW_MS } from '../config/constants/config.constants.js';
 import type { AgentWatchConfig } from '../config/types/config.types.js';
 import { debugLog } from '../core/logger.js';
-import { ALLOW, ENFORCEMENT_CACHE_FILE_NAME } from './constants/enforcement.constants.js';
+import { sha256Hex } from '../events/event-id.js';
+import { BackendCooldown } from '../transport/cooldown.js';
+import { identityPaths } from '../transport/queue-partition.js';
+import {
+  ALLOW,
+  ENFORCEMENT_CACHE_FILE_NAME,
+  ENFORCEMENT_COOLDOWN_FILE_PREFIX,
+  ENFORCEMENT_COOLDOWN_FILE_SUFFIX,
+  ENFORCEMENT_COOLDOWN_MS,
+  ENFORCEMENT_COOLDOWN_URL_CHARS
+} from './constants/enforcement.constants.js';
 import { DecisionCache, decisionKey } from './decision-cache.js';
 import { requestDecision } from './decision-client.js';
 import type { EnforcementDecision, EnforcementOptions } from './types/enforcement.types.js';
@@ -63,7 +74,8 @@ export function enforcementWouldAsk(config: AgentWatchConfig): boolean {
  *
  * A miss asks the platform and stores whatever it answered. A *failure* is not
  * stored: it is not a decision, and caching it as an allow would extend one
- * unreachable moment across the whole TTL.
+ * unreachable moment across the whole TTL. It trips the breaker instead, so the
+ * turns after it skip the wait rather than each paying the timeout again.
  *
  * @param options - As given to {@link resolveEnforcement}.
  * @param url - The decision endpoint.
@@ -83,6 +95,16 @@ async function decideThroughCache(
 
   if (cached) return cached;
 
+  const cooldown = new BackendCooldown(enforcementCooldownFile(options, url, token), options.now);
+
+  // Skipping is the only thing the breaker does: the turn gets the same allow a
+  // timeout would have given it, without the wait.
+  if (await cooldown.active()) {
+    debugLog('enforcement: breaker open; allowing without asking');
+
+    return ALLOW;
+  }
+
   const answered = await requestDecision({
     url,
     token,
@@ -94,7 +116,13 @@ async function decideThroughCache(
     fetchFn: options.fetchFn
   });
 
-  if (!answered) return ALLOW;
+  if (!answered) {
+    await cooldown.trip(ENFORCEMENT_COOLDOWN_MS);
+
+    return ALLOW;
+  }
+
+  await cooldown.clear();
 
   const { cacheTtlMs, ...decision } = answered;
   const ttlMs = effectiveTtlMs(cacheTtlMs, options.config.enforcement.cacheTtlMs);
@@ -118,6 +146,24 @@ async function decideThroughCache(
 }
 
 /**
+ * The enforcement breaker's file for this identity and endpoint.
+ *
+ * Per identity for the reason delivery's is: one tenant's unreachable platform
+ * or revoked token must not skip another tenant's checks. Per endpoint because
+ * one identity reaching two platforms must not let one's outage skip the other.
+ *
+ * @param options - As given to {@link resolveEnforcement}.
+ * @param url - The decision endpoint.
+ * @param token - Edge token the request is made with.
+ * @returns Absolute path of the state file.
+ */
+function enforcementCooldownFile(options: EnforcementOptions, url: string, token: string): string {
+  const name = ENFORCEMENT_COOLDOWN_FILE_PREFIX + sha256Hex(url).slice(0, ENFORCEMENT_COOLDOWN_URL_CHARS) + ENFORCEMENT_COOLDOWN_FILE_SUFFIX;
+
+  return path.join(path.dirname(identityPaths(options.paths, token).cooldownFile), name);
+}
+
+/**
  * How long this answer may be reused.
  *
  * The platform asks for a TTL because it is the side that knows how close the
@@ -127,14 +173,16 @@ async function decideThroughCache(
  * configured ceiling, which is what keeps the setting meaningful.
  *
  * No advice means the configured value, which is what a platform that predates
- * the field produces.
+ * the field produces. Neither may exceed the promised window.
  *
  * @param asked - What the platform asked for, if anything.
  * @param configured - This machine's own TTL, and its ceiling.
  * @returns The TTL to store the entry with.
  */
 function effectiveTtlMs(asked: number | undefined, configured: number): number {
-  if (asked === undefined) return configured;
+  const ceiling = Math.min(configured, ENFORCEMENT_WINDOW_MS);
 
-  return Math.min(asked, configured);
+  if (asked === undefined) return ceiling;
+
+  return Math.min(asked, ceiling);
 }

@@ -2,7 +2,7 @@ import { debugLog } from '../core/logger.js';
 import { edgeHeaders } from '../transport/headers.js';
 import { BODY_TOO_LARGE } from '../transport/constants/transport.constants.js';
 import { discardResponseBody, readCappedJson } from '../transport/response-body.js';
-import { BRANCH_PARAM, DEVELOPER_ID_PARAM, MODEL_PARAM, REPOSITORY_PARAM, SYNTAX_ERROR_NAME, TIMEOUT_ERROR_NAME } from './constants/enforcement.constants.js';
+import { BRANCH_PARAM, DEVELOPER_ID_PARAM, MODEL_PARAM, REPOSITORY_PARAM, SYNTAX_ERROR_NAME, TIMEOUT_ERROR_NAMES } from './constants/enforcement.constants.js';
 import { cacheTtlSchema, decisionSchema } from './schemas/enforcement.schema.js';
 import type { DecisionOutcome, DecisionRequest, FailOpenReason } from './types/enforcement.types.js';
 
@@ -68,7 +68,7 @@ function thrownReason(error: unknown): FailOpenReason {
   // injected by a test or a polyfill need not share this realm's Error.
   const thrown = typeof error === 'object' && error !== null ? (error as Partial<Error>) : {};
 
-  if (thrown.name === TIMEOUT_ERROR_NAME) return 'timeout';
+  if (thrown.name !== undefined && TIMEOUT_ERROR_NAMES.has(thrown.name)) return 'timeout';
 
   if (thrown.name === SYNTAX_ERROR_NAME || thrown.message === BODY_TOO_LARGE) return 'unreadable_response';
 

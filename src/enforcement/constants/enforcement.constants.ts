@@ -76,8 +76,13 @@ export const FAIL_OPEN_REASONS: ReadonlySet<FailOpenReason> = new Set<FailOpenRe
   'unknown'
 ]);
 
-/** The error name `AbortSignal.timeout` rejects with. */
-export const TIMEOUT_ERROR_NAME = 'TimeoutError';
+/**
+ * The error names a timed-out request rejects with. `AbortSignal.timeout`
+ * rejects with a TimeoutError, but a body stream cancelled by that signal can
+ * surface as a plain AbortError depending on the runtime — and the timeout is
+ * the only signal this request carries, so either name means it timed out.
+ */
+export const TIMEOUT_ERROR_NAMES: ReadonlySet<string> = new Set(['TimeoutError', 'AbortError']);
 
 /** The error name `JSON.parse` throws on a body that is not JSON. */
 export const SYNTAX_ERROR_NAME = 'SyntaxError';

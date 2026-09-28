@@ -197,6 +197,14 @@ describe('enforcement decision', () => {
 
       expect(await ask({ enforcement: { timeoutMs: 20 } }, slow)).toEqual({ decision: 'allow', failOpenReason: 'timeout' });
     });
+
+    it('reads an AbortError from a body the timeout cancelled as a timeout too', async () => {
+      const stalled = (async () => {
+        throw new DOMException('This operation was aborted', 'AbortError');
+      }) as typeof fetch;
+
+      expect(await ask({}, stalled)).toEqual({ decision: 'allow', failOpenReason: 'timeout' });
+    });
   });
 
   describe('local cache', () => {

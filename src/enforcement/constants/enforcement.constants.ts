@@ -32,8 +32,8 @@ export const ENFORCEMENT_COOLDOWN_FILE_NAME = 'enforcement-cooldown.json';
  * the breaker skips is not checked, so after a blip clears a tenant over its cap
  * can run for up to this long. That is at most a turn or two at human pace, it
  * is the same outcome the failed request itself already produced, and each
- * skipped turn is a fail-open like any other, so it is recorded rather than
- * hidden. Half the delivery breaker's 60 s because an unchecked turn costs a
+ * skipped turn is a fail-open like any other, with the breaker as its reason.
+ * Half the delivery breaker's 60 s because an unchecked turn costs a
  * tenant money and a late event costs nothing.
  */
 export const ENFORCEMENT_COOLDOWN_MS = 30_000;

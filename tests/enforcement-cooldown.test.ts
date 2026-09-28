@@ -39,6 +39,7 @@ describe('enforcement breaker', () => {
     world = await makeTempEnv();
     clock = START;
   });
+
   afterEach(() => world.cleanup());
 
   // A fresh options object per call, and nothing shared but the data directory:

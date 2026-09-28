@@ -16,6 +16,7 @@ export const DEFAULT_MAX_EVENT_AGE_DAYS = 7;
  * number on the path no platform change can shorten. 5 s is the window the
  * product promises between a cap being crossed and the next turn being refused;
  * a local answer held longer than that would break the promise on its own.
+ * It is a default: a machine whose owner configured a longer TTL keeps it.
  */
 export const DEFAULT_ENFORCEMENT_TIMEOUT_MS = 300;
 export const DEFAULT_ENFORCEMENT_CACHE_TTL_MS = 5_000;

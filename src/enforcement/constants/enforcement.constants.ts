@@ -18,9 +18,13 @@ export const ENFORCEMENT_CACHE_FILE_NAME = 'enforcement-cache.json';
 /**
  * The enforcement breaker's file, in the identity's state directory beside the
  * delivery breaker and never the same file: an outage on one path is not an
- * outage on the other, and the two are tripped by different signals.
+ * outage on the other, and the two are tripped by different signals. Suffixed
+ * with a digest of the decision URL, because what the breaker records is that
+ * one endpoint did not answer.
  */
-export const ENFORCEMENT_COOLDOWN_FILE_NAME = 'enforcement-cooldown.json';
+export const ENFORCEMENT_COOLDOWN_FILE_PREFIX = 'enforcement-cooldown-';
+export const ENFORCEMENT_COOLDOWN_FILE_SUFFIX = '.json';
+export const ENFORCEMENT_COOLDOWN_URL_CHARS = 12;
 
 /**
  * How long turns skip the check after the platform failed to answer one: 30 s.

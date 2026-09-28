@@ -13,13 +13,18 @@ export const DEFAULT_MAX_EVENT_AGE_DAYS = 7;
  *
  * The TTL is both the fallback when the platform gives no usable
  * `cache_ttl_ms` and the ceiling on any advice it does give, so it is the one
- * number on the path no platform change can shorten. 5 s is the window the
- * product promises between a cap being crossed and the next turn being refused;
- * a local answer held longer than that would break the promise on its own.
- * It is a default: a machine whose owner configured a longer TTL keeps it.
+ * number on the path no platform change can shorten.
  */
 export const DEFAULT_ENFORCEMENT_TIMEOUT_MS = 300;
 export const DEFAULT_ENFORCEMENT_CACHE_TTL_MS = 5_000;
+
+/**
+ * The window the product promises between a cap being crossed and the next
+ * turn being refused. A local answer held longer would break it on its own, so
+ * this caps the TTL whatever the config says — including the 60 s every earlier
+ * install wrote into its config file, because `saveConfig` persists defaults.
+ */
+export const ENFORCEMENT_WINDOW_MS = 5_000;
 
 /** Native OTLP signal names, in report order. */
 export const OTEL_SIGNAL_NAMES = ['logs', 'traces', 'metrics'] as const;

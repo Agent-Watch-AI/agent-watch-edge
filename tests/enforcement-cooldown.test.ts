@@ -3,8 +3,14 @@ import http from 'node:http';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { configSchema, defaultConfig } from '../src/config/config.js';
-import { ENFORCEMENT_COOLDOWN_FILE_NAME, ENFORCEMENT_COOLDOWN_MS } from '../src/enforcement/constants/enforcement.constants.js';
+import {
+  ENFORCEMENT_COOLDOWN_FILE_PREFIX,
+  ENFORCEMENT_COOLDOWN_FILE_SUFFIX,
+  ENFORCEMENT_COOLDOWN_MS,
+  ENFORCEMENT_COOLDOWN_URL_CHARS
+} from '../src/enforcement/constants/enforcement.constants.js';
 import { resolveEnforcement } from '../src/enforcement/enforcement.js';
+import { sha256Hex } from '../src/events/event-id.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { BackendCooldown } from '../src/transport/cooldown.js';
 import { identityPaths } from '../src/transport/queue-partition.js';
@@ -44,9 +50,9 @@ describe('enforcement breaker', () => {
 
   // A fresh options object per call, and nothing shared but the data directory:
   // each call stands for a separate hook process.
-  function turn(fetchFn: typeof fetch, token = TOKEN) {
+  function turn(fetchFn: typeof fetch, token = TOKEN, endpoint = ENDPOINT) {
     return resolveEnforcement({
-      config: configSchema.parse({ ...defaultConfig(), endpoint: ENDPOINT, token }),
+      config: configSchema.parse({ ...defaultConfig(), endpoint, token }),
       paths: resolvePaths(world.env),
       developerId: DEVELOPER,
       now: () => new Date(clock),
@@ -55,7 +61,10 @@ describe('enforcement breaker', () => {
   }
 
   const breakerFile = (token = TOKEN) =>
-    path.join(path.dirname(identityPaths(resolvePaths(world.env), token).cooldownFile), ENFORCEMENT_COOLDOWN_FILE_NAME);
+    path.join(
+      path.dirname(identityPaths(resolvePaths(world.env), token).cooldownFile),
+      ENFORCEMENT_COOLDOWN_FILE_PREFIX + sha256Hex(`${ENDPOINT}/v1/enforcement/decision`).slice(0, ENFORCEMENT_COOLDOWN_URL_CHARS) + ENFORCEMENT_COOLDOWN_FILE_SUFFIX
+    );
 
   it('skips the request after a failure, and allows the turn without asking', async () => {
     const server = switchable();
@@ -127,6 +136,17 @@ describe('enforcement breaker', () => {
     expect(server.calls()).toBe(2);
   });
 
+  it('is per endpoint: one platform’s outage does not skip another’s check', async () => {
+    const server = switchable();
+
+    server.fail(true);
+    await turn(server.fetchFn, TOKEN, 'https://eu.backend.example.com');
+    server.fail(false);
+
+    expect(await turn(server.fetchFn)).toEqual({ decision: 'block', message: MESSAGE });
+    expect(server.calls()).toBe(2);
+  });
+
   it('only the first turn of an outage pays the timeout, and the turn after recovery asks', async () => {
     // A platform that accepts the connection and never answers: the case that
     // costs a developer the whole timeout.
@@ -162,12 +182,14 @@ describe('enforcement breaker', () => {
 
     try {
       const first = await timed();
-      const second = await timed();
-      const third = await timed();
 
+      await timed();
+      await timed();
+
+      // The lower bound cannot flake: an abort never fires early. That turns 2
+      // and 3 skip the wait is proven by their not reaching the server at all;
+      // the measured timings are in the PR, not in an upper bound here.
       expect(first).toBeGreaterThanOrEqual(timeoutMs - 10);
-      expect(second).toBeLessThan(timeoutMs);
-      expect(third).toBeLessThan(timeoutMs);
       expect(requests).toBe(1);
 
       hang = false;

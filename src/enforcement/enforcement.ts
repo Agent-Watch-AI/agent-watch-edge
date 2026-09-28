@@ -8,6 +8,7 @@ import { BackendCooldown } from '../transport/cooldown.js';
 import { identityPaths } from '../transport/queue-partition.js';
 import {
   ALLOW,
+  DECISION_ALLOW,
   ENFORCEMENT_CACHE_FILE_NAME,
   ENFORCEMENT_COOLDOWN_FILE_PREFIX,
   ENFORCEMENT_COOLDOWN_FILE_SUFFIX,
@@ -16,7 +17,7 @@ import {
 } from './constants/enforcement.constants.js';
 import { DecisionCache, decisionKey } from './decision-cache.js';
 import { requestDecision } from './decision-client.js';
-import type { EnforcementDecision, EnforcementOptions } from './types/enforcement.types.js';
+import type { EnforcementOptions, FailOpenReason, GateDecision } from './types/enforcement.types.js';
 
 /**
  * Whether this developer may start a turn right now.
@@ -28,12 +29,16 @@ import type { EnforcementDecision, EnforcementOptions } from './types/enforcemen
  * front of every developer's tooling, so a check that failed closed would turn
  * an alerts-service hiccup into an outage for a whole engineering organization.
  *
+ * An allow that exists only because nothing answered carries the reason, so
+ * the turn it lets through can say it ran unchecked. An allow because nothing
+ * was asked carries none: there was no check to fail.
+ *
  * Never throws: a caller on the hook path has to answer the agent either way.
  *
  * @param options - Effective config, paths, the identity to ask about, clock.
  * @returns The decision to act on.
  */
-export async function resolveEnforcement(options: EnforcementOptions): Promise<EnforcementDecision> {
+export async function resolveEnforcement(options: EnforcementOptions): Promise<GateDecision> {
   const url = enforcementUrl(options.config);
   const token = options.config.token;
   const developerId = options.developerId;
@@ -46,8 +51,18 @@ export async function resolveEnforcement(options: EnforcementOptions): Promise<E
   } catch (error) {
     debugLog('enforcement: check threw; allowing:', error);
 
-    return ALLOW;
+    return failOpen('unknown');
   }
+}
+
+/**
+ * An allow that stands in for a decision that did not arrive.
+ *
+ * @param reason - Why it did not.
+ * @returns The allow, carrying the reason.
+ */
+function failOpen(reason: FailOpenReason): GateDecision {
+  return { decision: DECISION_ALLOW, failOpenReason: reason };
 }
 
 /**
@@ -88,7 +103,7 @@ async function decideThroughCache(
   url: string,
   token: string,
   developerId: string
-): Promise<EnforcementDecision> {
+): Promise<GateDecision> {
   const cache = new DecisionCache(path.join(options.paths.dataDir, ENFORCEMENT_CACHE_FILE_NAME), options.now);
   const key = decisionKey(url, token, developerId, options.checkout, options.model);
   const cached = await cache.read(key);
@@ -102,10 +117,10 @@ async function decideThroughCache(
   if (await cooldown.active()) {
     debugLog('enforcement: breaker open; allowing without asking');
 
-    return ALLOW;
+    return failOpen('circuit_open');
   }
 
-  const answered = await requestDecision({
+  const outcome = await requestDecision({
     url,
     token,
     developerId,
@@ -116,15 +131,15 @@ async function decideThroughCache(
     fetchFn: options.fetchFn
   });
 
-  if (!answered) {
+  if ('failOpenReason' in outcome) {
     await cooldown.trip(ENFORCEMENT_COOLDOWN_MS);
 
-    return ALLOW;
+    return failOpen(outcome.failOpenReason);
   }
 
   await cooldown.clear();
 
-  const { cacheTtlMs, ...decision } = answered;
+  const { cacheTtlMs, ...decision } = outcome.answered;
   const ttlMs = effectiveTtlMs(cacheTtlMs, options.config.enforcement.cacheTtlMs);
 
   // Zero is the platform saying "do not keep this", which it says to every tenant

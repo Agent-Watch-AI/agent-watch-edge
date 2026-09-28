@@ -2,6 +2,7 @@ import { pollUntil } from '../core/async.js';
 import { debugLog } from '../core/logger.js';
 import { asRecord } from '../core/object.js';
 import { detectBillingMode } from '../billing/billing-mode.js';
+import type { FailOpenReason } from '../enforcement/types/enforcement.types.js';
 import type { AgentWatchEvent, ContentEvidence, UsageBillingMode } from '../events/types/events.types.js';
 import { sha256Hex } from '../events/event-id.js';
 import { developerDisplayName, developerIdentity } from '../git/git-context.js';
@@ -120,7 +121,7 @@ async function processEvent(
   // on `session.ended` would leave a session's raw prompt text undeleted.
   if (type === 'session.started') await rememberModelSafely(store, sessionId, event);
 
-  const record = recordFor(event);
+  const record = recordFor(event, options.failOpenReason);
 
   if (record) await store.append(sessionId, recordKeyFor(event), record);
 
@@ -174,12 +175,13 @@ async function rememberModelSafely(
  * The turn record one event should be persisted as, if any.
  *
  * @param event - Canonical event.
+ * @param failOpenReason - Why this payload's prompt ran unchecked, if it did.
  * @returns The record, or undefined when the event carries no turn state.
  */
-function recordFor(event: AgentWatchEvent): TurnRecord | undefined {
+function recordFor(event: AgentWatchEvent, failOpenReason: FailOpenReason | undefined): TurnRecord | undefined {
   const type = event.event.type;
 
-  if (type === 'prompt.submitted') return promptRecord(event);
+  if (type === 'prompt.submitted') return promptRecord(event, failOpenReason);
 
   if (TOOL_COMPLETION_TYPES.has(type)) return toolRecord(event);
 
@@ -558,14 +560,16 @@ function withResolvedUsage(stopEvent: AgentWatchEvent, usage: TurnUsage | undefi
  * A prompt record from a prompt event.
  *
  * @param event - The prompt event.
+ * @param failOpenReason - Why it ran without an enforcement decision, if it did.
  * @returns The record.
  */
-function promptRecord(event: AgentWatchEvent): PromptRecord {
+function promptRecord(event: AgentWatchEvent, failOpenReason: FailOpenReason | undefined): PromptRecord {
   return {
     kind: 'prompt',
     at: event.timestamp,
     turnId: event.session.turnId,
-    evidence: asEvidence(event.metadata?.[PROMPT_EVIDENCE_KEY])
+    evidence: asEvidence(event.metadata?.[PROMPT_EVIDENCE_KEY]),
+    failOpenReason
   };
 }
 

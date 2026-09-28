@@ -1,3 +1,4 @@
+import type { FailOpenReason } from '../../enforcement/types/enforcement.types.js';
 import type { AgentWatchEvent, ContentEvidence, EventGit, FeatureCandidate, UsageBillingMode } from '../../events/types/events.types.js';
 import type { PromptRecord, ToolRecord } from './turn-state.types.js';
 import type { TurnUsage } from './transcript.types.js';
@@ -78,6 +79,13 @@ export interface TurnSummaryEvent extends AgentWatchEvent<'turn.summary'> {
   readonly agent_usage?: readonly AgentUsageSummary[];
   /** Hook summaries start pending/provisional; only backend aggregation is complete. */
   readonly usage_status: TurnUsageStatus;
+  /**
+   * Present only when the turn ran because no enforcement decision arrived, and
+   * then only as a category. Absent — never null — when the turn had a decision
+   * or nothing was asked. Top-level, beside `usage_status`: the platform reads it
+   * nowhere else.
+   */
+  readonly enforcement_fail_open_reason?: FailOpenReason;
   readonly started_at?: string;
   readonly ended_at: string;
 }

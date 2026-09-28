@@ -1,3 +1,4 @@
+import type { FailOpenReason } from '../../enforcement/types/enforcement.types.js';
 import type { ContentEvidence } from '../../events/types/events.types.js';
 
 /** A prompt the developer submitted: when, and its length and SHA-256 — never its text. */
@@ -6,6 +7,15 @@ export interface PromptRecord {
   readonly at: string;
   readonly turnId?: string;
   readonly evidence?: ContentEvidence;
+  /**
+   * Why this prompt ran without an enforcement decision, when it did.
+   *
+   * On the prompt record because the check and the summary happen in different
+   * hook processes, and this record is the file the prompt hook writes anyway —
+   * so reporting a fail-open costs no write of its own, and it belongs to exactly
+   * the turn it happened on.
+   */
+  readonly failOpenReason?: FailOpenReason;
 }
 
 /** One tool call the agent completed. */

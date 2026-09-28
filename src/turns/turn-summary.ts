@@ -1,9 +1,11 @@
 import { compact } from '../core/object.js';
+import { FAIL_OPEN_REASONS } from '../enforcement/constants/enforcement.constants.js';
+import type { FailOpenReason } from '../enforcement/types/enforcement.types.js';
 import { deriveEventId, sha256Hex } from '../events/event-id.js';
 import { EVENT_SCHEMA_VERSION } from '../events/constants/events.constants.js';
 import type { FeatureCandidate } from '../events/types/events.types.js';
 import { MAX_TURN_FILES, PROVIDER_LABELS, UNKNOWN_TOOL_NAME } from './constants/turns.constants.js';
-import type { ToolRecord } from './types/turn-state.types.js';
+import type { PromptRecord, ToolRecord } from './types/turn-state.types.js';
 import type { BuildTurnSummaryInput, TouchedFiles, TurnSummaryEvent } from './types/turn-summary.types.js';
 
 export type {
@@ -73,6 +75,7 @@ export function buildTurnSummary(input: BuildTurnSummaryInput): TurnSummaryEvent
     cache_creation_input_tokens: input.usage?.cacheCreationInputTokens,
     output_tokens: input.usage?.outputTokens,
     usage_status: input.usage ? 'provisional' : 'pending',
+    enforcement_fail_open_reason: failOpenReasonOf(input.prompts),
     started_at: startedAt,
     ended_at: input.endedAt
   });
@@ -129,6 +132,24 @@ function addCapped(paths: Set<string>, filePath: string): void {
   if (paths.size >= MAX_TURN_FILES && !paths.has(filePath)) return;
 
   paths.add(filePath);
+}
+
+/**
+ * Why the turn ran unchecked, if any of its prompts did.
+ *
+ * Read back from a file on disk, so checked against the closed set rather than
+ * trusted: an unrecognised value is dropped, not sent. Sending nothing is the
+ * contract's word for "no reason known".
+ *
+ * @param prompts - The turn's prompt records, oldest first.
+ * @returns The first recognised reason, or undefined.
+ */
+function failOpenReasonOf(prompts: readonly PromptRecord[]): FailOpenReason | undefined {
+  for (const prompt of prompts) {
+    if (prompt.failOpenReason !== undefined && FAIL_OPEN_REASONS.has(prompt.failOpenReason)) return prompt.failOpenReason;
+  }
+
+  return undefined;
 }
 
 /**

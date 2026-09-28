@@ -1,4 +1,5 @@
 import type { AgentWatchConfig } from '../../config/types/config.types.js';
+import type { FailOpenReason } from '../../enforcement/types/enforcement.types.js';
 import type { Env } from '../../core/types/core.types.js';
 import type { AgentWatchEvent } from '../../events/types/events.types.js';
 
@@ -15,6 +16,8 @@ export interface TrackTurnOptions {
   readonly cwd: string;
   /** Preview a Stop without appending, consuming, claiming, or sweeping state. */
   readonly readOnly?: boolean;
+  /** Why this payload's prompt was allowed without a decision, when it was. */
+  readonly failOpenReason?: FailOpenReason;
 }
 
 /** The window a closing turn may claim transcript usage from. */

@@ -115,6 +115,18 @@ describe('a session started above its repositories', () => {
     expect(event.metadata.repositoryPath).toBeUndefined();
   });
 
+  it('reports no repository for one reached through a symlink that leaves the start folder', async () => {
+    // Lexically `<workspace>/linked/src/app.ts` is beneath the start folder
+    // and `.git` is found through the link; on disk it is the sibling
+    // repository — another project's, possibly another tenant's.
+    await fs.symlink(outside, path.join(workspace, 'linked'));
+
+    const [event] = await enrich([toolEvent(path.join(workspace, 'linked/src/app.ts'))], workspace);
+
+    expect(event.metadata.filePath).toBe('app.ts');
+    expect(event.metadata.repositoryPath).toBeUndefined();
+  });
+
   it('sends no absolute path, for a file in a repository or outside every one', async () => {
     const events = await enrich(
       [

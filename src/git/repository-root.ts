@@ -65,7 +65,7 @@ async function rootFor(dir: string, boundary: string, cache: Map<string, string 
  * @returns The root, or undefined once the boundary is passed.
  */
 async function walkUp(dir: string, boundary: string, cache: Map<string, string | undefined>): Promise<string | undefined> {
-  if (await hasGitEntry(dir)) return dir;
+  if (await hasGitEntry(dir)) return (await isReallyBeneath(boundary, dir)) ? dir : undefined;
 
   const parent = path.dirname(dir);
 
@@ -74,6 +74,25 @@ async function walkUp(dir: string, boundary: string, cache: Map<string, string |
   if (dir === boundary || parent === dir) return undefined;
 
   return rootFor(parent, boundary, cache);
+}
+
+/**
+ * `isBeneath`, asked of where the two really are.
+ *
+ * A symlink inside the start folder can point at a checkout anywhere on the
+ * machine, and `.git` is found through it: lexically beneath, on disk another
+ * project's. Asked only once a root is found, so the walk itself stays `stat`s.
+ * A refused root ends the walk rather than climbing past it — the file belongs
+ * to that repository, whoever's it is.
+ *
+ * @param boundary - Folder that bounds the walk.
+ * @param dir - Directory a `.git` entry was found in.
+ * @returns True when the directory really lies within the boundary.
+ */
+async function isReallyBeneath(boundary: string, dir: string): Promise<boolean> {
+  const [realBoundary, realDir] = await Promise.all([fs.realpath(boundary).catch(() => boundary), fs.realpath(dir).catch(() => dir)]);
+
+  return isBeneath(realBoundary, realDir);
 }
 
 /**

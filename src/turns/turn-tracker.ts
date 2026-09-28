@@ -355,6 +355,8 @@ async function fallbackSummary(sessionId: string, stopEvent: AgentWatchEvent, op
       installationId: options.config.installationId,
       git: stopEvent.git,
       featureCandidates: stopEvent.feature?.candidates,
+      // No prompt records, so no fail-open reason either: a degraded summary
+      // reports what it can read, and the state it could not read is the point.
       prompts: [],
       tools: [],
       response: responseFrom(stopEvent),

@@ -135,21 +135,26 @@ function addCapped(paths: Set<string>, filePath: string): void {
 }
 
 /**
- * Why the turn ran unchecked, if any of its prompts did.
+ * Why the turn ran unchecked, if the prompt that opened it did.
+ *
+ * The newest prompt record, and only that one. Without a turn id a Stop
+ * collects every record the session left, including one from a prompt that
+ * was interrupted before its own Stop — and that prompt's fail-open is not a
+ * fact about this turn, which may well have been checked.
  *
  * Read back from a file on disk, so checked against the closed set rather than
  * trusted: an unrecognised value is dropped, not sent. Sending nothing is the
  * contract's word for "no reason known".
  *
  * @param prompts - The turn's prompt records, oldest first.
- * @returns The first recognised reason, or undefined.
+ * @returns The recognised reason, or undefined.
  */
 function failOpenReasonOf(prompts: readonly PromptRecord[]): FailOpenReason | undefined {
-  for (const prompt of prompts) {
-    if (prompt.failOpenReason !== undefined && FAIL_OPEN_REASONS.has(prompt.failOpenReason)) return prompt.failOpenReason;
-  }
+  const reason = prompts.at(-1)?.failOpenReason;
 
-  return undefined;
+  if (reason === undefined || !FAIL_OPEN_REASONS.has(reason)) return undefined;
+
+  return reason;
 }
 
 /**

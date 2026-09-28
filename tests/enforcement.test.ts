@@ -189,12 +189,12 @@ describe('enforcement decision', () => {
       const options = { config: config(), paths: resolvePaths(world.env), developerId: DEVELOPER, now: () => clock, fetchFn: server.fetchFn };
 
       await resolveEnforcement(options);
-      clock = new Date('2026-08-26T10:00:59.000Z');
+      clock = new Date('2026-08-26T10:00:04.000Z');
       await resolveEnforcement(options);
 
       expect(server.calls()).toBe(1);
 
-      clock = new Date('2026-08-26T10:01:01.000Z');
+      clock = new Date('2026-08-26T10:00:06.000Z');
 
       expect(await resolveEnforcement(options)).toEqual({ decision: 'block', message: MESSAGE });
       expect(server.calls()).toBe(2);
@@ -226,7 +226,7 @@ describe('enforcement decision', () => {
       const options = { config: config(), paths: resolvePaths(world.env), developerId: DEVELOPER, now: () => clock, fetchFn: server.fetchFn };
 
       await resolveEnforcement(options);
-      clock = new Date('2026-08-26T10:01:01.000Z');
+      clock = new Date('2026-08-26T10:00:06.000Z');
       await resolveEnforcement(options);
 
       expect(server.calls()).toBe(2);
@@ -238,7 +238,7 @@ describe('enforcement decision', () => {
       const options = { config: config(), paths: resolvePaths(world.env), developerId: DEVELOPER, now: () => clock, fetchFn: server.fetchFn };
 
       await resolveEnforcement(options);
-      clock = new Date('2026-08-26T10:00:30.000Z');
+      clock = new Date('2026-08-26T10:00:04.000Z');
       await resolveEnforcement(options);
 
       expect(server.calls()).toBe(1);
@@ -253,7 +253,7 @@ describe('enforcement decision', () => {
       // how long to keep it does not get a vote on whether it is readable.
       expect(await resolveEnforcement(options)).toEqual({ decision: 'block', message: MESSAGE });
 
-      clock = new Date('2026-08-26T10:00:30.000Z');
+      clock = new Date('2026-08-26T10:00:04.000Z');
       await resolveEnforcement(options);
 
       // And with no usable advice, the configured TTL is what applies.

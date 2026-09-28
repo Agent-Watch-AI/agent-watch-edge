@@ -9,11 +9,16 @@ export const DEFAULT_MAX_EVENT_AGE_DAYS = 7;
  * Pre-turn budget check defaults.
  *
  * The timeout is a hard ceiling on a request that sits between the developer
- * pressing enter and their agent starting work, and the TTL mirrors the cache
- * the platform keeps for the same decision.
+ * pressing enter and their agent starting work.
+ *
+ * The TTL is both the fallback when the platform gives no usable
+ * `cache_ttl_ms` and the ceiling on any advice it does give, so it is the one
+ * number on the path no platform change can shorten. 5 s is the window the
+ * product promises between a cap being crossed and the next turn being refused;
+ * a local answer held longer than that would break the promise on its own.
  */
 export const DEFAULT_ENFORCEMENT_TIMEOUT_MS = 300;
-export const DEFAULT_ENFORCEMENT_CACHE_TTL_MS = 60_000;
+export const DEFAULT_ENFORCEMENT_CACHE_TTL_MS = 5_000;
 
 /** Native OTLP signal names, in report order. */
 export const OTEL_SIGNAL_NAMES = ['logs', 'traces', 'metrics'] as const;

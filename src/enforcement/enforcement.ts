@@ -2,7 +2,14 @@ import path from 'node:path';
 import { enforcementUrl } from '../config/config.js';
 import type { AgentWatchConfig } from '../config/types/config.types.js';
 import { debugLog } from '../core/logger.js';
-import { ALLOW, ENFORCEMENT_CACHE_FILE_NAME } from './constants/enforcement.constants.js';
+import { BackendCooldown } from '../transport/cooldown.js';
+import { identityPaths } from '../transport/queue-partition.js';
+import {
+  ALLOW,
+  ENFORCEMENT_CACHE_FILE_NAME,
+  ENFORCEMENT_COOLDOWN_FILE_NAME,
+  ENFORCEMENT_COOLDOWN_MS
+} from './constants/enforcement.constants.js';
 import { DecisionCache, decisionKey } from './decision-cache.js';
 import { requestDecision } from './decision-client.js';
 import type { EnforcementDecision, EnforcementOptions } from './types/enforcement.types.js';
@@ -63,7 +70,8 @@ export function enforcementWouldAsk(config: AgentWatchConfig): boolean {
  *
  * A miss asks the platform and stores whatever it answered. A *failure* is not
  * stored: it is not a decision, and caching it as an allow would extend one
- * unreachable moment across the whole TTL.
+ * unreachable moment across the whole TTL. It trips the breaker instead, so the
+ * turns after it skip the wait rather than each paying the timeout again.
  *
  * @param options - As given to {@link resolveEnforcement}.
  * @param url - The decision endpoint.
@@ -83,6 +91,16 @@ async function decideThroughCache(
 
   if (cached) return cached;
 
+  const cooldown = new BackendCooldown(enforcementCooldownFile(options, token), options.now);
+
+  // Skipping is the only thing the breaker does: the turn gets the same allow a
+  // timeout would have given it, without the wait.
+  if (await cooldown.active()) {
+    debugLog('enforcement: breaker open; allowing without asking');
+
+    return ALLOW;
+  }
+
   const answered = await requestDecision({
     url,
     token,
@@ -94,7 +112,13 @@ async function decideThroughCache(
     fetchFn: options.fetchFn
   });
 
-  if (!answered) return ALLOW;
+  if (!answered) {
+    await cooldown.trip(ENFORCEMENT_COOLDOWN_MS);
+
+    return ALLOW;
+  }
+
+  await cooldown.clear();
 
   const { cacheTtlMs, ...decision } = answered;
   const ttlMs = effectiveTtlMs(cacheTtlMs, options.config.enforcement.cacheTtlMs);
@@ -115,6 +139,20 @@ async function decideThroughCache(
   await cache.prune();
 
   return decision;
+}
+
+/**
+ * The enforcement breaker's file for this identity.
+ *
+ * Per identity for the reason delivery's is: one tenant's unreachable platform
+ * or revoked token must not skip another tenant's checks.
+ *
+ * @param options - As given to {@link resolveEnforcement}.
+ * @param token - Edge token the request is made with.
+ * @returns Absolute path of the state file.
+ */
+function enforcementCooldownFile(options: EnforcementOptions, token: string): string {
+  return path.join(path.dirname(identityPaths(options.paths, token).cooldownFile), ENFORCEMENT_COOLDOWN_FILE_NAME);
 }
 
 /**

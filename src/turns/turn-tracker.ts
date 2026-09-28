@@ -5,6 +5,8 @@ import { asRecord } from '../core/object.js';
 import { detectBillingMode } from '../billing/billing-mode.js';
 import type { AgentWatchEvent, ContentEvidence, EventGit, FeatureCandidate, UsageBillingMode } from '../events/types/events.types.js';
 import { sha256Hex } from '../events/event-id.js';
+import { loadEffectiveConfig } from '../config/repo-config.js';
+import { selectRoot } from '../config/root-config.js';
 import { REPOSITORY_PATH_METADATA_KEY } from '../events/constants/enrich.constants.js';
 import { featureCandidatesFromBranch } from '../feature/ticket-candidates.js';
 import { collectGitContext, developerDisplayName, developerIdentity } from '../git/git-context.js';
@@ -333,11 +335,11 @@ async function closeTurnLocked(
   return sanitizeValue(summary);
 }
 
-/** What a workspace session's turn resolved to: one repository, and its paths. */
+/** What a workspace session's turn resolved to: its paths, and one repository when it may declare one. */
 interface WorkspaceRepository {
-  readonly git: EventGit;
+  readonly git?: EventGit;
   readonly featureCandidates?: readonly FeatureCandidate[];
-  /** The turn's tools with the losing repositories' paths dropped. */
+  /** The turn's tools with every path dropped that this turn may not report. */
   readonly tools: readonly ToolRecord[];
 }
 
@@ -350,32 +352,35 @@ interface WorkspaceRepository {
  * vote in the placement corpus. `tool_calls` and `tools_used` still count every
  * call — the work happened.
  *
+ * What is reported about that repository follows *its* effective config, not
+ * the start folder's: a `.agentwatch.json` committed inside it is the one a
+ * session started there would honour, and this session found the repository by
+ * looking beneath a folder that file never saw.
+ *
  * Every failure here answers "no repository", which is exactly what the turn
  * reported before this existed.
  *
  * @param tools - The turn's tool records.
  * @param options - Tracking options; `cwd` is the folder the session started in.
- * @returns The resolved repository, or undefined when no candidate qualifies.
+ * @returns The paths the turn may report, and its repository when one qualifies.
  */
-async function resolveWorkspaceRepository(tools: readonly ToolRecord[], options: TrackTurnOptions): Promise<WorkspaceRepository | undefined> {
-  const winner = winningRepositoryPath(tools);
+async function resolveWorkspaceRepository(tools: readonly ToolRecord[], options: TrackTurnOptions): Promise<WorkspaceRepository> {
+  const admitted = admittedTools(tools, options);
+  const winner = winningRepositoryPath(admitted);
 
-  if (winner === undefined) return undefined;
+  if (winner === undefined) return { tools: admitted };
 
   const root = path.join(options.cwd, winner);
+  const capture = (await loadEffectiveConfig(options.paths, root, options.globalConfig)).config.capture;
+  // The repository's own `capture.files` first, whether or not the turn ends
+  // up declaring it: its paths are its to withhold.
+  const narrowed = capture.files ? admitted : keepingPaths(admitted, (record) => record.repositoryPath !== winner);
 
-  // Turn state is a file on disk between hook invocations, so the path it
-  // names is checked here too rather than trusted: a repository is always
-  // beneath the folder the session started in, and a value that is not would
-  // point git at somebody else's directory.
-  if (!isBeneath(options.cwd, root)) return undefined;
+  if (!capture.git) return { tools: narrowed };
 
-  const git: GitContext = await collectGitContext({
-    cwd: root,
-    includeChangedFiles: options.config.capture.files
-  }).catch(() => ({}));
+  const git: GitContext = await collectGitContext({ cwd: root, includeChangedFiles: capture.files }).catch(() => ({}));
 
-  if (!git.repositoryRoot) return undefined;
+  if (!git.repositoryRoot) return { tools: narrowed };
 
   const candidates = featureCandidatesFromBranch(git.branch);
 
@@ -390,8 +395,61 @@ async function resolveWorkspaceRepository(tools: readonly ToolRecord[], options:
       changedFiles: git.changedFiles
     },
     featureCandidates: candidates.length > 0 ? candidates : undefined,
-    tools: tools.map((record) => (record.repositoryPath === winner ? record : { ...record, filePath: undefined }))
+    tools: keepingPaths(narrowed, (record) => record.repositoryPath === winner)
   };
+}
+
+/**
+ * The turn's tools with every record refused whose repository this session
+ * may not report on.
+ *
+ * Two refusals. A repository outside the start folder: turn state is a file on
+ * disk between hook invocations, so the path it names is checked rather than
+ * trusted, and a value that climbs out would point git at somebody else's
+ * directory. And a repository another project root claims: the start folder
+ * alone decides which tenant a session sends as, so a checkout beneath it with
+ * a root of its own — another token, or only another developer — would have
+ * its branch, commit and paths delivered to the wrong tenant under the wrong
+ * name. A refused record stays, as a call that named no path.
+ *
+ * @param tools - The turn's tool records.
+ * @param options - Tracking options; `cwd` is the folder the session started in.
+ * @returns The records, with the refused ones stripped of their paths.
+ */
+function admittedTools(tools: readonly ToolRecord[], options: TrackTurnOptions): readonly ToolRecord[] {
+  const roots = options.globalConfig.config.roots;
+  const tenant = selectRoot(roots, options.cwd)?.path;
+  // One verdict per repository, not per call: `selectRoot` resolves real paths.
+  const verdicts = new Map<string, boolean>();
+  const admitted: ToolRecord[] = [];
+
+  for (const record of tools) {
+    // Anything but a non-empty string names no repository and casts no vote;
+    // it is left as it is for the winner rule's own guard.
+    if (typeof record.repositoryPath !== 'string' || !record.repositoryPath) {
+      admitted.push(record);
+      continue;
+    }
+
+    const root = path.join(options.cwd, record.repositoryPath);
+    const verdict = verdicts.get(record.repositoryPath) ?? (isBeneath(options.cwd, root) && selectRoot(roots, root)?.path === tenant);
+
+    verdicts.set(record.repositoryPath, verdict);
+    admitted.push(verdict ? record : { ...record, filePath: undefined, repositoryPath: undefined });
+  }
+
+  return admitted;
+}
+
+/**
+ * The tools with `filePath` dropped from every record `keep` refuses.
+ *
+ * @param tools - The turn's tool records.
+ * @param keep - Whether a record may keep its path.
+ * @returns A new list; the records are not mutated.
+ */
+function keepingPaths(tools: readonly ToolRecord[], keep: (record: ToolRecord) => boolean): readonly ToolRecord[] {
+  return tools.map((record) => (keep(record) ? record : { ...record, filePath: undefined }));
 }
 
 /**

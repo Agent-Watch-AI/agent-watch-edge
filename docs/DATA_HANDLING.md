@@ -178,6 +178,15 @@ repository; when a turn does report one, its file lists carry that repository's
 paths and nothing else. The repository is named relative to the start folder in
 local turn state as well, so nothing absolute is written there either.
 
+What is reported about that repository follows *its* effective config, not the
+start folder's: a `.agentwatch.json` committed inside it narrows the turn exactly
+as it would a session started there — `capture.git: false` withholds the
+repository, branch, commit and ticket keys, `capture.files: false` its paths.
+And a repository that a project root of its own claims (see README, "Two
+tenants on one machine") is never a candidate: the start folder alone decides which tenant a
+session sends as, so that repository's name, branch, commit and paths are
+dropped rather than delivered to another tenant.
+
 This resolution reads the file paths the agent's tools named, so it follows
 `capture.files`: with `capture.files: false` no path is captured, and a session
 started above its repositories then reports no repository or branch — as it did

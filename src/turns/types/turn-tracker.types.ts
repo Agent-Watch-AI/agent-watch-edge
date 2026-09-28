@@ -1,6 +1,7 @@
-import type { AgentWatchConfig } from '../../config/types/config.types.js';
+import type { AgentWatchConfig, ConfigLoadResult } from '../../config/types/config.types.js';
 import type { Env } from '../../core/types/core.types.js';
 import type { AgentWatchEvent } from '../../events/types/events.types.js';
+import type { AgentWatchPaths } from '../../storage/types/storage.types.js';
 
 export interface TrackTurnOptions {
   readonly agentId: string;
@@ -9,6 +10,14 @@ export interface TrackTurnOptions {
   /** Enriched + sanitized canonical events produced from this payload. */
   readonly events: readonly AgentWatchEvent[];
   readonly config: AgentWatchConfig;
+  /**
+   * The machine-global config as loaded, roots intact. `config` is the start
+   * folder's effective config with its roots stripped, and a session started
+   * above its repositories needs both: which tenant each repository beneath the
+   * start folder belongs to, and that repository's own `.agentwatch.json`.
+   */
+  readonly globalConfig: ConfigLoadResult;
+  readonly paths: AgentWatchPaths;
   readonly turnsDir: string;
   readonly locksDir: string;
   readonly env: Env;

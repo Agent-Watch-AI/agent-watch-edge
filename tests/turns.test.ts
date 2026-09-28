@@ -837,17 +837,17 @@ describe('the session model memo is written on the session hook alone', () => {
 
   /** Codex puts its model on the base event of every hook, Stop included. */
   function track(payload: unknown) {
-    const events = parseCodexHookEvent(payload, {
-      env: world.env,
-      config: configSchema.parse(defaultConfig())
-    });
+    const config = configSchema.parse(defaultConfig());
+    const events = parseCodexHookEvent(payload, { env: world.env, config });
     const paths = resolvePaths(world.env);
 
     return trackTurn({
       agentId: 'codex',
       rawPayload: payload,
       events,
-      config: configSchema.parse(defaultConfig()),
+      config,
+      globalConfig: { state: 'ok', config, warnings: [] },
+      paths,
       turnsDir: paths.turnsDir,
       locksDir: paths.locksDir,
       env: world.env,
@@ -920,6 +920,8 @@ describe('a degraded turn summary names the same developer as a healthy one', ()
       rawPayload: payload,
       events: parseCodexHookEvent(payload, { env: world.env, config }),
       config,
+      globalConfig: { state: 'ok', config, warnings: [] },
+      paths,
       turnsDir: paths.turnsDir,
       locksDir: paths.locksDir,
       env: world.env,
@@ -1084,6 +1086,66 @@ describe('a turn of a session started above its repositories', () => {
     expect(summary.files_read).toBeUndefined();
   });
 
+  it("follows the repository's own .agentwatch.json, which the start folder never read", async () => {
+    // Effective config is loaded for the start folder, and a workspace folder
+    // is not where a repository's committed file lives. A session started
+    // inside repo-a honours this file; one started above it must not send
+    // exactly what the file withholds.
+    await writeJson(path.join(workspace, 'repo-a', '.agentwatch.json'), { capture: { git: false } });
+    await hook(prompt);
+    await hook(toolCall('Edit', 'repo-a/src/a.ts', 't0'));
+
+    const summary = await hook(stop);
+
+    expect(summary.repository).toBeUndefined();
+    expect(summary.branch).toBeUndefined();
+    expect(summary.commit).toBeUndefined();
+    expect(summary.jira_ids).toBeUndefined();
+    // `capture.files` is untouched, as it is for a session started inside.
+    expect(summary.files_touched).toEqual(['src/a.ts']);
+    expect(summary.tool_calls).toBe(1);
+  });
+
+  it("withholds the repository's paths when its own file says capture.files: false", async () => {
+    await writeJson(path.join(workspace, 'repo-a', '.agentwatch.json'), { capture: { files: false } });
+    await hook(prompt);
+    await hook(toolCall('Edit', 'repo-a/src/a.ts', 't0'));
+
+    const summary = await hook(stop);
+
+    expect(summary.repository).toBe('repo-a');
+    expect(summary.branch).toBe('AWT-75-workspace-sessions');
+    expect(summary.files_touched).toBeUndefined();
+    expect(summary.files_changed).toBeUndefined();
+    expect(summary.tool_calls).toBe(1);
+  });
+
+  it('refuses a repository another project root claims', async () => {
+    // The start folder alone decides which tenant a session sends as. repo-a
+    // has a root — and a token — of its own, so its name, branch, commit and
+    // paths belong to that tenant, while this summary goes to another.
+    const paths = resolvePaths(world.env);
+
+    await writeJson(paths.configFile, {
+      ...defaultConfig(),
+      developerEmail: 'dev@company.com',
+      roots: { [path.join(workspace, 'repo-a')]: { token: 'tenant-x-token' } }
+    });
+    await hook(prompt);
+    await hook(toolCall('Edit', 'repo-a/src/a.ts', 't0'));
+    await hook(toolCall('Edit', 'repo-a/src/b.ts', 't1'));
+    await hook(toolCall('Edit', 'repo-b/src/z.ts', 't2'));
+
+    const summary = await hook(stop);
+
+    // repo-a edited most and never a candidate: repo-b is the turn's repository.
+    expect(summary.repository).toBe('repo-b');
+    expect(summary.branch).toBe('main');
+    expect(summary.files_touched).toEqual(['src/z.ts']);
+    expect(summary.tool_calls).toBe(3);
+    expect(JSON.stringify(summary)).not.toContain('a.ts');
+  });
+
   it('refuses a repository path out of turn state that climbs out of the start folder', async () => {
     // Turn state is a file on disk between hook invocations. A record naming
     // `../repo-a` would point git at a directory outside the session's own
@@ -1103,6 +1165,8 @@ describe('a turn of a session started above its repositories', () => {
       // A session started *inside* repo-a, whose state names a sibling.
       events: parseCodexHookEvent({ ...codexStop, session_id: 'sess-escape', cwd: inner }, { env: world.env, config }),
       config,
+      globalConfig: { state: 'ok', config, warnings: [] },
+      paths,
       turnsDir: paths.turnsDir,
       locksDir: paths.locksDir,
       env: world.env,
@@ -1130,6 +1194,8 @@ describe('a turn of a session started above its repositories', () => {
       rawPayload: {},
       events: parseCodexHookEvent({ ...codexStop, session_id: 'sess-garbled', cwd: workspace }, { env: world.env, config }),
       config,
+      globalConfig: { state: 'ok', config, warnings: [] },
+      paths,
       turnsDir: paths.turnsDir,
       locksDir: paths.locksDir,
       env: world.env,

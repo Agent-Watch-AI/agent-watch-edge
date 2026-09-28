@@ -412,6 +412,21 @@ describe('buildTurnSummary', () => {
     });
 
     expect(checked).not.toHaveProperty('enforcement_fail_open_reason');
+
+    // Nor does the next prompt, racing in after this Stop.
+    const raced = buildTurnSummary({
+      provider: 'claude',
+      surface: 'cli',
+      sessionId: 'sess-1',
+      prompts: [
+        { kind: 'prompt', at: '2026-08-06T18:00:00.000Z' },
+        { kind: 'prompt', at: '2026-08-06T18:25:00.000Z', failOpenReason: 'timeout' }
+      ],
+      tools: [],
+      endedAt: '2026-08-06T18:24:00.000Z'
+    });
+
+    expect(raced).not.toHaveProperty('enforcement_fail_open_reason');
   });
 });
 

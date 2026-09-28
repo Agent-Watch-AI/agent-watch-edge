@@ -6,7 +6,7 @@ import { detectBillingMode } from '../billing/billing-mode.js';
 import type { AgentWatchEvent, ContentEvidence, EventGit, FeatureCandidate, UsageBillingMode } from '../events/types/events.types.js';
 import { sha256Hex } from '../events/event-id.js';
 import { loadEffectiveConfig } from '../config/repo-config.js';
-import { selectRoot } from '../config/root-config.js';
+import { canonicalRoot, selectRoot } from '../config/root-config.js';
 import { REPOSITORY_PATH_METADATA_KEY } from '../events/constants/enrich.constants.js';
 import { featureCandidatesFromBranch } from '../feature/ticket-candidates.js';
 import { collectGitContext, developerDisplayName, developerIdentity } from '../git/git-context.js';
@@ -372,15 +372,16 @@ async function resolveWorkspaceRepository(tools: readonly ToolRecord[], options:
 
   const root = path.join(options.cwd, winner);
   const capture = (await loadEffectiveConfig(options.paths, root, options.globalConfig)).config.capture;
-  // The repository's own `capture.files` first, whether or not the turn ends
-  // up declaring it: its paths are its to withhold.
-  const narrowed = capture.files ? admitted : keepingPaths(admitted, (record) => record.repositoryPath !== winner);
+  // One repository's paths and nothing else, decided before anything can
+  // fail: the losers' paths are a wrong vote whether or not the turn ends up
+  // declaring the winner, and the winner's are its own to withhold.
+  const own = keepingPaths(admitted, (record) => record.repositoryPath === winner && capture.files);
 
-  if (!capture.git) return { tools: narrowed };
+  if (!capture.git) return { tools: own };
 
   const git: GitContext = await collectGitContext({ cwd: root, includeChangedFiles: capture.files }).catch(() => ({}));
 
-  if (!git.repositoryRoot) return { tools: narrowed };
+  if (!git.repositoryRoot) return { tools: own };
 
   const candidates = featureCandidatesFromBranch(git.branch);
 
@@ -395,7 +396,7 @@ async function resolveWorkspaceRepository(tools: readonly ToolRecord[], options:
       changedFiles: git.changedFiles
     },
     featureCandidates: candidates.length > 0 ? candidates : undefined,
-    tools: keepingPaths(narrowed, (record) => record.repositoryPath === winner)
+    tools: own
   };
 }
 
@@ -410,7 +411,9 @@ async function resolveWorkspaceRepository(tools: readonly ToolRecord[], options:
  * alone decides which tenant a session sends as, so a checkout beneath it with
  * a root of its own — another token, or only another developer — would have
  * its branch, commit and paths delivered to the wrong tenant under the wrong
- * name. A refused record stays, as a call that named no path.
+ * name. Both are asked of real paths: a symlink inside the start folder can
+ * point at a checkout anywhere on the machine, and `.git` is found through it.
+ * A refused record stays, as a call that named no path.
  *
  * @param tools - The turn's tool records.
  * @param options - Tracking options; `cwd` is the folder the session started in.
@@ -419,7 +422,8 @@ async function resolveWorkspaceRepository(tools: readonly ToolRecord[], options:
 function admittedTools(tools: readonly ToolRecord[], options: TrackTurnOptions): readonly ToolRecord[] {
   const roots = options.globalConfig.config.roots;
   const tenant = selectRoot(roots, options.cwd)?.path;
-  // One verdict per repository, not per call: `selectRoot` resolves real paths.
+  const boundary = canonicalRoot(options.cwd);
+  // One verdict per repository, not per call: each asks the filesystem.
   const verdicts = new Map<string, boolean>();
   const admitted: ToolRecord[] = [];
 
@@ -432,7 +436,7 @@ function admittedTools(tools: readonly ToolRecord[], options: TrackTurnOptions):
     }
 
     const root = path.join(options.cwd, record.repositoryPath);
-    const verdict = verdicts.get(record.repositoryPath) ?? (isBeneath(options.cwd, root) && selectRoot(roots, root)?.path === tenant);
+    const verdict = verdicts.get(record.repositoryPath) ?? (isBeneath(boundary, canonicalRoot(root)) && selectRoot(roots, root)?.path === tenant);
 
     verdicts.set(record.repositoryPath, verdict);
     admitted.push(verdict ? record : { ...record, filePath: undefined, repositoryPath: undefined });

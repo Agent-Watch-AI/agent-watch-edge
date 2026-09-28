@@ -1094,6 +1094,7 @@ describe('a turn of a session started above its repositories', () => {
     await writeJson(path.join(workspace, 'repo-a', '.agentwatch.json'), { capture: { git: false } });
     await hook(prompt);
     await hook(toolCall('Edit', 'repo-a/src/a.ts', 't0'));
+    await hook(toolCall('Edit', 'repo-b/src/z.ts', 't1'));
 
     const summary = await hook(stop);
 
@@ -1101,8 +1102,39 @@ describe('a turn of a session started above its repositories', () => {
     expect(summary.branch).toBeUndefined();
     expect(summary.commit).toBeUndefined();
     expect(summary.jira_ids).toBeUndefined();
-    // `capture.files` is untouched, as it is for a session started inside.
+    // `capture.files` is untouched, as it is for a session started inside —
+    // and the turn still worked in one repository: repo-b's path is dropped
+    // as it would be had repo-a been declared.
     expect(summary.files_touched).toEqual(['src/a.ts']);
+    expect(summary.tool_calls).toBe(2);
+  });
+
+  it('refuses a repository reached through a symlink that leaves the start folder', async () => {
+    // `<home>/elsewhere/other` is a repository outside the workspace, and
+    // `<workspace>/other` a symlink to it. Lexically the file is beneath the
+    // start folder and `.git` is found through the link; on disk it is
+    // another project's checkout — possibly another tenant's.
+    const outside = path.join(await fs.realpath(world.home), 'elsewhere', 'other');
+
+    await fs.mkdir(path.join(outside, 'src'), { recursive: true });
+    await fs.writeFile(path.join(outside, 'README.md'), '# other\n');
+
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: outside, stdio: 'pipe', env: { ...process.env, HOME: world.home } });
+
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 'dev@company.com');
+    git('config', 'user.name', 'Dev');
+    git('add', '.');
+    git('commit', '-qm', 'one');
+    await fs.symlink(outside, path.join(workspace, 'other'));
+    await hook(prompt);
+    await hook(toolCall('Edit', 'other/src/a.ts', 't0'));
+
+    const summary = await hook(stop);
+
+    expect(summary.repository).toBeUndefined();
+    expect(summary.branch).toBeUndefined();
+    expect(summary.files_touched).toBeUndefined();
     expect(summary.tool_calls).toBe(1);
   });
 

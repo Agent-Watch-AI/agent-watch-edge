@@ -174,8 +174,10 @@ repository's root: more than a basename, less than an absolute path. No new
 class of data is collected — repository, branch and commit are already sent for
 a session started inside a repository. Only repositories whose root lies beneath
 the start folder are resolved, and a file anywhere else contributes no
-repository; when a turn does report one, its file lists carry that repository's
-paths and nothing else. The repository is named relative to the start folder in
+repository; once a turn has worked in one repository, its file lists carry that
+repository's paths and nothing else — even when that repository's own config
+then withholds it. A repository reached through a symlink is judged by where it
+really is, not by the link. The repository is named relative to the start folder in
 local turn state as well, so nothing absolute is written there either.
 
 What is reported about that repository follows *its* effective config, not the

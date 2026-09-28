@@ -1134,7 +1134,8 @@ describe('a turn of a session started above its repositories', () => {
 
     expect(summary.repository).toBeUndefined();
     expect(summary.branch).toBeUndefined();
-    expect(summary.files_touched).toBeUndefined();
+    // A bare basename: what any file outside the start folder has always sent.
+    expect(summary.files_touched).toEqual(['a.ts']);
     expect(summary.tool_calls).toBe(1);
   });
 

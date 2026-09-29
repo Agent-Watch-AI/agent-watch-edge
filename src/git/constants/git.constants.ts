@@ -4,6 +4,9 @@ export const GIT_TIMEOUT_MS = 1000;
 /** Cap on the changedFiles list; a huge dirty tree must not bloat an event. */
 export const MAX_CHANGED_FILES = 50;
 
+/** Prepended to every git call: status and diff then never write `index.lock`. */
+export const GIT_NO_OPTIONAL_LOCKS = '--no-optional-locks';
+
 /** stdout ceiling per git process. */
 export const GIT_MAX_BUFFER_BYTES = 1024 * 1024;
 
@@ -193,3 +196,59 @@ export const GIT_ENTRY_NAME = '.git';
  * error — means the answer is unknown, not no.
  */
 export const GIT_ENTRY_ABSENT_CODES: ReadonlySet<string> = new Set(['ENOENT', 'ENOTDIR']);
+
+/**
+ * One fingerprint of a checkout: HEAD, branch and every dirty entry in one
+ * process. NUL-separated so a path is never quoted, split or trimmed; every
+ * untracked file listed on its own, since editing a file inside an untracked
+ * directory need not re-stamp the directory.
+ */
+export const GIT_FINGERPRINT_ARGS = ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all'] as const;
+
+/** Git's empty tree: what an unborn HEAD's first commit is diffed against. */
+export const EMPTY_TREE_OID = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+export const EMPTY_TREE_OID_SHA256 = '6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321';
+
+/** Header lines of porcelain v2 `--branch` output that the fingerprint keeps. */
+export const PORCELAIN_V2_OID_HEADER = '# branch.oid ';
+export const PORCELAIN_V2_HEAD_HEADER = '# branch.head ';
+
+/** What porcelain v2 says in place of an oid or a branch when there is none. */
+export const PORCELAIN_V2_NO_OID = '(initial)';
+export const PORCELAIN_V2_DETACHED = '(detached)';
+
+/**
+ * Space-separated fields before the path on each porcelain v2 entry kind:
+ * ordinary (`1`), rename or copy (`2`, followed by the original path as its own
+ * NUL record), unmerged (`u`), untracked (`?`).
+ */
+export const PORCELAIN_V2_PATH_FIELD: Readonly<Record<string, number>> = { 1: 8, 2: 9, u: 10, '?': 1 };
+
+/** Porcelain v2 kinds whose entry is followed by one more NUL record, the original path. */
+export const PORCELAIN_V2_RENAME_KIND = '2';
+
+/** A full SHA-1 or SHA-256 object id. */
+export const RE_OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+
+/** XY stand-in for an untracked entry, which porcelain v2 gives none. */
+export const PORCELAIN_V2_UNTRACKED_XY = '??';
+
+/** A linked worktree's git dir names the shared one in this file. */
+export const GIT_COMMONDIR_FILE = 'commondir';
+
+/**
+ * Cap on the files a turn reports as changed in its work checkout, the
+ * gateway's own bound on the list: a longer one would refuse the summary whole.
+ */
+export const MAX_WORK_CHANGED_FILES = 500;
+
+/**
+ * The files two commits differ in, NUL-separated so no path comes back quoted.
+ *
+ * @param from - The oid the turn started on.
+ * @param to - The oid or ref it ended on.
+ * @returns The argument vector.
+ */
+export function gitDiffNamesArgs(from: string, to: string): readonly string[] {
+  return ['diff', '--name-only', '-z', from, to, '--'];
+}

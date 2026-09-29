@@ -104,7 +104,22 @@ export interface AgentProvider {
    * reports `common.workspacePaths`) has to say where it is.
    */
   resolveCwd?(payload: unknown): string | undefined;
+  /**
+   * The shell command a tool-start payload is about to run, and the directory
+   * it runs in when the agent reports one apart from `cwd`.
+   *
+   * Read by one pipeline stage only, in memory, for the directory names in it;
+   * the text is dropped there and never reaches an event, a record or a log.
+   * Undefined for any payload that is not a shell call.
+   */
+  shellCall?(payload: unknown): ShellCall | undefined;
   readonly nativeTelemetry?: NativeTelemetryConfigurator;
+}
+
+/** A shell call as the agent is about to run it. Memory only; see `AgentProvider.shellCall`. */
+export interface ShellCall {
+  readonly command?: string;
+  readonly workdir?: string;
 }
 
 /** How a tool call is classified for canonical event mapping. */

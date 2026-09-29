@@ -29,4 +29,4 @@ export const FILE_PATH_METADATA_KEY = 'filePath';
 export const REPOSITORY_PATH_METADATA_KEY = 'repositoryPath';
 
 /** Shared empty answer for a batch with no per-file repository to resolve. */
-export const EMPTY_REPOSITORIES: ReadonlyMap<string, string> = new Map();
+export const EMPTY_REPOSITORIES: ReadonlyMap<string, never> = new Map<string, never>();

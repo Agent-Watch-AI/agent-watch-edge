@@ -64,7 +64,7 @@ export async function readGateCheckout(options: GateCheckoutOptions): Promise<Ga
 }
 
 /** A repository root and the git directory that serves it. */
-interface GitLocation {
+export interface GitLocation {
   readonly root: string;
   readonly gitDir: string;
 }
@@ -76,10 +76,13 @@ interface GitLocation {
  * real git directory on its one line. Agents work in worktrees often enough that
  * not following it would silently drop the whole case.
  *
+ * Exported for the turn tracker, which asks it of every checkout a turn names:
+ * the walk is `stat` calls only, so no hook pays a git process for it.
+ *
  * @param startDir - Directory the payload happened in.
  * @returns The location, or undefined outside a repository.
  */
-async function findGitDir(startDir: string): Promise<GitLocation | undefined> {
+export async function findGitDir(startDir: string): Promise<GitLocation | undefined> {
   let dir = path.resolve(startDir);
 
   for (let depth = 0; depth < GATE_MAX_WALK_DEPTH; depth++) {

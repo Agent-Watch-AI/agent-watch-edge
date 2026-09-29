@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { asRecord } from '../core/object.js';
 import { applyProductCapture } from '../privacy/product-capture.js';
 import { debugLog } from '../core/logger.js';
@@ -10,7 +11,9 @@ import { enforcementWouldAsk, resolveEnforcement } from '../enforcement/enforcem
 import { enrichEvents } from '../events/enrich.js';
 import type { AgentWatchEvent } from '../events/types/events.types.js';
 import { readGateCheckout } from '../git/gate-checkout.js';
+import { checkoutRootOf } from '../git/checkout-root.js';
 import { developerIdentity, runGit } from '../git/git-context.js';
+import { shellDirectories } from '../providers/shared/shell-directories.js';
 import { runSnapshotPipeline } from '../snapshot/snapshot-pipeline.js';
 import { SnapshotStateStore } from '../snapshot/snapshot-state.js';
 import { SNAPSHOT_BUDGET_MS } from '../snapshot/constants/snapshot.constants.js';
@@ -24,13 +27,15 @@ import { identityPaths, settleLegacyQueue } from '../transport/queue-partition.j
 import type { EventTransport } from '../transport/types/transport.types.js';
 import { eventsUrl } from '../config/config.js';
 import { TurnStateStore } from '../turns/turn-state.js';
-import { trackTurn } from '../turns/turn-tracker.js';
+import { SHELL_REREAD_TYPES, TOOL_START_TYPES } from '../turns/constants/turns.constants.js';
+import { trackTurnOutcome, type TurnOutcome } from '../turns/turn-tracker.js';
 import {
   PAYLOAD_CWD_KEY,
   PROMPT_SUBMITTED_TYPE,
   STAGE_DELIVER,
   STAGE_ENFORCE,
   STAGE_ENRICH,
+  STAGE_NOMINATE,
   STAGE_PARSE_EVENTS,
   STAGE_RESOLVE_CONTEXT,
   STAGE_SNAPSHOT,
@@ -57,6 +62,7 @@ export type { HookPipelineInput, HookPipelineState } from './types/pipeline.type
 const HOOK_STAGES: readonly Step<HookPipelineState>[] = [
   step(STAGE_RESOLVE_CONTEXT, resolveContext),
   step(STAGE_PARSE_EVENTS, parseEvents),
+  step(STAGE_NOMINATE, nominate),
   step(STAGE_ENFORCE, enforce),
   step(STAGE_ENRICH, enrich),
   step(STAGE_TRACK_TURN, trackTurnStage),
@@ -117,6 +123,46 @@ async function parseEvents(state: HookPipelineState): Promise<StepOutcome<HookPi
   if (events.length === 0) return stop(state, STOP_NO_EVENTS);
 
   return next({ ...state, events });
+}
+
+/**
+ * Name the checkouts a shell call is about to work in.
+ *
+ * The only place the edge reads a shell command. It is read in memory for
+ * directory names, each name becomes the real root of the checkout it lies in,
+ * and only those roots go on: the command and every directory in it go out of
+ * scope here, and nothing — not the state, an event, a record or a log line —
+ * holds either. A failure logs a fixed sentence, never its error, which could
+ * quote a path.
+ *
+ * Only on a tool-start hook, or a tool call's completion, failed or not (a shell
+ * command may have created the worktree it named; `shellCall` answers only for
+ * a shell), and only while git capture is on: which checkout a
+ * turn worked in is git metadata, and a developer who turned that off said no.
+ *
+ * @param state - Current flow state.
+ * @returns The state, with the named checkouts' roots.
+ */
+async function nominate(state: HookPipelineState): Promise<StepOutcome<HookPipelineState>> {
+  if (!state.config.capture.git || !state.provider.shellCall || !state.events.some((event) => TOOL_START_TYPES.has(event.event.type) || SHELL_REREAD_TYPES.has(event.event.type))) {
+    return next(state);
+  }
+
+  try {
+    const call = state.provider.shellCall(state.payload);
+
+    if (!call?.command) return next(state);
+
+    const cwd = call.workdir ? path.resolve(state.cwd, call.workdir) : state.cwd;
+    const roots = await Promise.all(shellDirectories(call.command, cwd, state.env.home).map(checkoutRootOf));
+    const nominations = [...new Set(roots.filter((root): root is string => root !== undefined))];
+
+    return next({ ...state, nominations });
+  } catch {
+    debugLog('shell nomination failed; this call names no checkout');
+
+    return next(state);
+  }
 }
 
 /**
@@ -255,22 +301,25 @@ async function trackTurnStage(state: HookPipelineState): Promise<StepOutcome<Hoo
   // Assembly failing must not cost the *queue* its drain: a hook that produced
   // no summary still has a backlog to move, so this stage degrades to "no
   // summary" instead of ending the flow.
-  const summary = await trackTurnSafely(state);
-  const gated = summary && state.config.emit.turnSummaries ? applyProductCapture(summary, state.config.capture) : undefined;
+  const { summary, workRoot, capture } = await trackTurnSafely(state);
+  // Re-applied under the reported checkout's own policy when it has one: that
+  // checkout's file decides what is said about it, not the folder the Stop ran in.
+  const workCapture = capture ?? state.config.capture;
+  const gated = summary && state.config.emit.turnSummaries ? applyProductCapture(summary, workCapture) : undefined;
   const outbound = gated ? [gated] : [];
 
-  return next({ ...state, summary, outbound });
+  return next({ ...state, summary, workRoot, workCapture, outbound });
 }
 
 /**
  * Assemble the turn, degrading to no summary on any failure.
  *
  * @param state - Current flow state.
- * @returns The summary, or undefined.
+ * @returns The summary and the local root it reported, or neither.
  */
-async function trackTurnSafely(state: HookPipelineState): Promise<HookPipelineState['summary']> {
+async function trackTurnSafely(state: HookPipelineState): Promise<TurnOutcome> {
   try {
-    return await trackTurn({
+    return await trackTurnOutcome({
       agentId: state.provider.id,
       rawPayload: state.payload,
       events: state.events,
@@ -282,12 +331,13 @@ async function trackTurnSafely(state: HookPipelineState): Promise<HookPipelineSt
       env: state.env,
       cwd: state.cwd,
       readOnly: state.dryRun,
-      failOpenReason: state.failOpenReason
+      failOpenReason: state.failOpenReason,
+      nominations: state.nominations
     });
   } catch (error) {
     debugLog('turn summary failed:', error);
 
-    return undefined;
+    return {};
   }
 }
 
@@ -339,11 +389,12 @@ async function deliver(state: HookPipelineState): Promise<StepOutcome<HookPipeli
 async function snapshot(state: HookPipelineState): Promise<StepOutcome<HookPipelineState>> {
   const repository = state.summary?.repository;
 
-  if (!repository || !state.config.capture.git) return stop(state, STOP_NO_SNAPSHOT);
+  if (!repository || !(state.workCapture ?? state.config.capture).git) return stop(state, STOP_NO_SNAPSHOT);
 
   await runSnapshotPipeline({
     input: {
-      cwd: state.cwd,
+      // The checkout the summary named, which need not be the folder the agent sits in.
+      cwd: state.workRoot ?? state.cwd,
       repository,
       provider: state.summary?.provider ?? state.provider.id,
       surface: state.summary?.surface ?? state.provider.id,

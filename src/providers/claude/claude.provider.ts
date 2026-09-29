@@ -3,7 +3,7 @@ import type { AgentProvider, HookContext, ProviderHookResponse } from '../provid
 import { CLAUDE_PROMPT_SUBMIT_EVENTS } from './constants/claude.constants.js';
 import { detectClaude } from './claude.detect.js';
 import { installClaudeHooks, uninstallClaudeHooks } from './claude.hooks.js';
-import { parseClaudeHookEvent } from './claude.adapter.js';
+import { claudeShellCall, parseClaudeHookEvent } from './claude.adapter.js';
 import { ClaudeOtelConfigurator } from './claude.otel.js';
 
 export const claudeProvider: AgentProvider = {
@@ -25,5 +25,6 @@ export const claudeProvider: AgentProvider = {
    */
   getBlockResponse: (payload: unknown, message: string): ProviderHookResponse | undefined =>
     hookRefusal(payload, CLAUDE_PROMPT_SUBMIT_EVENTS, { decision: 'block', reason: message }),
+  shellCall: claudeShellCall,
   nativeTelemetry: new ClaudeOtelConfigurator()
 };

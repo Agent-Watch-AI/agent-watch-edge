@@ -38,6 +38,7 @@ export function applyProductCapture<T extends ProductEvent>(event: T, capture?: 
     branch: git ? undefined : summary.branch,
     commit: git ? undefined : summary.commit,
     jira_ids: git ? undefined : summary.jira_ids,
+    work_evidence: git ? undefined : summary.work_evidence,
     files_changed: files ? undefined : summary.files_changed,
     files_touched: files ? undefined : summary.files_touched,
     files_read: files ? undefined : summary.files_read

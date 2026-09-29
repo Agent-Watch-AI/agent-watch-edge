@@ -10,6 +10,16 @@ export const TOOL_COMPLETION_TYPES: ReadonlySet<string> = new Set([
   'file.edited'
 ]);
 
+/** Canonical event types that mean "a tool is about to run": where a turn names its checkouts. */
+export const TOOL_START_TYPES: ReadonlySet<string> = new Set(['tool.started', 'shell.started', 'mcp.started']);
+
+/**
+ * Completions whose shell command is read again for a checkout it created. A
+ * failed call is `tool.failed` whatever the tool; the provider's `shellCall`
+ * answers only for a shell.
+ */
+export const SHELL_REREAD_TYPES: ReadonlySet<string> = new Set(['shell.completed', 'tool.failed']);
+
 /** Orphaned turn state (a crash without Stop/SessionEnd) is deleted after this. */
 export const TURN_STATE_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -52,6 +62,27 @@ export const USAGE_CLAIM_PREFIX = 'usage-claim--';
  * session is on, so a later hook's gate can state it.
  */
 export const SESSION_MODEL_FILE = 'session.json';
+
+/** The folder the session started in, written once by its first hook: `{ cwd }`. */
+export const SESSION_START_FILE = 'session-start.json';
+
+/**
+ * The checkout the session's last changing turn worked in: `{ root, repository, at }`.
+ * Carried by a turn that changes nothing, and read by the prompt gate (AWT-128).
+ */
+export const WORK_CHECKOUT_FILE = 'work-checkout.json';
+
+/** Session-wide files beside the records; none of them is a turn record. */
+export const SESSION_FILES: ReadonlySet<string> = new Set([SESSION_MODEL_FILE, SESSION_START_FILE, WORK_CHECKOUT_FILE]);
+
+/** Prefix of a checkout record's filename: `checkout--<turn>-<root>-<call>.json`. */
+export const CHECKOUT_RECORD_PREFIX = 'checkout--';
+
+/** Hash length of each part of a checkout record's filename. */
+export const CHECKOUT_KEY_HASH_LENGTH = 16;
+
+/** Checkouts one turn may name; past it, new ones are ignored (seven days of real turns peak at five). */
+export const MAX_TURN_CHECKOUTS = 8;
 
 /** Public provider labels; the internal id is an implementation detail. */
 export const PROVIDER_LABELS: Readonly<Record<string, string>> = {

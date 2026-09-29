@@ -7,6 +7,7 @@ import {
   GIT_BRANCH_ARGS,
   GIT_COMMIT_ARGS,
   GIT_MAX_BUFFER_BYTES,
+  GIT_NO_OPTIONAL_LOCKS,
   GIT_REMOTE_ARGS,
   GIT_REPO_ROOT_ARGS,
   GIT_STATUS_ARGS,
@@ -186,7 +187,7 @@ export async function developerIdentity(
  * @param remoteRaw - Raw `remote.origin.url`, when git reported one.
  * @returns The repository/remote/hash fields of the context.
  */
-function repositoryIdentity(root: string, remoteRaw: string | undefined): Pick<GitContext, 'repository' | 'remote' | 'repositoryHash'> {
+export function repositoryIdentity(root: string, remoteRaw: string | undefined): Pick<GitContext, 'repository' | 'remote' | 'repositoryHash'> {
   const remote = remoteRaw ? normalizeRemote(remoteRaw) : undefined;
 
   if (!remote) return { repository: path.basename(root) };
@@ -320,7 +321,9 @@ export const runGit: GitRunner = (args, cwd, timeoutMs, home) =>
   new Promise((resolve) => {
     const env = home ? { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config') } : undefined;
 
-    execFile('git', [...args], { cwd, timeout: timeoutMs, maxBuffer: GIT_MAX_BUFFER_BYTES, windowsHide: true, env }, (error, stdout) => {
+    // `--no-optional-locks`, on every call the edge makes: a hook must never
+    // take `index.lock` from under the agent's own `git commit` in that checkout.
+    execFile('git', [GIT_NO_OPTIONAL_LOCKS, ...args], { cwd, timeout: timeoutMs, maxBuffer: GIT_MAX_BUFFER_BYTES, windowsHide: true, env }, (error, stdout) => {
       // Trailing-only trim: `status --porcelain` lines carry a significant
       // leading space (" M file"); a full trim() would eat the first character
       // of the first filename.

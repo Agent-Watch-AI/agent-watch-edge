@@ -1,4 +1,4 @@
-import type { AgentWatchConfig, ConfigLoadResult } from '../../config/types/config.types.js';
+import type { AgentWatchConfig, CaptureConfig, ConfigLoadResult } from '../../config/types/config.types.js';
 import type { Env } from '../../core/types/core.types.js';
 import type { FailOpenReason } from '../../enforcement/types/enforcement.types.js';
 import type { AgentWatchEvent } from '../../events/types/events.types.js';
@@ -55,6 +55,16 @@ export interface HookPipelineState extends HookPipelineInput {
    * say it ran unchecked.
    */
   readonly failOpenReason?: FailOpenReason;
+  /**
+   * The real roots of the checkouts this payload's shell command names. Roots
+   * only: the command and the directories in it never leave the `nominate`
+   * stage.
+   */
+  readonly nominations?: readonly string[];
+  /** Local root of the checkout the closed turn reported; where its snapshot is taken. Never sent. */
+  readonly workRoot?: string;
+  /** That checkout's own capture policy, re-applied to the summary and asked by the snapshot. */
+  readonly workCapture?: CaptureConfig;
   /** The turn summary, when this payload closed a turn. */
   readonly summary?: TurnSummaryEvent;
   /** Records this run intends to send; empty on a dry run. */

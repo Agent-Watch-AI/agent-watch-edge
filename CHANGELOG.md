@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Behaviour change: every turn reports the checkout its work changed
+
+- A turn's `repository`, `branch`, `commit` and `jira_ids` now describe the checkout
+  the turn changed — a worktree it committed in through the shell, say — not only
+  the folder the agent sat in. New optional `work_evidence`: `changed`, `carried`,
+  `referenced` or `cwd`.
+- `files_changed` lists the files this turn changed there (cap 500), no longer the
+  whole dirty tree (cap 50).
+- The repository snapshot is taken at that checkout.
+- To find it, the hook reads a shell command's text in memory for directory names
+  and discards it; nothing of the command is stored, queued, logged or sent.
+- Every git call the edge makes passes `--no-optional-locks`.
+
 ### Behaviour change: developer prompts are never collected
 
 - `capture.prompts` and `capture.responses` are removed. Prompt and response text

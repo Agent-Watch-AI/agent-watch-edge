@@ -3,6 +3,7 @@ import type { CanonicalEventType } from '../../events/types/events.types.js';
 /** Stage names, used in the flow definition and in its debug trace. */
 export const STAGE_RESOLVE_CONTEXT = 'resolve-context';
 export const STAGE_PARSE_EVENTS = 'parse-events';
+export const STAGE_NOMINATE = 'nominate';
 export const STAGE_ENFORCE = 'enforce';
 export const STAGE_ENRICH = 'enrich';
 export const STAGE_TRACK_TURN = 'track-turn';

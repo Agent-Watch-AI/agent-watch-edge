@@ -94,7 +94,10 @@ Exactly three public discriminators exist:
 - `llm.call`: one physical provider request/completion with stable call id, model, usage, cost,
   session/turn/agent links, and joined Git/feature attribution.
 - `turn.summary`: one prompt→final-response aggregate with `llm_calls`, final totals,
-  `agent_usage[]`, and `usage_status`.
+  `agent_usage[]`, and `usage_status`. Its repository fields name the checkout the turn
+  changed (`work_evidence` says how it was chosen): tool hooks record candidate checkouts
+  with a git fingerprint, and the Stop compares them. A shell command's text is read in
+  memory by the `nominate` stage for directory names only and never kept.
 - `repo.snapshot`: bounded branch and commit metadata emitted when a repository
   changes and Git capture is enabled.
 

@@ -1,8 +1,9 @@
-import type { AgentWatchConfig, ConfigLoadResult } from '../../config/types/config.types.js';
+import type { AgentWatchConfig, CaptureConfig, ConfigLoadResult } from '../../config/types/config.types.js';
 import type { FailOpenReason } from '../../enforcement/types/enforcement.types.js';
 import type { Env } from '../../core/types/core.types.js';
 import type { AgentWatchEvent } from '../../events/types/events.types.js';
 import type { AgentWatchPaths } from '../../storage/types/storage.types.js';
+import type { TurnSummaryEvent } from './turn-summary.types.js';
 
 export interface TrackTurnOptions {
   readonly agentId: string;
@@ -27,6 +28,18 @@ export interface TrackTurnOptions {
   readonly readOnly?: boolean;
   /** Why this payload's prompt was allowed without a decision, when it was. */
   readonly failOpenReason?: FailOpenReason;
+  /** Real roots of the checkouts this payload's shell command named; roots only. */
+  readonly nominations?: readonly string[];
+}
+
+/** What one hook payload did to its turn. */
+export interface TurnOutcome {
+  /** The summary, when this payload closed a turn. */
+  readonly summary?: TurnSummaryEvent;
+  /** Local root of the checkout that summary reported. Never sent. */
+  readonly workRoot?: string;
+  /** That checkout's own capture policy, when it is not the hook folder's. */
+  readonly capture?: CaptureConfig;
 }
 
 /** The window a closing turn may claim transcript usage from. */

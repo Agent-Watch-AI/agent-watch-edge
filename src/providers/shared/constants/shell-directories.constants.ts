@@ -29,7 +29,7 @@ export const RE_DIRECTORY_ARGUMENTS: readonly RegExp[] = [
 export const RE_QUOTED_ABSOLUTE = /(["'])((?:\/|~\/|\$HOME\/|\$\{HOME\}\/)[^"'\n]+)\1/g;
 
 /** A bare absolute or home-relative path, not glued to a longer word. */
-export const RE_BARE_ABSOLUTE = /(?<![\w/.$-])((?:\/|~\/|\$HOME\/|\$\{HOME\}\/)[^\s"';|&()<>]+)/g;
+export const RE_BARE_ABSOLUTE = /(?<![\w/.$"'-])((?:\/|~\/|\$HOME\/|\$\{HOME\}\/)[^\s"';|&()<>]+)/g;
 
 /** A bare `./` or `../` path. */
 export const RE_DOT_RELATIVE = /(?<![\w/.-])(\.\.?\/[^\s"';|&()<>]+)/g;

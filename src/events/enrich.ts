@@ -52,9 +52,9 @@ export async function enrichEvents(events: readonly AgentWatchEvent[], options: 
 /**
  * Repository context for this batch, at the cheapest sufficient depth.
  *
- * Full context (branch, commit, remote, status) costs up to five git processes
- * and is only consumed when a turn closes — the summary reads it off the Stop
- * event. Every other hook runs on the agent's critical path, often once per
+ * Full context (branch, commit, remote) costs up to four git processes and is
+ * only consumed when a turn closes — the summary falls back to it when the turn
+ * named no checkout of its own. Every other hook runs on the agent's critical path, often once per
  * tool call, and needs nothing but the repository root for path rewriting.
  *
  * @param events - The batch being enriched.

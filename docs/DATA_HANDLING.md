@@ -29,6 +29,11 @@ Tool input and tool output bodies are not collected by default. Default capture 
 }
 ```
 
+To find which checkout a turn worked in, the hook inspects a shell command's text
+in memory for directory names and discards it. Only checkout roots confirmed on
+disk are kept, in local turn state, until the turn closes. The command is never
+stored, queued, logged or sent. This happens only while `capture.git` is on.
+
 Configurations written by earlier releases may still carry `capture.prompts` or
 `capture.responses`. Those keys are ignored on load whatever their value, the next
 `agentwatch setup` removes them from the file and says so once, and `doctor`
@@ -90,8 +95,8 @@ availability determines which identifiers and usage values exist.
 ### `turn.summary`
 
 The hook-generated flat fields are `provider`, `surface`, `session_id`, `turn_id`,
-`developer_id`, `repository`, `branch`, `commit`, `jira_ids`, `files_changed`,
-`files_touched`, `files_read`, `prompt_evidence`, `response_evidence`,
+`developer_id`, `repository`, `branch`, `commit`, `jira_ids`, `work_evidence`,
+`files_changed`, `files_touched`, `files_read`, `prompt_evidence`, `response_evidence`,
 `tool_calls`, `tools_used`, `model`, `billing_mode`, `input_tokens`,
 `cached_input_tokens`, `cache_creation_input_tokens`, `output_tokens`,
 `usage_status`, `started_at`, and `ended_at`. The nested `session` contains `id`,
@@ -166,23 +171,30 @@ Branches, commit SHAs, ticket keys and file paths are metadata, not anonymous da
 Paths are made repository-relative where possible; paths outside the repository
 can remain absolute, with the home prefix abbreviated.
 
-A session started *above* its repositories — in a workspace folder holding
-several, which is not itself a repository — used to send each path as a bare
-basename and no repository at all. It now reports, per turn, the repository
-beneath the start folder that the turn edited most (read most, when it edited
-nothing), that repository's branch and commit, and its paths relative to that
-repository's root: more than a basename, less than an absolute path. No new
-class of data is collected — repository, branch and commit are already sent for
-a session started inside a repository. Only repositories whose root lies beneath
-the start folder are resolved, and a file anywhere else contributes no
-repository; once a turn has worked in one repository, its file lists carry that
-repository's paths and nothing else — even when that repository's own config
-then withholds it. A repository reached through a symlink is judged by where it
-really is, not by the link. Local turn state keeps each tool call's repository
-by its absolute root, because a lasting `cd` moves the working folder later hooks
-report; it is checked again against the folder the turn closes in, and never
-sent. A repository not beneath that folder contributes no path, and when the
-turn closes inside a repository, a path resolved from above it is dropped.
+Each turn reports the checkout its work changed, wherever the session started.
+Agents often sit in one folder and work in a worktree beside it through shell
+commands. A tool hook names candidate checkouts — the one it runs in, a file
+tool's file's, and those a shell command names — and records each candidate's
+root with a fingerprint of it (HEAD, branch, and the dirty paths' status letters,
+sizes and modification times). The turn's closing hook fingerprints them again and
+reports, in order: the checkout the turn changed most; else the session's last
+changed checkout; else the one it named most; else the folder it ended in, as
+before. `work_evidence` says which of the four (`changed`, `carried`,
+`referenced`, `cwd`). `files_changed` lists only the files this turn changed
+there (at most 500), no longer the checkout's whole dirty tree, and
+`files_touched` / `files_read` carry that checkout's paths only; paths in other
+checkouts are dropped, while the calls still count. No new class of data is
+collected: repository, branch, commit and paths were already sent for a session
+started inside a repository.
+
+Which checkouts may be reported is decided by the folder the session started in.
+With project roots configured, only checkouts that the start folder's root
+claims; without them, only checkouts beneath the start folder. A checkout
+another root claims is refused outright: it gets no record and no git process
+runs in it. Checkouts are judged by where they really are, not through symlinks.
+Local turn state keeps the candidate roots, the fingerprints, the start folder
+and the session's last changed checkout's root (`work-checkout.json`); none of it
+is sent, and it goes with the session's other turn state.
 
 What is reported about that repository follows *its* effective config, not the
 start folder's: a `.agentwatch.json` committed inside it narrows the turn exactly

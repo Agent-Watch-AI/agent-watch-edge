@@ -1,4 +1,4 @@
-import type { EnforcementDecision } from '../types/enforcement.types.js';
+import type { EnforcementDecision, FailOpenReason } from '../types/enforcement.types.js';
 
 /** The two decisions, as both the wire and the cache file spell them. */
 export const DECISION_ALLOW = 'allow';
@@ -14,6 +14,33 @@ export const ALLOW: EnforcementDecision = Object.freeze({ decision: DECISION_ALL
 
 /** Local cache file under the data directory. */
 export const ENFORCEMENT_CACHE_FILE_NAME = 'enforcement-cache.json';
+
+/**
+ * The enforcement breaker's file, in the identity's state directory beside the
+ * delivery breaker and never the same file: an outage on one path is not an
+ * outage on the other, and the two are tripped by different signals. Suffixed
+ * with a digest of the decision URL, because what the breaker records is that
+ * one endpoint did not answer.
+ */
+export const ENFORCEMENT_COOLDOWN_FILE_PREFIX = 'enforcement-cooldown-';
+export const ENFORCEMENT_COOLDOWN_FILE_SUFFIX = '.json';
+export const ENFORCEMENT_COOLDOWN_URL_CHARS = 12;
+
+/**
+ * How long turns skip the check after the platform failed to answer one: 30 s.
+ *
+ * Only a submitted prompt asks, so this is measured against how often a person
+ * presses enter. Inside the 5 s window it would expire between almost every pair
+ * of turns and save nothing — every turn of an outage would pay the timeout
+ * again, which is what `edge-resilience` §1 forbids. Longer is not free: a turn
+ * the breaker skips is not checked, so after a blip clears a tenant over its cap
+ * can run for up to this long. That is at most a turn or two at human pace, it
+ * is the same outcome the failed request itself already produced, and each
+ * skipped turn is a fail-open like any other, with the breaker as its reason.
+ * Half the delivery breaker's 60 s because an unchecked turn costs a
+ * tenant money and a late event costs nothing.
+ */
+export const ENFORCEMENT_COOLDOWN_MS = 30_000;
 
 /**
  * Entries kept in the cache file.
@@ -33,3 +60,29 @@ export const BRANCH_PARAM = 'branch';
 
 /** And the model, which is what lets a cap on one model be judged. */
 export const MODEL_PARAM = 'model';
+
+/**
+ * The fail-open reasons the platform accepts, for checking a value read back
+ * from disk before it is sent. Anything else is dropped rather than sent:
+ * the platform would file it as `unknown`, and a hand-edited file is not a
+ * reason to report anything.
+ */
+export const FAIL_OPEN_REASONS: ReadonlySet<FailOpenReason> = new Set<FailOpenReason>([
+  'timeout',
+  'http_error',
+  'network_error',
+  'unreadable_response',
+  'circuit_open',
+  'unknown'
+]);
+
+/**
+ * The error names a timed-out request rejects with. `AbortSignal.timeout`
+ * rejects with a TimeoutError, but a body stream cancelled by that signal can
+ * surface as a plain AbortError depending on the runtime — and the timeout is
+ * the only signal this request carries, so either name means it timed out.
+ */
+export const TIMEOUT_ERROR_NAMES: ReadonlySet<string> = new Set(['TimeoutError', 'AbortError']);
+
+/** The error name `JSON.parse` throws on a body that is not JSON. */
+export const SYNTAX_ERROR_NAME = 'SyntaxError';

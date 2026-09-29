@@ -1,5 +1,7 @@
 # AI Agent Instructions & Architectural Guidelines
 
+North star: `../agent-watch-docs/MISSION.md`. Read it first; when a spec or ticket disagrees with it, the mission wins.
+
 When writing, refactoring, or generating code in `@agent-watch-ai/edge`, strictly follow these directives. `STYLEGUIDE.md` is the long form; this is the checklist.
 
 ## 1. Code Style & Functional Programming

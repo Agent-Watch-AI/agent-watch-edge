@@ -379,6 +379,55 @@ describe('buildTurnSummary', () => {
     expect(summary.response_evidence).toEqual({ length: 4, sha256: 'y' });
     expect(summary.tool_calls).toBe(0);
   });
+
+  it('reports a fail-open reason from the closed set, and drops anything else read back from disk', () => {
+    const summarize = (failOpenReason: unknown) =>
+      buildTurnSummary({
+        provider: 'claude',
+        surface: 'cli',
+        sessionId: 'sess-1',
+        prompts: [{ kind: 'prompt', at: '2026-08-06T18:00:00.000Z', failOpenReason } as never],
+        tools: [],
+        endedAt: '2026-08-06T18:24:00.000Z'
+      });
+
+    expect(summarize('timeout').enforcement_fail_open_reason).toBe('timeout');
+    expect(summarize(undefined)).not.toHaveProperty('enforcement_fail_open_reason');
+    // A hand-edited record is not a reason, and a message never is.
+    expect(summarize('Ivan spent $612')).not.toHaveProperty('enforcement_fail_open_reason');
+    expect(summarize('TIMEOUT')).not.toHaveProperty('enforcement_fail_open_reason');
+
+    // Without a turn id a Stop collects an interrupted earlier prompt's record
+    // too; only the prompt that opened this turn speaks for it.
+    const checked = buildTurnSummary({
+      provider: 'claude',
+      surface: 'cli',
+      sessionId: 'sess-1',
+      prompts: [
+        { kind: 'prompt', at: '2026-08-06T18:00:00.000Z', failOpenReason: 'timeout' },
+        { kind: 'prompt', at: '2026-08-06T18:05:00.000Z' }
+      ],
+      tools: [],
+      endedAt: '2026-08-06T18:24:00.000Z'
+    });
+
+    expect(checked).not.toHaveProperty('enforcement_fail_open_reason');
+
+    // Nor does the next prompt, racing in after this Stop.
+    const raced = buildTurnSummary({
+      provider: 'claude',
+      surface: 'cli',
+      sessionId: 'sess-1',
+      prompts: [
+        { kind: 'prompt', at: '2026-08-06T18:00:00.000Z' },
+        { kind: 'prompt', at: '2026-08-06T18:25:00.000Z', failOpenReason: 'timeout' }
+      ],
+      tools: [],
+      endedAt: '2026-08-06T18:24:00.000Z'
+    });
+
+    expect(raced).not.toHaveProperty('enforcement_fail_open_reason');
+  });
 });
 
 describe('turn tracking through the hook pipeline', () => {

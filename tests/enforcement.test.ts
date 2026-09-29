@@ -12,6 +12,7 @@ import { DecisionCache, decisionKey } from '../src/enforcement/decision-cache.js
 import { ENFORCEMENT_CACHE_FILE_NAME } from '../src/enforcement/constants/enforcement.constants.js';
 import { SESSION_MODEL_FILE } from '../src/turns/constants/turns.constants.js';
 import { resolvePaths } from '../src/storage/paths.js';
+import { IDENTITY_STATE_DIR_NAME } from '../src/transport/constants/transport.constants.js';
 import { TurnStateStore } from '../src/turns/turn-state.js';
 import { antigravityPreTool } from './fixtures/antigravity.js';
 import { cursorBeforeSubmitPrompt } from './fixtures/cursor.js';
@@ -92,6 +93,15 @@ describe('enforcement decision', () => {
   }
 
   describe('only an explicit block blocks', () => {
+    // Each failure trips the breaker and an allow is cached; either would skip
+    // every case after it, so clearing both keeps each one an actual request.
+    const resetState = async () => {
+      const { dataDir } = resolvePaths(world.env);
+
+      await fs.rm(path.join(dataDir, IDENTITY_STATE_DIR_NAME), { recursive: true, force: true });
+      await fs.rm(path.join(dataDir, ENFORCEMENT_CACHE_FILE_NAME), { force: true });
+    };
+
     it('blocks on a decision that carries a message', async () => {
       const server = answering({ decision: 'block', message: MESSAGE });
 
@@ -112,24 +122,28 @@ describe('enforcement decision', () => {
       expect(unasked.calls()).toBe(0);
     });
 
-    it('allows on a network failure', async () => {
-      expect(await ask({}, failing)).toEqual({ decision: 'allow' });
+    it('allows on a network failure, and says so', async () => {
+      expect(await ask({}, failing)).toEqual({ decision: 'allow', failOpenReason: 'network_error' });
     });
 
     it('allows on every status that is not a 2xx', async () => {
       for (const status of [400, 401, 403, 404, 429, 500, 503]) {
         const server = answering({ decision: 'block', message: MESSAGE }, status);
 
-        expect(await ask({}, server.fetchFn)).toEqual({ decision: 'allow' });
+        await resetState();
+
+        expect(await ask({}, server.fetchFn)).toEqual({ decision: 'allow', failOpenReason: 'http_error' });
+        expect(server.calls()).toBe(1);
       }
     });
 
-    it('allows on a body it cannot read as a decision', async () => {
+    it('allows on a body it cannot read as a decision, and says so', async () => {
       const bodies: unknown[] = [
         'not json at all',
+        // Too large to be a decision, so never decoded at all.
+        JSON.stringify({ decision: 'block', message: 'x'.repeat(1024 * 1024) }),
         JSON.stringify([{ decision: 'block', message: MESSAGE }]),
         JSON.stringify({}),
-        JSON.stringify({ decision: 'allow' }),
         // A decision this code does not know must never become a refusal.
         JSON.stringify({ decision: 'throttle', message: MESSAGE }),
         JSON.stringify({ decision: 'BLOCK', message: MESSAGE }),
@@ -142,11 +156,32 @@ describe('enforcement decision', () => {
       for (const body of bodies) {
         const server = answering(body);
 
-        expect(await ask({}, server.fetchFn)).toEqual({ decision: 'allow' });
+        await resetState();
+
+        expect(await ask({}, server.fetchFn)).toEqual({ decision: 'allow', failOpenReason: 'unreadable_response' });
+        expect(server.calls()).toBe(1);
       }
     });
 
-    it('allows when the backend needs longer than the timeout', async () => {
+    it('reports nothing for a real answer, allow or block', async () => {
+      for (const answer of [{ decision: 'allow' }, { decision: 'block', message: MESSAGE }]) {
+        await resetState();
+
+        expect(await ask({}, answering(answer).fetchFn)).toEqual(answer);
+      }
+    });
+
+    it('never reports the body or the error text, only the category', async () => {
+      const leaky = (async () => {
+        throw new Error(MESSAGE);
+      }) as typeof fetch;
+      const decision = await ask({}, leaky);
+
+      expect(JSON.stringify(decision)).not.toContain('Ivan');
+      expect(decision).toEqual({ decision: 'allow', failOpenReason: 'network_error' });
+    });
+
+    it('allows when the backend needs longer than the timeout, and says it timed out', async () => {
       // Honors the abort signal, so this asserts the timeout is actually wired
       // to the request and not just configured.
       const slow = ((_url: any, init: any) =>
@@ -155,11 +190,20 @@ describe('enforcement decision', () => {
 
           init.signal.addEventListener('abort', () => {
             clearTimeout(timer);
-            reject(new Error('TimeoutError'));
+            // What a real fetch rejects with: the signal's own TimeoutError.
+            reject(init.signal.reason);
           });
         })) as typeof fetch;
 
-      expect(await ask({ enforcement: { timeoutMs: 20 } }, slow)).toEqual({ decision: 'allow' });
+      expect(await ask({ enforcement: { timeoutMs: 20 } }, slow)).toEqual({ decision: 'allow', failOpenReason: 'timeout' });
+    });
+
+    it('reads an AbortError from a body the timeout cancelled as a timeout too', async () => {
+      const stalled = (async () => {
+        throw new DOMException('This operation was aborted', 'AbortError');
+      }) as typeof fetch;
+
+      expect(await ask({}, stalled)).toEqual({ decision: 'allow', failOpenReason: 'timeout' });
     });
   });
 
@@ -189,12 +233,12 @@ describe('enforcement decision', () => {
       const options = { config: config(), paths: resolvePaths(world.env), developerId: DEVELOPER, now: () => clock, fetchFn: server.fetchFn };
 
       await resolveEnforcement(options);
-      clock = new Date('2026-08-26T10:00:59.000Z');
+      clock = new Date('2026-08-26T10:00:04.000Z');
       await resolveEnforcement(options);
 
       expect(server.calls()).toBe(1);
 
-      clock = new Date('2026-08-26T10:01:01.000Z');
+      clock = new Date('2026-08-26T10:00:06.000Z');
 
       expect(await resolveEnforcement(options)).toEqual({ decision: 'block', message: MESSAGE });
       expect(server.calls()).toBe(2);
@@ -226,7 +270,21 @@ describe('enforcement decision', () => {
       const options = { config: config(), paths: resolvePaths(world.env), developerId: DEVELOPER, now: () => clock, fetchFn: server.fetchFn };
 
       await resolveEnforcement(options);
-      clock = new Date('2026-08-26T10:01:01.000Z');
+      clock = new Date('2026-08-26T10:00:06.000Z');
+      await resolveEnforcement(options);
+
+      expect(server.calls()).toBe(2);
+    });
+
+    it('never holds an answer past the promised window, whatever the config says', async () => {
+      let clock = new Date('2026-08-26T10:00:00.000Z');
+      const server = answering({ decision: 'allow' });
+      // What every earlier install wrote into its config file: saveConfig
+      // persists defaults, so the old 60 s default is on disk everywhere.
+      const options = { config: config({ enforcement: { cacheTtlMs: 60_000 } }), paths: resolvePaths(world.env), developerId: DEVELOPER, now: () => clock, fetchFn: server.fetchFn };
+
+      await resolveEnforcement(options);
+      clock = new Date('2026-08-26T10:00:06.000Z');
       await resolveEnforcement(options);
 
       expect(server.calls()).toBe(2);
@@ -238,7 +296,7 @@ describe('enforcement decision', () => {
       const options = { config: config(), paths: resolvePaths(world.env), developerId: DEVELOPER, now: () => clock, fetchFn: server.fetchFn };
 
       await resolveEnforcement(options);
-      clock = new Date('2026-08-26T10:00:30.000Z');
+      clock = new Date('2026-08-26T10:00:04.000Z');
       await resolveEnforcement(options);
 
       expect(server.calls()).toBe(1);
@@ -253,7 +311,7 @@ describe('enforcement decision', () => {
       // how long to keep it does not get a vote on whether it is readable.
       expect(await resolveEnforcement(options)).toEqual({ decision: 'block', message: MESSAGE });
 
-      clock = new Date('2026-08-26T10:00:30.000Z');
+      clock = new Date('2026-08-26T10:00:04.000Z');
       await resolveEnforcement(options);
 
       // And with no usable advice, the configured TTL is what applies.

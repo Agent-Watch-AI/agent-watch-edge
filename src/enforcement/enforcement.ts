@@ -1,11 +1,23 @@
 import path from 'node:path';
 import { enforcementUrl } from '../config/config.js';
+import { ENFORCEMENT_WINDOW_MS } from '../config/constants/config.constants.js';
 import type { AgentWatchConfig } from '../config/types/config.types.js';
 import { debugLog } from '../core/logger.js';
-import { ALLOW, ENFORCEMENT_CACHE_FILE_NAME } from './constants/enforcement.constants.js';
+import { sha256Hex } from '../events/event-id.js';
+import { BackendCooldown } from '../transport/cooldown.js';
+import { identityPaths } from '../transport/queue-partition.js';
+import {
+  ALLOW,
+  DECISION_ALLOW,
+  ENFORCEMENT_CACHE_FILE_NAME,
+  ENFORCEMENT_COOLDOWN_FILE_PREFIX,
+  ENFORCEMENT_COOLDOWN_FILE_SUFFIX,
+  ENFORCEMENT_COOLDOWN_MS,
+  ENFORCEMENT_COOLDOWN_URL_CHARS
+} from './constants/enforcement.constants.js';
 import { DecisionCache, decisionKey } from './decision-cache.js';
 import { requestDecision } from './decision-client.js';
-import type { EnforcementDecision, EnforcementOptions } from './types/enforcement.types.js';
+import type { EnforcementOptions, FailOpenReason, GateDecision } from './types/enforcement.types.js';
 
 /**
  * Whether this developer may start a turn right now.
@@ -17,12 +29,16 @@ import type { EnforcementDecision, EnforcementOptions } from './types/enforcemen
  * front of every developer's tooling, so a check that failed closed would turn
  * an alerts-service hiccup into an outage for a whole engineering organization.
  *
+ * An allow that exists only because nothing answered carries the reason, so
+ * the turn it lets through can say it ran unchecked. An allow because nothing
+ * was asked carries none: there was no check to fail.
+ *
  * Never throws: a caller on the hook path has to answer the agent either way.
  *
  * @param options - Effective config, paths, the identity to ask about, clock.
  * @returns The decision to act on.
  */
-export async function resolveEnforcement(options: EnforcementOptions): Promise<EnforcementDecision> {
+export async function resolveEnforcement(options: EnforcementOptions): Promise<GateDecision> {
   const url = enforcementUrl(options.config);
   const token = options.config.token;
   const developerId = options.developerId;
@@ -35,8 +51,18 @@ export async function resolveEnforcement(options: EnforcementOptions): Promise<E
   } catch (error) {
     debugLog('enforcement: check threw; allowing:', error);
 
-    return ALLOW;
+    return failOpen('unknown');
   }
+}
+
+/**
+ * An allow that stands in for a decision that did not arrive.
+ *
+ * @param reason - Why it did not.
+ * @returns The allow, carrying the reason.
+ */
+function failOpen(reason: FailOpenReason): GateDecision {
+  return { decision: DECISION_ALLOW, failOpenReason: reason };
 }
 
 /**
@@ -63,7 +89,8 @@ export function enforcementWouldAsk(config: AgentWatchConfig): boolean {
  *
  * A miss asks the platform and stores whatever it answered. A *failure* is not
  * stored: it is not a decision, and caching it as an allow would extend one
- * unreachable moment across the whole TTL.
+ * unreachable moment across the whole TTL. It trips the breaker instead, so the
+ * turns after it skip the wait rather than each paying the timeout again.
  *
  * @param options - As given to {@link resolveEnforcement}.
  * @param url - The decision endpoint.
@@ -76,14 +103,24 @@ async function decideThroughCache(
   url: string,
   token: string,
   developerId: string
-): Promise<EnforcementDecision> {
+): Promise<GateDecision> {
   const cache = new DecisionCache(path.join(options.paths.dataDir, ENFORCEMENT_CACHE_FILE_NAME), options.now);
   const key = decisionKey(url, token, developerId, options.checkout, options.model);
   const cached = await cache.read(key);
 
   if (cached) return cached;
 
-  const answered = await requestDecision({
+  const cooldown = new BackendCooldown(enforcementCooldownFile(options, url, token), options.now);
+
+  // Skipping is the only thing the breaker does: the turn gets the same allow a
+  // timeout would have given it, without the wait.
+  if (await cooldown.active()) {
+    debugLog('enforcement: breaker open; allowing without asking');
+
+    return failOpen('circuit_open');
+  }
+
+  const outcome = await requestDecision({
     url,
     token,
     developerId,
@@ -94,9 +131,15 @@ async function decideThroughCache(
     fetchFn: options.fetchFn
   });
 
-  if (!answered) return ALLOW;
+  if ('failOpenReason' in outcome) {
+    await cooldown.trip(ENFORCEMENT_COOLDOWN_MS);
 
-  const { cacheTtlMs, ...decision } = answered;
+    return failOpen(outcome.failOpenReason);
+  }
+
+  await cooldown.clear();
+
+  const { cacheTtlMs, ...decision } = outcome.answered;
   const ttlMs = effectiveTtlMs(cacheTtlMs, options.config.enforcement.cacheTtlMs);
 
   // Zero is the platform saying "do not keep this", which it says to every tenant
@@ -118,6 +161,24 @@ async function decideThroughCache(
 }
 
 /**
+ * The enforcement breaker's file for this identity and endpoint.
+ *
+ * Per identity for the reason delivery's is: one tenant's unreachable platform
+ * or revoked token must not skip another tenant's checks. Per endpoint because
+ * one identity reaching two platforms must not let one's outage skip the other.
+ *
+ * @param options - As given to {@link resolveEnforcement}.
+ * @param url - The decision endpoint.
+ * @param token - Edge token the request is made with.
+ * @returns Absolute path of the state file.
+ */
+function enforcementCooldownFile(options: EnforcementOptions, url: string, token: string): string {
+  const name = ENFORCEMENT_COOLDOWN_FILE_PREFIX + sha256Hex(url).slice(0, ENFORCEMENT_COOLDOWN_URL_CHARS) + ENFORCEMENT_COOLDOWN_FILE_SUFFIX;
+
+  return path.join(path.dirname(identityPaths(options.paths, token).cooldownFile), name);
+}
+
+/**
  * How long this answer may be reused.
  *
  * The platform asks for a TTL because it is the side that knows how close the
@@ -127,14 +188,16 @@ async function decideThroughCache(
  * configured ceiling, which is what keeps the setting meaningful.
  *
  * No advice means the configured value, which is what a platform that predates
- * the field produces.
+ * the field produces. Neither may exceed the promised window.
  *
  * @param asked - What the platform asked for, if anything.
  * @param configured - This machine's own TTL, and its ceiling.
  * @returns The TTL to store the entry with.
  */
 function effectiveTtlMs(asked: number | undefined, configured: number): number {
-  if (asked === undefined) return configured;
+  const ceiling = Math.min(configured, ENFORCEMENT_WINDOW_MS);
 
-  return Math.min(asked, configured);
+  if (asked === undefined) return ceiling;
+
+  return Math.min(asked, ceiling);
 }

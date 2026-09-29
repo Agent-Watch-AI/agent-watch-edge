@@ -1,23 +1,25 @@
 import { debugLog } from '../core/logger.js';
 import { edgeHeaders } from '../transport/headers.js';
+import { BODY_TOO_LARGE } from '../transport/constants/transport.constants.js';
 import { discardResponseBody, readCappedJson } from '../transport/response-body.js';
-import { BRANCH_PARAM, DEVELOPER_ID_PARAM, MODEL_PARAM, REPOSITORY_PARAM } from './constants/enforcement.constants.js';
+import { BRANCH_PARAM, DEVELOPER_ID_PARAM, MODEL_PARAM, REPOSITORY_PARAM, SYNTAX_ERROR_NAME, TIMEOUT_ERROR_NAMES } from './constants/enforcement.constants.js';
 import { cacheTtlSchema, decisionSchema } from './schemas/enforcement.schema.js';
-import type { AnsweredDecision, DecisionRequest } from './types/enforcement.types.js';
+import type { DecisionOutcome, DecisionRequest, FailOpenReason } from './types/enforcement.types.js';
 
 /**
  * Ask the platform whether one developer may make an LLM call.
  *
- * Never throws, and answers `undefined` — "nobody said no" — for everything
- * that is not a complete, valid decision: a timeout, a network error, any
- * non-2xx status, a body that is not JSON, a body too large to be a decision,
- * and a body whose decision this code cannot read. Only the caller's own allow default gets built out of those; a
- * refusal can only ever come from a body that validates.
+ * Never throws, and answers with a fail-open reason — "nobody said no, and
+ * this is why" — for everything that is not a complete, valid decision: a
+ * timeout, a network error, any non-2xx status, a body that is not JSON, a body
+ * too large to be a decision, and a body whose decision this code cannot read.
+ * Only the caller's own allow default gets built out of those; a refusal can
+ * only ever come from a body that validates.
  *
  * @param request - Destination, credentials, identity and timeout.
- * @returns The platform's decision, or undefined when it did not give one.
+ * @returns The platform's decision, or the reason it did not give one.
  */
-export async function requestDecision(request: DecisionRequest): Promise<AnsweredDecision | undefined> {
+export async function requestDecision(request: DecisionRequest): Promise<DecisionOutcome> {
   const fetchFn = request.fetchFn ?? fetch;
 
   try {
@@ -36,17 +38,41 @@ export async function requestDecision(request: DecisionRequest): Promise<Answere
       discardResponseBody(response);
       debugLog(`enforcement: HTTP ${response.status}; allowing`);
 
-      return undefined;
+      return { failOpenReason: 'http_error' };
     }
 
     return readDecision(await readCappedJson(response));
   } catch (error) {
-    // Never log the response body: the message names a person and what they
-    // spent, and this line goes to the developer's terminal.
-    debugLog('enforcement: check failed; allowing:', (error as Error).name || 'network error');
+    const reason = thrownReason(error);
 
-    return undefined;
+    // Never log or report the response body: the message names a person and
+    // what they spent, and this line goes to the developer's terminal.
+    debugLog('enforcement: check failed; allowing:', reason);
+
+    return { failOpenReason: reason };
   }
+}
+
+/**
+ * The category of a failure that threw, and nothing else about it.
+ *
+ * The timeout covers the body read too, so a slow body is a timeout. A body
+ * that is not JSON, or too large to be a decision, is unreadable. Everything
+ * else — refused, reset, DNS, a redirect the request forbids — is the network.
+ *
+ * @param error - Whatever was thrown.
+ * @returns The reason to report.
+ */
+function thrownReason(error: unknown): FailOpenReason {
+  // By shape, not by class: the timeout is a DOMException, and a fetch
+  // injected by a test or a polyfill need not share this realm's Error.
+  const thrown = typeof error === 'object' && error !== null ? (error as Partial<Error>) : {};
+
+  if (thrown.name !== undefined && TIMEOUT_ERROR_NAMES.has(thrown.name)) return 'timeout';
+
+  if (thrown.name === SYNTAX_ERROR_NAME || thrown.message === BODY_TOO_LARGE) return 'unreadable_response';
+
+  return 'network_error';
 }
 
 /**
@@ -87,18 +113,18 @@ function decisionUrl(request: DecisionRequest): string {
  * A decoded body, if it is a decision at all.
  *
  * @param body - Whatever the endpoint returned.
- * @returns The decision, or undefined when the body is not one.
+ * @returns The decision, or the reason when the body is not one.
  */
-function readDecision(body: unknown): AnsweredDecision | undefined {
+function readDecision(body: unknown): DecisionOutcome {
   const parsed = decisionSchema.safeParse(body);
 
   if (!parsed.success) {
     debugLog('enforcement: unreadable decision; allowing');
 
-    return undefined;
+    return { failOpenReason: 'unreadable_response' };
   }
 
-  return { ...parsed.data, cacheTtlMs: readCacheTtlMs(body) };
+  return { answered: { ...parsed.data, cacheTtlMs: readCacheTtlMs(body) } };
 }
 
 /**

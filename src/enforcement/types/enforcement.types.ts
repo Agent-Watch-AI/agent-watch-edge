@@ -29,6 +29,34 @@ export type EnforcementDecision = { readonly decision: 'allow' } | { readonly de
  */
 export type AnsweredDecision = EnforcementDecision & { readonly cacheTtlMs?: number };
 
+/**
+ * Why a turn ran without a decision, in the platform's closed vocabulary.
+ *
+ * A category and never a detail: no status code, no error message, no body.
+ * The body of a failed answer can name a person and what they spent, and a
+ * status code says nothing the platform's own logs do not already say better.
+ */
+export type FailOpenReason = 'timeout' | 'http_error' | 'network_error' | 'unreadable_response' | 'circuit_open' | 'unknown';
+
+/**
+ * What asking the platform produced: an answer, or the reason there was none.
+ *
+ * A union rather than `AnsweredDecision | undefined` so a failure keeps what
+ * kind of failure it was, which is what the turn summary reports.
+ */
+export type DecisionOutcome = { readonly answered: AnsweredDecision } | { readonly failOpenReason: FailOpenReason };
+
+/**
+ * What the hook acts on: the decision, and — only when the turn is allowed
+ * because nothing answered — why.
+ *
+ * An allow with no reason is a real answer (or nothing was asked at all); an
+ * allow with one is a turn that ran unchecked.
+ */
+export type GateDecision
+  = | { readonly decision: 'allow'; readonly failOpenReason?: FailOpenReason }
+    | { readonly decision: 'block'; readonly message: string };
+
 /** One decision as the local cache holds it, with the deadline it expires at. */
 export interface CachedDecision {
   readonly decision: EnforcementDecision;

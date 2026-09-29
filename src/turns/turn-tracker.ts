@@ -3,6 +3,7 @@ import { pollUntil } from '../core/async.js';
 import { debugLog } from '../core/logger.js';
 import { asRecord } from '../core/object.js';
 import { detectBillingMode } from '../billing/billing-mode.js';
+import type { FailOpenReason } from '../enforcement/types/enforcement.types.js';
 import type { AgentWatchEvent, ContentEvidence, EventGit, FeatureCandidate, UsageBillingMode } from '../events/types/events.types.js';
 import { sha256Hex } from '../events/event-id.js';
 import { loadEffectiveConfig } from '../config/repo-config.js';
@@ -127,7 +128,7 @@ async function processEvent(
   // on `session.ended` would leave a session's raw prompt text undeleted.
   if (type === 'session.started') await rememberModelSafely(store, sessionId, event);
 
-  const record = recordFor(event, options.cwd);
+  const record = recordFor(event, options.cwd, options.failOpenReason);
 
   if (record) await store.append(sessionId, recordKeyFor(event), record);
 
@@ -182,12 +183,13 @@ async function rememberModelSafely(
  *
  * @param event - Canonical event.
  * @param cwd - This hook's own working directory.
+ * @param failOpenReason - Why this payload's prompt ran unchecked, if it did.
  * @returns The record, or undefined when the event carries no turn state.
  */
-function recordFor(event: AgentWatchEvent, cwd: string): TurnRecord | undefined {
+function recordFor(event: AgentWatchEvent, cwd: string, failOpenReason: FailOpenReason | undefined): TurnRecord | undefined {
   const type = event.event.type;
 
-  if (type === 'prompt.submitted') return promptRecord(event);
+  if (type === 'prompt.submitted') return promptRecord(event, failOpenReason);
 
   if (TOOL_COMPLETION_TYPES.has(type)) return toolRecord(event, cwd);
 
@@ -580,6 +582,8 @@ async function fallbackSummary(sessionId: string, stopEvent: AgentWatchEvent, op
       installationId: options.config.installationId,
       git: stopEvent.git,
       featureCandidates: stopEvent.feature?.candidates,
+      // No prompt records, so no fail-open reason either: a degraded summary
+      // reports what it can read, and the state it could not read is the point.
       prompts: [],
       tools: [],
       response: responseFrom(stopEvent),
@@ -785,14 +789,16 @@ function withResolvedUsage(stopEvent: AgentWatchEvent, usage: TurnUsage | undefi
  * A prompt record from a prompt event.
  *
  * @param event - The prompt event.
+ * @param failOpenReason - Why it ran without an enforcement decision, if it did.
  * @returns The record.
  */
-function promptRecord(event: AgentWatchEvent): PromptRecord {
+function promptRecord(event: AgentWatchEvent, failOpenReason: FailOpenReason | undefined): PromptRecord {
   return {
     kind: 'prompt',
     at: event.timestamp,
     turnId: event.session.turnId,
-    evidence: asEvidence(event.metadata?.[PROMPT_EVIDENCE_KEY])
+    evidence: asEvidence(event.metadata?.[PROMPT_EVIDENCE_KEY]),
+    failOpenReason
   };
 }
 

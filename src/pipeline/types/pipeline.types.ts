@@ -1,5 +1,6 @@
 import type { AgentWatchConfig, ConfigLoadResult } from '../../config/types/config.types.js';
 import type { Env } from '../../core/types/core.types.js';
+import type { FailOpenReason } from '../../enforcement/types/enforcement.types.js';
 import type { AgentWatchEvent } from '../../events/types/events.types.js';
 import type { AgentProvider } from '../../providers/types/provider.types.js';
 import type { AgentWatchPaths } from '../../storage/types/storage.types.js';
@@ -48,6 +49,12 @@ export interface HookPipelineState extends HookPipelineInput {
    * a refusal without a message — so its presence *is* the refusal.
    */
   readonly blockMessage?: string;
+  /**
+   * Why the turn was allowed without a decision, when it was. Set only by the
+   * `enforce` stage; carried onto the prompt record so the turn's summary can
+   * say it ran unchecked.
+   */
+  readonly failOpenReason?: FailOpenReason;
   /** The turn summary, when this payload closed a turn. */
   readonly summary?: TurnSummaryEvent;
   /** Records this run intends to send; empty on a dry run. */

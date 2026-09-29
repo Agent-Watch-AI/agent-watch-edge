@@ -28,7 +28,7 @@ import { identityPaths, settleLegacyQueue } from '../transport/queue-partition.j
 import type { EventTransport } from '../transport/types/transport.types.js';
 import { eventsUrl } from '../config/config.js';
 import { TurnStateStore } from '../turns/turn-state.js';
-import { SHELL_REREAD_TYPES, TOOL_START_TYPES } from '../turns/constants/turns.constants.js';
+import { MAX_TURN_CHECKOUTS, SHELL_REREAD_TYPES, TOOL_START_TYPES } from '../turns/constants/turns.constants.js';
 import type { WorkCheckoutMemo } from '../turns/types/turn-state.types.js';
 import { trackTurnOutcome, type TurnOutcome } from '../turns/turn-tracker.js';
 import {
@@ -166,15 +166,16 @@ async function nominate(state: HookPipelineState): Promise<StepOutcome<HookPipel
       ...(workdir ? [workdir] : []),
       ...(typeof call?.command === 'string' && call.command ? shellDirectories(call.command, workdir ?? state.cwd, state.env.home) : [])
     ];
-    // ponytail: the first few open folders only, so weak candidates never fill a
+    // ponytail: the first few open checkouts only, so weak candidates never fill a
     // turn's checkout slots before a call names one; a wider window loses the rest.
+    // The folders looked at are bounded too, since the list is untrusted.
     const open = [...new Set((start ? (state.provider.workspaceRoots?.(state.payload) ?? []) : []).filter((root) => typeof root === 'string' && path.isAbsolute(root)))].slice(
       0,
-      MAX_WORKSPACE_ROOTS
+      MAX_TURN_CHECKOUTS
     );
-    const [nominations, workspaceRoots] = await Promise.all([checkoutRoots(named), checkoutRoots(open)]);
+    const [nominations, openRoots] = await Promise.all([checkoutRoots(named), checkoutRoots(open)]);
 
-    return next({ ...state, nominations, workspaceRoots });
+    return next({ ...state, nominations, workspaceRoots: openRoots.slice(0, MAX_WORKSPACE_ROOTS) });
   } catch {
     debugLog('shell nomination failed; this call names no checkout');
 

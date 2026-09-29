@@ -280,7 +280,11 @@ async function lastWorkCheckout(state: HookPipelineState, sessionId: string | un
     const work = await new TurnStateStore(state.paths.turnsDir).readWorkCheckout(sessionId);
     const roots = state.globalConfig.config.roots;
 
-    return work && selectRoot(roots, work.root)?.path === selectRoot(roots, state.cwd)?.path ? work : undefined;
+    // A checkout with no remote is remembered by its folder name, which names no
+    // repository the platform knows; today's gate states nothing for it either.
+    if (!work?.repository.includes('/')) return undefined;
+
+    return selectRoot(roots, work.root)?.path === selectRoot(roots, state.cwd)?.path ? work : undefined;
   } catch {
     // A fixed sentence: the error could quote a path.
     debugLog('enforcement: last work checkout unreadable; asking about the current folder');

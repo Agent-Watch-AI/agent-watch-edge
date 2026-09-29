@@ -938,6 +938,13 @@ describe('the checkout the gate asks about, from a session’s second turn on (A
     expect(asked[1]).toMatchObject({ repository: 'github.com/acme/core', branch: 'main' });
   });
 
+  it('falls back to today’s answer when the remembered checkout has no remote, only a folder name', async () => {
+    await new TurnStateStore(resolvePaths(world.env).turnsDir).rememberWorkCheckout('gate-session', { root: worktree, repository: 'core-AWT-1', at: new Date().toISOString() });
+    await hook(prompt('p1'), core);
+
+    expect(asked[0]).toMatchObject({ repository: 'github.com/acme/core', branch: 'main' });
+  });
+
   it('never names a checkout another tenant’s root governs', async () => {
     const other = path.join(workspace, 'other');
 

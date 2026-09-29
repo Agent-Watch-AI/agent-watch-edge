@@ -195,8 +195,8 @@ function pathFields(filePath: string, context: EnrichContext): Record<string, st
   return {
     [FILE_PATH_METADATA_KEY]: path.relative(root, filePath),
     // Relative, never absolute: the machine's layout is not the product's
-    // business, and the turn tracker only ever needs it back as a suffix of
-    // the same start folder.
+    // business. The turn tracker anchors it to this same hook's cwd when it
+    // records the call, because the next hook's cwd may not be this one.
     [REPOSITORY_PATH_METADATA_KEY]: relativize(context.options.cwd, root)
   };
 }

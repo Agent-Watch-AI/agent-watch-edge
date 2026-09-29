@@ -177,8 +177,11 @@ the start folder are resolved, and a file anywhere else contributes no
 repository; once a turn has worked in one repository, its file lists carry that
 repository's paths and nothing else — even when that repository's own config
 then withholds it. A repository reached through a symlink is judged by where it
-really is, not by the link. The repository is named relative to the start folder in
-local turn state as well, so nothing absolute is written there either.
+really is, not by the link. Local turn state keeps each tool call's repository
+by its absolute root, because a lasting `cd` moves the working folder later hooks
+report; it is checked again against the folder the turn closes in, and never
+sent. A repository not beneath that folder contributes no path, and when the
+turn closes inside a repository, a path resolved from above it is dropped.
 
 What is reported about that repository follows *its* effective config, not the
 start folder's: a `.agentwatch.json` committed inside it narrows the turn exactly

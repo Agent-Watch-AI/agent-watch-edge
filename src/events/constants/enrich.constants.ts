@@ -21,7 +21,7 @@ export const FILE_PATH_METADATA_KEY = 'filePath';
 
 /**
  * Metadata key naming the repository a tool call's file belongs to, relative
- * to the folder the session started in.
+ * to the cwd of the hook that resolved it.
  *
  * Local assembly state only: the turn tracker reads it to decide which
  * repository a turn worked in, and it never reaches a product record.

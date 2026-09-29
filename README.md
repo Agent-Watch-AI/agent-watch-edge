@@ -221,7 +221,7 @@ outage un-enforces budgets rather than stopping anyone. Set `enabled: false` to 
 Decisions are cached for `cacheTtlMs`, so a flat cap costs at most one bounded request per turn. A
 feature-scoped cap costs one per gated prompt: the backend answers `cache_ttl_ms: 0` and the edge
 honours that by not storing the answer. Antigravity is not gated — its pre-invocation hook carries
-no decision field — but its usage is still reported and still raises alerts.
+no decision field — and its turns are reported without token usage, so no cap advances on them.
 
 To try it locally: `BLOCK=1 npm run example` refuses every check.
 

@@ -292,29 +292,39 @@ that is switched on. The two are independent, and Antigravity currently has neit
 |---|---|---|
 | Claude Code | yes — `UserPromptSubmit` **[docs]** | native OTel |
 | Codex | yes — `UserPromptSubmit` **[docs]** | native OTel, only with tool-content consent; the default metadata-only install leaves it off |
-| Gemini CLI | yes — `BeforeAgent`/`UserPromptSubmit` **[docs]** | native OTel logs, only with tool-content consent; without it only metrics are exported |
+| Gemini CLI | yes — `BeforeAgent`/`UserPromptSubmit` **[docs]** | native OTel logs, only with tool-content consent; without it only metrics, and only when `otel.metrics` is on (off by default), so a default install exports nothing |
 | Cursor | IDE sessions only — `beforeSubmitPrompt` **[docs]**; the CLI emits shell hooks only, so it is not gated | **none** — no OTel export, and transcripts carry no token usage, so summaries stay `usage_status=pending` |
 | Antigravity | **no** — `PreToolUse` can deny mid-turn work, and a mid-turn tool gate is what the design rejected; `Stop` also takes a decision, but only `{"decision":"stop"}` | **none** — no OTLP exporter configuration exists |
 
-So "enforced" is a property of a (provider, source) pair, not of the product: a
-Cursor tenant can hold a `block` cap that no spend ever advances, a default Codex or
-Gemini install one whose ledger is off until consent is given, and an Antigravity
-tenant one that can be neither measured nor applied. All of them degrade quietly: an
-over-cap developer keeps working.
+So "enforced" is a property of a (provider, source) pair, not of the product. A
+missing ledger and a missing gate fail differently. Cursor IDE, and Codex or Gemini
+without consent, still ask and still refuse a developer the platform already knows
+is over cap; what they lack is the spend that would move them over it. Cursor CLI
+and Antigravity cannot refuse at all. Either way the failure is quiet: an over-cap
+developer keeps working.
+
+The ledger is also machine-wide. Under multi-tenant `roots`, the hook applies the
+root's token before it asks, while the native exporters keep the machine token and
+endpoint written at setup, so a root with its own token is asking about a cap that
+its own usage never reaches.
 
 ### Cost on the critical path
 
 The gate sits between the developer's keystroke and the agent's first token, so
-every part of it is bounded. `enforcementWouldAsk` is consulted before anything is
-paid for, but it only asks whether enforcement is configured (enabled, a token, a
-decision URL), not whether the tenant has a cap: a machine that is not enrolled for
-enforcement never walks the working copy, while an enrolled one pays for the
-question even when the answer will be "no cap". Identity, checkout and model resolve
+every part of it is bounded. `enforcementWouldAsk` is consulted before any
+gate-specific work (identity, checkout, model, cache, network), but it only asks
+whether enforcement is configured (enabled, a token, a decision URL), not whether
+the tenant has a cap: an enrolled machine pays for the question even when the
+answer will be "no cap". Config loading and event parsing happen before it either
+way. Identity, checkout and model resolve
 in one `Promise.all`. The decision request is bounded by `enforcement.timeoutMs`,
 300 ms by default; the config accepts a larger value, and the hook then waits that
-long. A disk cache keyed on the whole question (endpoint, token, developer,
-repository and branch, model) means each distinct question costs at most one
-bounded request per TTL. Process-per-hook is why that cache exists on disk at all:
+long, up to the 30-second hook timeout setup registers with the provider, which
+kills the hook first. A disk cache keyed on the whole question (endpoint, token, developer,
+repository and branch, model) means each distinct question costs one bounded
+request per TTL, as a best effort: cache and breaker writes swallow filesystem
+errors, and concurrent hooks take no lock, so an unwritable data directory or two
+simultaneous misses cost extra requests. Process-per-hook is why that cache exists on disk at all:
 there is no memory to hold "this developer is allowed" between prompts. The same
 reason puts the breaker on disk: a failed request is never cached as an answer, it
 opens a cooldown, and until it expires the turns after it fail open (`circuit_open`)

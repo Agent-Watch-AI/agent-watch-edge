@@ -181,3 +181,15 @@ export const GATE_REMOTE_MEMO_TTL_MS = 3_600_000;
  * remoteless checkout pays one subprocess a minute rather than one per prompt.
  */
 export const GATE_REMOTE_ABSENT_TTL_MS = 60_000;
+
+/**
+ * The entry that marks a repository root. A *file* of that name counts too:
+ * that is what a linked worktree and a submodule check out as.
+ */
+export const GIT_ENTRY_NAME = '.git';
+
+/**
+ * The errors that mean "no `.git` here". Anything else — a permission or I/O
+ * error — means the answer is unknown, not no.
+ */
+export const GIT_ENTRY_ABSENT_CODES: ReadonlySet<string> = new Set(['ENOENT', 'ENOTDIR']);

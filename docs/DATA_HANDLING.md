@@ -165,6 +165,39 @@ Branches, commit SHAs, ticket keys and file paths are metadata, not anonymous da
 Paths are made repository-relative where possible; paths outside the repository
 can remain absolute, with the home prefix abbreviated.
 
+A session started *above* its repositories — in a workspace folder holding
+several, which is not itself a repository — used to send each path as a bare
+basename and no repository at all. It now reports, per turn, the repository
+beneath the start folder that the turn edited most (read most, when it edited
+nothing), that repository's branch and commit, and its paths relative to that
+repository's root: more than a basename, less than an absolute path. No new
+class of data is collected — repository, branch and commit are already sent for
+a session started inside a repository. Only repositories whose root lies beneath
+the start folder are resolved, and a file anywhere else contributes no
+repository; once a turn has worked in one repository, its file lists carry that
+repository's paths and nothing else — even when that repository's own config
+then withholds it. A repository reached through a symlink is judged by where it
+really is, not by the link. Local turn state keeps each tool call's repository
+by its absolute root, because a lasting `cd` moves the working folder later hooks
+report; it is checked again against the folder the turn closes in, and never
+sent. A repository not beneath that folder contributes no path, and when the
+turn closes inside a repository, a path resolved from above it is dropped.
+
+What is reported about that repository follows *its* effective config, not the
+start folder's: a `.agentwatch.json` committed inside it narrows the turn exactly
+as it would a session started there — `capture.git: false` withholds the
+repository, branch, commit and ticket keys, `capture.files: false` its paths.
+And a repository that a project root of its own claims (see README, "Two
+tenants on one machine") is never a candidate: the start folder alone decides which tenant a
+session sends as, so that repository's name, branch, commit and paths are
+dropped rather than delivered to another tenant.
+
+This resolution reads the file paths the agent's tools named, so it follows
+`capture.files`: with `capture.files: false` no path is captured, and a session
+started above its repositories then reports no repository or branch — as it did
+before. A session started inside a repository is unaffected, since its
+repository comes from the start folder rather than from any path.
+
 ## Identity, local storage, and credentials
 
 Developer identity is the configured `developerEmail`, falling back to Git email

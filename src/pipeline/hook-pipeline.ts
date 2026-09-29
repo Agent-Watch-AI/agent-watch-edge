@@ -275,6 +275,8 @@ async function trackTurnSafely(state: HookPipelineState): Promise<HookPipelineSt
       rawPayload: state.payload,
       events: state.events,
       config: state.config,
+      globalConfig: state.globalConfig,
+      paths: state.paths,
       turnsDir: state.paths.turnsDir,
       locksDir: state.paths.locksDir,
       env: state.env,

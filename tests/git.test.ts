@@ -1,9 +1,11 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { collectGitContext, gitUserEmail } from '../src/git/git-context.js';
 import { normalizeRemote, remoteHash, stripRemoteCredentials } from '../src/git/remote-sanitize.js';
+import { repositoryRootFinder } from '../src/git/repository-root.js';
 import { makeTempEnv, type TempWorld } from './helpers.js';
 
 describe('remote sanitization', () => {
@@ -129,5 +131,49 @@ describe('collectGitContext', () => {
     expect(context.commit).toBeUndefined();
     expect(context.remote).toBeUndefined();
     expect(context.changedFiles).toBeUndefined();
+  });
+});
+
+describe('repositoryRootFinder', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('refuses a root whose real location cannot be resolved', async () => {
+    // `.git` was found, then the link it was found through went away before
+    // its real path could be read. The lexical path would pass containment;
+    // where it really points was never proven to be inside.
+    const workspace = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'aw-root-'));
+    const repo = path.join(workspace, 'repo');
+
+    await fs.mkdir(path.join(repo, '.git'), { recursive: true });
+    expect(await repositoryRootFinder(workspace).find(path.join(repo, 'a.ts'))).toBe(repo);
+
+    vi.spyOn(fs, 'realpath').mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }));
+
+    expect(await repositoryRootFinder(workspace).find(path.join(repo, 'a.ts'))).toBeUndefined();
+    vi.restoreAllMocks();
+    await fs.rm(workspace, { recursive: true, force: true });
+  });
+
+  it('does not climb past a .git entry it could not check', async () => {
+    // `repo/inner/.git` answers EACCES rather than "not there". It may well be
+    // a repository of its own; handing its file to `repo` would report the
+    // wrong branch under the wrong config.
+    const workspace = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'aw-root-'));
+    const inner = path.join(workspace, 'repo', 'inner');
+
+    await fs.mkdir(path.join(workspace, 'repo', '.git'), { recursive: true });
+    await fs.mkdir(inner, { recursive: true });
+
+    const access = fs.access.bind(fs);
+
+    vi.spyOn(fs, 'access').mockImplementation(async (target, mode) => {
+      if (target === path.join(inner, '.git')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+
+      return access(target, mode);
+    });
+
+    expect(await repositoryRootFinder(workspace).find(path.join(inner, 'a.ts'))).toBeUndefined();
+    vi.restoreAllMocks();
+    await fs.rm(workspace, { recursive: true, force: true });
   });
 });

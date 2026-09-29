@@ -26,6 +26,17 @@ export interface ToolRecord {
   readonly tool?: string;
   readonly filePath?: string;
   /**
+   * The absolute root of the repository `filePath` is relative to — set only
+   * for a tool call made from a folder *above* its repositories, where that
+   * folder is not one.
+   *
+   * Local turn state only, never on the wire: it exists so the closing turn can
+   * decide which repository the turn worked in. Absolute because the cwd each
+   * hook reports moves with a lasting `cd`, so a path relative to the tool
+   * hook's cwd means nothing to the Stop hook's.
+   */
+  readonly repositoryRoot?: string;
+  /**
    * Reads and edits are different product signals: a file the agent merely
    * read must not appear in the summary's files_touched (modified) list.
    */

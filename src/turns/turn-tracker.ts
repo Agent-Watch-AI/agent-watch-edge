@@ -1,11 +1,18 @@
+import path from 'node:path';
 import { pollUntil } from '../core/async.js';
 import { debugLog } from '../core/logger.js';
 import { asRecord } from '../core/object.js';
 import { detectBillingMode } from '../billing/billing-mode.js';
 import type { FailOpenReason } from '../enforcement/types/enforcement.types.js';
-import type { AgentWatchEvent, ContentEvidence, UsageBillingMode } from '../events/types/events.types.js';
+import type { AgentWatchEvent, ContentEvidence, EventGit, FeatureCandidate, UsageBillingMode } from '../events/types/events.types.js';
 import { sha256Hex } from '../events/event-id.js';
-import { developerDisplayName, developerIdentity } from '../git/git-context.js';
+import { loadEffectiveConfig } from '../config/repo-config.js';
+import { canonicalRoot, selectRoot } from '../config/root-config.js';
+import { REPOSITORY_PATH_METADATA_KEY } from '../events/constants/enrich.constants.js';
+import { featureCandidatesFromBranch } from '../feature/ticket-candidates.js';
+import { collectGitContext, developerDisplayName, developerIdentity } from '../git/git-context.js';
+import { isBeneath } from '../git/repository-root.js';
+import type { GitContext } from '../git/types/git.types.js';
 import { sanitizeValue } from '../privacy/sanitizer.js';
 import { acquireLock } from '../storage/lock.js';
 import type { ReleaseLock } from '../storage/types/storage.types.js';
@@ -121,7 +128,7 @@ async function processEvent(
   // on `session.ended` would leave a session's raw prompt text undeleted.
   if (type === 'session.started') await rememberModelSafely(store, sessionId, event);
 
-  const record = recordFor(event, options.failOpenReason);
+  const record = recordFor(event, options.cwd, options.failOpenReason);
 
   if (record) await store.append(sessionId, recordKeyFor(event), record);
 
@@ -175,15 +182,16 @@ async function rememberModelSafely(
  * The turn record one event should be persisted as, if any.
  *
  * @param event - Canonical event.
+ * @param cwd - This hook's own working directory.
  * @param failOpenReason - Why this payload's prompt ran unchecked, if it did.
  * @returns The record, or undefined when the event carries no turn state.
  */
-function recordFor(event: AgentWatchEvent, failOpenReason: FailOpenReason | undefined): TurnRecord | undefined {
+function recordFor(event: AgentWatchEvent, cwd: string, failOpenReason: FailOpenReason | undefined): TurnRecord | undefined {
   const type = event.event.type;
 
   if (type === 'prompt.submitted') return promptRecord(event, failOpenReason);
 
-  if (TOOL_COMPLETION_TYPES.has(type)) return toolRecord(event);
+  if (TOOL_COMPLETION_TYPES.has(type)) return toolRecord(event, cwd);
 
   // Cursor delivers the response text in its own hook (afterAgentResponse)
   // instead of on Stop; keep it as turn state until the turn closes.
@@ -287,6 +295,12 @@ async function closeTurnLocked(
   // watched the transcript still belongs to this turn.
   const mine = filterTurn(await store.collectEntries(sessionId), stopTurnId);
   const records = mine.map((entry) => entry.record);
+  const tools = recordsOfKind<ToolRecord>(records, 'tool');
+  // A session started above its repositories arrives with no repository at all.
+  // Which one this turn worked in is answerable only here, where every tool
+  // call of the turn is in hand — and this is the one hook that may pay for a
+  // git process, because it already does.
+  const workspace = stopEvent.git?.repository ? inRepository(tools) : await resolveWorkspaceRepository(tools, options);
   // Usage is mirrored onto a *copy* of the Stop event: the summary's model
   // should come from the transcript when the transcript knows better, and
   // rewriting an event another stage may still be reading is not an option.
@@ -295,6 +309,9 @@ async function closeTurnLocked(
   // GIT_TIMEOUT_MS, so taken in order a slow machine pays both inside the
   // lock on every close. The pre-turn path resolves the same pair this way.
   const [developerId, developerName] = await Promise.all([
+    // From this hook's cwd, never the winning repository's: the prompt gate
+    // enforced this turn as the developer it resolved there, before any
+    // repository was known, and one turn is one developer.
     developerIdentity(options.config.developerEmail, options.cwd, { home: options.env.home }),
     developerDisplayName(options.config.developerName, options.cwd, { home: options.env.home })
   ]);
@@ -307,10 +324,10 @@ async function closeTurnLocked(
     developerId,
     developerName,
     installationId: options.config.installationId,
-    git: stopEvent.git,
-    featureCandidates: stopEvent.feature?.candidates,
+    git: workspace?.git ?? stopEvent.git,
+    featureCandidates: workspace?.featureCandidates ?? stopEvent.feature?.candidates,
     prompts: recordsOfKind<PromptRecord>(records, 'prompt'),
-    tools: recordsOfKind<ToolRecord>(records, 'tool'),
+    tools: workspace?.tools ?? tools,
     response: resolveResponse(stopEvent, records),
     usage,
     model: resolvedStop.ai?.model,
@@ -322,6 +339,218 @@ async function closeTurnLocked(
   if (!readOnly) await store.remove(mine.map((entry) => entry.file));
 
   return sanitizeValue(summary);
+}
+
+/** What a workspace session's turn resolved to: its paths, and one repository when it may declare one. */
+interface WorkspaceRepository {
+  readonly git?: EventGit;
+  readonly featureCandidates?: readonly FeatureCandidate[];
+  /** The turn's tools with every path dropped that this turn may not report. */
+  readonly tools: readonly ToolRecord[];
+}
+
+/**
+ * The turn's tools when the Stop hook's cwd is itself inside a repository.
+ *
+ * That repository is the turn's, and its paths are the ones reported. A record
+ * resolved against some other folder earlier in the turn — the session started
+ * above its repositories, then `cd`-ed into one — is relative to a root this
+ * close never checked against the tenant, the start folder or that root's own
+ * `.agentwatch.json`, so it keeps its call and loses its path.
+ *
+ * ponytail: drops the path even when that record's root *is* the Stop's
+ * repository, since the Stop event carries no absolute root to compare with.
+ * A turn that crosses the `cd` loses those few paths; the upgrade is to compare
+ * against the Stop's resolved root.
+ *
+ * @param tools - The turn's tool records.
+ * @returns The workspace answer: no repository of its own, the tools stripped.
+ */
+function inRepository(tools: readonly ToolRecord[]): WorkspaceRepository {
+  return { tools: keepingPaths(tools, (record) => record.repositoryRoot === undefined) };
+}
+
+/**
+ * The repository a turn worked in, for a session started above its
+ * repositories.
+ *
+ * The turn declares one repository, so the paths it touched in any other are
+ * dropped from its file lists: a path relative to a different root is a wrong
+ * vote in the placement corpus. `tool_calls` and `tools_used` still count every
+ * call — the work happened.
+ *
+ * What is reported about that repository follows *its* effective config, not
+ * the start folder's: a `.agentwatch.json` committed inside it is the one a
+ * session started there would honour, and this session found the repository by
+ * looking beneath a folder that file never saw.
+ *
+ * Every failure here answers "no repository", which is exactly what the turn
+ * reported before this existed.
+ *
+ * `options.cwd` is the Stop hook's, which a lasting `cd` can have moved since
+ * the tool hooks ran; every check here is asked of it, of the absolute root each
+ * record was anchored to, and of nothing joined from the two.
+ *
+ * @param tools - The turn's tool records.
+ * @param options - Tracking options; `cwd` is the folder the session started in.
+ * @returns The paths the turn may report, and its repository when one qualifies.
+ */
+async function resolveWorkspaceRepository(tools: readonly ToolRecord[], options: TrackTurnOptions): Promise<WorkspaceRepository> {
+  const admitted = admittedTools(tools, options);
+  const winner = winningRepositoryRoot(admitted);
+
+  if (winner === undefined) return { tools: admitted };
+
+  const root = winner;
+  const capture = (await loadEffectiveConfig(options.paths, root, options.globalConfig)).config.capture;
+  // One repository's paths and nothing else, decided before anything can
+  // fail: the losers' paths are a wrong vote whether or not the turn ends up
+  // declaring the winner, and the winner's are its own to withhold.
+  const own = keepingPaths(admitted, (record) => record.repositoryRoot === winner && capture.files);
+
+  if (!capture.git) return { tools: own };
+
+  const git: GitContext = await collectGitContext({ cwd: root, includeChangedFiles: capture.files }).catch(() => ({}));
+
+  if (!git.repositoryRoot) return { tools: own };
+
+  const candidates = featureCandidatesFromBranch(git.branch);
+
+  return {
+    // Field by field, and no repositoryRoot: nothing absolute is sent.
+    git: {
+      repository: git.repository,
+      repositoryHash: git.repositoryHash,
+      remote: git.remote,
+      branch: git.branch,
+      commit: git.commit,
+      changedFiles: git.changedFiles
+    },
+    featureCandidates: candidates.length > 0 ? candidates : undefined,
+    tools: own
+  };
+}
+
+/**
+ * The turn's tools with every record refused whose repository this session
+ * may not report on.
+ *
+ * Two refusals. A repository outside the start folder: turn state is a file on
+ * disk between hook invocations, so the path it names is checked rather than
+ * trusted, and a value that climbs out would point git at somebody else's
+ * directory. And a repository another project root claims: the start folder
+ * alone decides which tenant a session sends as, so a checkout beneath it with
+ * a root of its own — another token, or only another developer — would have
+ * its branch, commit and paths delivered to the wrong tenant under the wrong
+ * name. Both are asked of real paths: a symlink inside the start folder can
+ * point at a checkout anywhere on the machine, and `.git` is found through it.
+ * A refused record stays, as a call that named no path.
+ *
+ * @param tools - The turn's tool records.
+ * @param options - Tracking options; `cwd` is the folder the session started in.
+ * @returns The records, with the refused ones stripped of their paths.
+ */
+function admittedTools(tools: readonly ToolRecord[], options: TrackTurnOptions): readonly ToolRecord[] {
+  const roots = options.globalConfig.config.roots;
+  const tenant = selectRoot(roots, options.cwd)?.path;
+  const boundary = canonicalRoot(options.cwd);
+  // One verdict per repository, not per call: each asks the filesystem.
+  const verdicts = new Map<string, boolean>();
+  const admitted: ToolRecord[] = [];
+
+  for (const record of tools) {
+    const root = record.repositoryRoot;
+
+    // Anything but a string names no repository and casts no vote; it is left
+    // as it is for the winner rule's own guard.
+    if (typeof root !== 'string') {
+      admitted.push(record);
+      continue;
+    }
+
+    // Relative is garbled state: there is nothing it could safely be joined to.
+    const real = canonicalRoot(root);
+    const verdict = verdicts.get(root) ?? (path.isAbsolute(root) && isBeneath(boundary, real) && selectRoot(roots, root)?.path === tenant);
+
+    verdicts.set(root, verdict);
+    // Admitted under its real root: a repository reached both directly and
+    // through a symlink inside the start folder is one repository with one
+    // vote, not two aliases splitting it.
+    admitted.push(verdict ? { ...record, repositoryRoot: real } : { ...record, filePath: undefined, repositoryRoot: undefined });
+  }
+
+  return admitted;
+}
+
+/**
+ * The tools with `filePath` dropped from every record `keep` refuses.
+ *
+ * @param tools - The turn's tool records.
+ * @param keep - Whether a record may keep its path.
+ * @returns A new list; the records are not mutated.
+ */
+function keepingPaths(tools: readonly ToolRecord[], keep: (record: ToolRecord) => boolean): readonly ToolRecord[] {
+  return tools.map((record) => (keep(record) ? record : { ...record, filePath: undefined }));
+}
+
+/**
+ * Which repository this turn worked in: the one it edited most, or — having
+ * edited nowhere — the one it read most. A tie goes to the one touched first,
+ * since nothing else about two tied repositories distinguishes them.
+ *
+ * @param tools - The turn's tool records.
+ * @returns The winning repository root, or undefined when no tool named one.
+ */
+function winningRepositoryRoot(tools: readonly ToolRecord[]): string | undefined {
+  const edited = new Map<string, Set<string>>();
+  const read = new Map<string, Set<string>>();
+
+  for (const tool of tools) {
+    // Typed: these records are read back off disk, where the only shape check
+    // is `kind` and `at`. A non-string that reached `loadEffectiveConfig` or
+    // git would throw, and a throw here costs the whole summary.
+    if (typeof tool.repositoryRoot !== 'string' || typeof tool.filePath !== 'string') continue;
+
+    // Distinct files, not tool calls: five edits of one file is one file's
+    // worth of evidence, and a legacy record without an access marker counts
+    // as an edit exactly as files_touched treats it.
+    const counts = tool.access === 'read' ? read : edited;
+    const files = counts.get(tool.repositoryRoot) ?? new Set<string>();
+
+    files.add(tool.filePath);
+    counts.set(tool.repositoryRoot, files);
+  }
+
+  return mostFiles(edited) ?? mostFiles(read);
+}
+
+/**
+ * The repository with the most distinct files, first-seen winning a tie.
+ *
+ * @param counts - Repository root → its distinct files, in first-seen order.
+ * @returns The winner, or undefined when nothing was counted.
+ */
+function mostFiles(counts: ReadonlyMap<string, ReadonlySet<string>>): string | undefined {
+  let winner: string | undefined;
+  let best = 0;
+
+  // Insertion order is first-seen order, and the comparison is strict, so the
+  // earliest of the tied repositories keeps the win.
+  //
+  // ponytail: "first" is only as fine-grained as the records are ordered, and
+  // they are sorted by their ISO-millisecond `at`. Two tool calls in different
+  // repositories inside one millisecond fall back to filename order, so a tie
+  // between them is not guaranteed stable. The upgrade path is a monotonic
+  // sequence number on the record, which every other ordering here would want
+  // too.
+  for (const [repositoryRoot, files] of counts) {
+    if (files.size <= best) continue;
+
+    winner = repositoryRoot;
+    best = files.size;
+  }
+
+  return winner;
 }
 
 /**
@@ -579,10 +808,12 @@ function promptRecord(event: AgentWatchEvent, failOpenReason: FailOpenReason | u
  * A tool record from a tool-completion event.
  *
  * @param event - The tool event.
+ * @param cwd - This hook's own working directory, which the event's repository path is relative to.
  * @returns The record.
  */
-function toolRecord(event: AgentWatchEvent): ToolRecord {
+function toolRecord(event: AgentWatchEvent, cwd: string): ToolRecord {
   const filePath = event.metadata?.[FILE_PATH_KEY];
+  const repositoryPath = event.metadata?.[REPOSITORY_PATH_METADATA_KEY];
 
   return {
     kind: 'tool',
@@ -590,6 +821,9 @@ function toolRecord(event: AgentWatchEvent): ToolRecord {
     turnId: event.session.turnId,
     tool: event.tool?.name,
     filePath: typeof filePath === 'string' ? filePath : undefined,
+    // Anchored here, to the cwd it was resolved against: a lasting `cd` moves
+    // the cwd the next hook reports, so the Stop hook's is not this one's.
+    repositoryRoot: typeof repositoryPath === 'string' && repositoryPath ? path.join(cwd, repositoryPath) : undefined,
     access: accessFor(event.event.type)
   };
 }

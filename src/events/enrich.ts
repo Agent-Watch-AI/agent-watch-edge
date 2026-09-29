@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { isRecord } from '../core/object.js';
 import { collectGitContext } from '../git/git-context.js';
+import { repositoryRootFinder } from '../git/repository-root.js';
 import type { GitContext } from '../git/types/git.types.js';
 import { featureCandidatesFromBranch } from '../feature/ticket-candidates.js';
 import { sanitizeValue } from '../privacy/sanitizer.js';
@@ -9,8 +10,10 @@ import {
   FILE_PATH_METADATA_KEY,
   HOME_PLACEHOLDER,
   HOME_PLACEHOLDER_PREFIX,
+  EMPTY_REPOSITORIES,
   PATH_BOUNDARY_LOOKAHEAD,
   REPO_ROOT_PLACEHOLDER,
+  REPOSITORY_PATH_METADATA_KEY,
   RE_REGEXP_METACHARACTERS
 } from './constants/enrich.constants.js';
 import type { AgentWatchEvent, FeatureCandidate } from './types/events.types.js';
@@ -36,10 +39,11 @@ export async function enrichEvents(events: readonly AgentWatchEvent[], options: 
   const git = await resolveGitContext(events, options);
   const featureCandidates = featureCandidatesFromBranch(git.branch);
   const rewriter = buildPathRewriter(git.repositoryRoot, options.home);
+  const repositories = await resolveFileRepositories(events, git, options);
   const enriched: AgentWatchEvent[] = [];
 
   for (const event of events) {
-    enriched.push(sanitizeValue(enrichEvent(event, { git, featureCandidates, rewriter, options })));
+    enriched.push(sanitizeValue(enrichEvent(event, { git, featureCandidates, rewriter, repositories, options })));
   }
 
   return enriched;
@@ -74,11 +78,56 @@ async function resolveGitContext(events: readonly AgentWatchEvent[], options: En
   }
 }
 
+/**
+ * The repository each file of this batch belongs to, when the session started
+ * above its repositories rather than inside one.
+ *
+ * Two thirds of real sessions start in a workspace folder holding several
+ * repositories. The start folder is not a repository, so without this every
+ * path in the batch would degrade to a bare basename and the turn would report
+ * no repository at all — leaving the session unattributable.
+ *
+ * Resolved up front, for the batch, so enriching one event stays synchronous.
+ * The walk is `stat` calls only: the one hook that may shell out to git is the
+ * turn-closing one.
+ *
+ * @param events - The batch being enriched.
+ * @param git - Context already resolved for the start folder.
+ * @param options - Effective config and working directory.
+ * @returns Absolute file path → its repository root; empty when this does not apply.
+ */
+async function resolveFileRepositories(
+  events: readonly AgentWatchEvent[],
+  git: GitContext,
+  options: EnrichOptions
+): Promise<ReadonlyMap<string, string>> {
+  // A session started inside a repository takes this path never: that
+  // repository wins, including over a nested one beneath it.
+  if (git.repositoryRoot || !options.config.capture.git) return EMPTY_REPOSITORIES;
+
+  const finder = repositoryRootFinder(options.cwd);
+  const roots = new Map<string, string>();
+
+  for (const event of events) {
+    const filePath = event.metadata?.[FILE_PATH_METADATA_KEY];
+
+    if (typeof filePath !== 'string' || !path.isAbsolute(filePath) || roots.has(filePath)) continue;
+
+    const root = await finder.find(filePath);
+
+    if (root) roots.set(filePath, root);
+  }
+
+  return roots;
+}
+
 /** Everything one event needs, resolved once for the whole batch. */
 interface EnrichContext {
   readonly git: GitContext;
   readonly featureCandidates: readonly FeatureCandidate[];
   readonly rewriter: PathRewriter;
+  /** Absolute file path → repository root, for a session started above one. */
+  readonly repositories: ReadonlyMap<string, string>;
   readonly options: EnrichOptions;
 }
 
@@ -125,12 +174,31 @@ function enrichMetadata(metadata: AgentWatchEvent['metadata'], context: EnrichCo
   if (!metadata) return undefined;
 
   const filePath = metadata[FILE_PATH_METADATA_KEY];
-  const withSafePath
-    = typeof filePath === 'string'
-      ? { ...metadata, [FILE_PATH_METADATA_KEY]: toSafePath(filePath, context.git.repositoryRoot) }
-      : metadata;
+  const withSafePath = typeof filePath === 'string' ? { ...metadata, ...pathFields(filePath, context) } : metadata;
 
   return rewritePathsDeep(withSafePath, context.rewriter) as Record<string, unknown>;
+}
+
+/**
+ * The path fields for one tool call: the safe path, plus which repository it is
+ * relative to when that repository was found beneath the start folder.
+ *
+ * @param filePath - Absolute path from a tool payload.
+ * @param context - Batch-wide resolved context.
+ * @returns The metadata fields to overwrite.
+ */
+function pathFields(filePath: string, context: EnrichContext): Record<string, string> {
+  const root = context.repositories.get(filePath);
+
+  if (!root) return { [FILE_PATH_METADATA_KEY]: toSafePath(filePath, context.git.repositoryRoot) };
+
+  return {
+    [FILE_PATH_METADATA_KEY]: path.relative(root, filePath),
+    // Relative, never absolute: the machine's layout is not the product's
+    // business. The turn tracker anchors it to this same hook's cwd when it
+    // records the call, because the next hook's cwd may not be this one.
+    [REPOSITORY_PATH_METADATA_KEY]: relativize(context.options.cwd, root)
+  };
 }
 
 /**

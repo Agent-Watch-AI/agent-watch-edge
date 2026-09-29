@@ -18,3 +18,15 @@ export const REPO_ROOT_PLACEHOLDER = '.';
 
 /** Metadata key adapters use for the single primary file of a tool call. */
 export const FILE_PATH_METADATA_KEY = 'filePath';
+
+/**
+ * Metadata key naming the repository a tool call's file belongs to, relative
+ * to the cwd of the hook that resolved it.
+ *
+ * Local assembly state only: the turn tracker reads it to decide which
+ * repository a turn worked in, and it never reaches a product record.
+ */
+export const REPOSITORY_PATH_METADATA_KEY = 'repositoryPath';
+
+/** Shared empty answer for a batch with no per-file repository to resolve. */
+export const EMPTY_REPOSITORIES: ReadonlyMap<string, string> = new Map();

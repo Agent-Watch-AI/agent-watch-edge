@@ -9,4 +9,4 @@
  */
 export { enforcementWouldAsk, resolveEnforcement } from './enforcement.js';
 export { DECISION_BLOCK, ENFORCEMENT_CACHE_FILE_NAME } from './constants/enforcement.constants.js';
-export type { EnforcementDecision, EnforcementOptions } from './types/enforcement.types.js';
+export type { EnforcementDecision, EnforcementOptions, FailOpenReason, GateDecision } from './types/enforcement.types.js';

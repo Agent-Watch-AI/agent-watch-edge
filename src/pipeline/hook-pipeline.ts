@@ -172,7 +172,7 @@ async function enforce(state: HookPipelineState): Promise<StepOutcome<HookPipeli
     now: state.env.now
   });
 
-  if (decision.decision !== DECISION_BLOCK) return next(state);
+  if (decision.decision !== DECISION_BLOCK) return next({ ...state, failOpenReason: decision.failOpenReason });
 
   return next({ ...state, blockMessage: decision.message });
 }
@@ -279,7 +279,8 @@ async function trackTurnSafely(state: HookPipelineState): Promise<HookPipelineSt
       locksDir: state.paths.locksDir,
       env: state.env,
       cwd: state.cwd,
-      readOnly: state.dryRun
+      readOnly: state.dryRun,
+      failOpenReason: state.failOpenReason
     });
   } catch (error) {
     debugLog('turn summary failed:', error);

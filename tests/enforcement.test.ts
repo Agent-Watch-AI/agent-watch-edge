@@ -122,8 +122,8 @@ describe('enforcement decision', () => {
       expect(unasked.calls()).toBe(0);
     });
 
-    it('allows on a network failure', async () => {
-      expect(await ask({}, failing)).toEqual({ decision: 'allow' });
+    it('allows on a network failure, and says so', async () => {
+      expect(await ask({}, failing)).toEqual({ decision: 'allow', failOpenReason: 'network_error' });
     });
 
     it('allows on every status that is not a 2xx', async () => {
@@ -132,17 +132,18 @@ describe('enforcement decision', () => {
 
         await resetState();
 
-        expect(await ask({}, server.fetchFn)).toEqual({ decision: 'allow' });
+        expect(await ask({}, server.fetchFn)).toEqual({ decision: 'allow', failOpenReason: 'http_error' });
         expect(server.calls()).toBe(1);
       }
     });
 
-    it('allows on a body it cannot read as a decision', async () => {
+    it('allows on a body it cannot read as a decision, and says so', async () => {
       const bodies: unknown[] = [
         'not json at all',
+        // Too large to be a decision, so never decoded at all.
+        JSON.stringify({ decision: 'block', message: 'x'.repeat(1024 * 1024) }),
         JSON.stringify([{ decision: 'block', message: MESSAGE }]),
         JSON.stringify({}),
-        JSON.stringify({ decision: 'allow' }),
         // A decision this code does not know must never become a refusal.
         JSON.stringify({ decision: 'throttle', message: MESSAGE }),
         JSON.stringify({ decision: 'BLOCK', message: MESSAGE }),
@@ -157,12 +158,30 @@ describe('enforcement decision', () => {
 
         await resetState();
 
-        expect(await ask({}, server.fetchFn)).toEqual({ decision: 'allow' });
+        expect(await ask({}, server.fetchFn)).toEqual({ decision: 'allow', failOpenReason: 'unreadable_response' });
         expect(server.calls()).toBe(1);
       }
     });
 
-    it('allows when the backend needs longer than the timeout', async () => {
+    it('reports nothing for a real answer, allow or block', async () => {
+      for (const answer of [{ decision: 'allow' }, { decision: 'block', message: MESSAGE }]) {
+        await resetState();
+
+        expect(await ask({}, answering(answer).fetchFn)).toEqual(answer);
+      }
+    });
+
+    it('never reports the body or the error text, only the category', async () => {
+      const leaky = (async () => {
+        throw new Error(MESSAGE);
+      }) as typeof fetch;
+      const decision = await ask({}, leaky);
+
+      expect(JSON.stringify(decision)).not.toContain('Ivan');
+      expect(decision).toEqual({ decision: 'allow', failOpenReason: 'network_error' });
+    });
+
+    it('allows when the backend needs longer than the timeout, and says it timed out', async () => {
       // Honors the abort signal, so this asserts the timeout is actually wired
       // to the request and not just configured.
       const slow = ((_url: any, init: any) =>
@@ -171,11 +190,20 @@ describe('enforcement decision', () => {
 
           init.signal.addEventListener('abort', () => {
             clearTimeout(timer);
-            reject(new Error('TimeoutError'));
+            // What a real fetch rejects with: the signal's own TimeoutError.
+            reject(init.signal.reason);
           });
         })) as typeof fetch;
 
-      expect(await ask({ enforcement: { timeoutMs: 20 } }, slow)).toEqual({ decision: 'allow' });
+      expect(await ask({ enforcement: { timeoutMs: 20 } }, slow)).toEqual({ decision: 'allow', failOpenReason: 'timeout' });
+    });
+
+    it('reads an AbortError from a body the timeout cancelled as a timeout too', async () => {
+      const stalled = (async () => {
+        throw new DOMException('This operation was aborted', 'AbortError');
+      }) as typeof fetch;
+
+      expect(await ask({}, stalled)).toEqual({ decision: 'allow', failOpenReason: 'timeout' });
     });
   });
 

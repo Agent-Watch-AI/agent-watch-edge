@@ -71,7 +71,7 @@ describe('enforcement breaker', () => {
 
     server.fail(true);
 
-    expect(await turn(server.fetchFn)).toEqual({ decision: 'allow' });
+    expect(await turn(server.fetchFn)).toEqual({ decision: 'allow', failOpenReason: 'network_error' });
     expect(server.calls()).toBe(1);
 
     // The platform is back and would refuse, but nobody asks until the cooldown
@@ -79,7 +79,8 @@ describe('enforcement breaker', () => {
     server.fail(false);
     clock += ENFORCEMENT_COOLDOWN_MS - 1;
 
-    expect(await turn(server.fetchFn)).toEqual({ decision: 'allow' });
+    // A skipped turn ran unchecked just the same, and says why.
+    expect(await turn(server.fetchFn)).toEqual({ decision: 'allow', failOpenReason: 'circuit_open' });
     expect(server.calls()).toBe(1);
   });
 

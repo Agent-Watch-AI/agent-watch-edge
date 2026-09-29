@@ -1,4 +1,4 @@
-import type { EnforcementDecision } from '../types/enforcement.types.js';
+import type { EnforcementDecision, FailOpenReason } from '../types/enforcement.types.js';
 
 /** The two decisions, as both the wire and the cache file spell them. */
 export const DECISION_ALLOW = 'allow';
@@ -60,3 +60,29 @@ export const BRANCH_PARAM = 'branch';
 
 /** And the model, which is what lets a cap on one model be judged. */
 export const MODEL_PARAM = 'model';
+
+/**
+ * The fail-open reasons the platform accepts, for checking a value read back
+ * from disk before it is sent. Anything else is dropped rather than sent:
+ * the platform would file it as `unknown`, and a hand-edited file is not a
+ * reason to report anything.
+ */
+export const FAIL_OPEN_REASONS: ReadonlySet<FailOpenReason> = new Set<FailOpenReason>([
+  'timeout',
+  'http_error',
+  'network_error',
+  'unreadable_response',
+  'circuit_open',
+  'unknown'
+]);
+
+/**
+ * The error names a timed-out request rejects with. `AbortSignal.timeout`
+ * rejects with a TimeoutError, but a body stream cancelled by that signal can
+ * surface as a plain AbortError depending on the runtime — and the timeout is
+ * the only signal this request carries, so either name means it timed out.
+ */
+export const TIMEOUT_ERROR_NAMES: ReadonlySet<string> = new Set(['TimeoutError', 'AbortError']);
+
+/** The error name `JSON.parse` throws on a body that is not JSON. */
+export const SYNTAX_ERROR_NAME = 'SyntaxError';

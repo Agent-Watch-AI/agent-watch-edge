@@ -60,8 +60,8 @@ export const CODEX_EVENT_TYPE_MAP: Readonly<Record<string, CanonicalEventType>> 
 /** Hooks whose canonical type depends on which tool ran. */
 export const CODEX_TOOL_EVENTS: ReadonlySet<string> = new Set(['PreToolUse', 'PostToolUse', 'PermissionRequest']);
 
-/** The hook that fires once before a tool call runs. */
-export const CODEX_TOOL_START_EVENT = 'PreToolUse';
+/** The hooks a shell call is read on: once before it runs, once after (same `tool_input`). */
+export const CODEX_SHELL_CALL_EVENTS: ReadonlySet<string> = new Set(['PreToolUse', 'PostToolUse']);
 
 /**
  * The one hook a budget refusal may travel on.

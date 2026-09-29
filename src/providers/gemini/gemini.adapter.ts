@@ -14,7 +14,7 @@ import {
   GEMINI_TOOL_COMPLETE_EVENTS,
   GEMINI_TOOL_EVENTS,
   GEMINI_SHELL_DIR_KEY,
-  GEMINI_SHELL_START_EVENTS,
+  GEMINI_SHELL_CALL_EVENTS,
   GEMINI_TOOL_START_EVENTS,
   GEMINI_UNKNOWN_EVENT
 } from './constants/gemini.constants.js';
@@ -60,7 +60,7 @@ export function parseGeminiHookEvent(rawPayload: unknown, context: HookContext):
 export function geminiShellCall(rawPayload: unknown): ShellCall | undefined {
   const parsed = geminiPayloadSchema.safeParse(rawPayload);
 
-  if (!parsed.success || !GEMINI_SHELL_START_EVENTS.has(parsed.data.hook_event_name ?? '') || classifyTool(parsed.data.tool_name) !== 'shell') return undefined;
+  if (!parsed.success || !GEMINI_SHELL_CALL_EVENTS.has(parsed.data.hook_event_name ?? '') || classifyTool(parsed.data.tool_name) !== 'shell') return undefined;
 
   const input = asRecord(parsed.data.tool_input);
 

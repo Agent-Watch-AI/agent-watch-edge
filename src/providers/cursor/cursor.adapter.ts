@@ -16,7 +16,7 @@ import {
   CURSOR_READ_TOOL_NAME,
   CURSOR_GENERIC_TOOL_START_EVENT,
   CURSOR_SHELL_COMMAND_KEY,
-  CURSOR_SHELL_START_EVENT,
+  CURSOR_SHELL_EVENTS,
   CURSOR_SHELL_WORKDIR_KEY,
   CURSOR_SHELL_TOOL_NAME,
   CURSOR_TOOL_KINDS,
@@ -52,7 +52,8 @@ export function parseCursorHookEvent(rawPayload: unknown, context: HookContext):
  * with `command` and `cwd` at the top level, and the generic `preToolUse` for
  * `Shell` with `tool_input.command` and `tool_input.working_directory`. Both are
  * read, so both name the same checkout; a hook left unread would instead vote
- * for the cwd it sits in.
+ * for the cwd it sits in. `afterShellExecution` is read too: a command can
+ * create the worktree it works in.
  *
  * @param rawPayload - Raw JSON from the hook's stdin.
  * @returns The call, or undefined for any other payload.
@@ -64,7 +65,7 @@ export function cursorShellCall(rawPayload: unknown): ShellCall | undefined {
 
   const payload = parsed.data;
 
-  if (payload.hook_event_name === CURSOR_SHELL_START_EVENT) return shellCallOf(payload.command, payload.cwd);
+  if (CURSOR_SHELL_EVENTS.has(payload.hook_event_name ?? '')) return shellCallOf(payload.command, payload.cwd);
 
   if (payload.hook_event_name !== CURSOR_GENERIC_TOOL_START_EVENT || cursorToolKind(payload.tool_name) !== 'shell') return undefined;
 

@@ -9,7 +9,7 @@ import {
   CODEX_DISPLAY_NAME,
   CODEX_EVENT_TYPE_MAP,
   CODEX_PROVIDER_ID,
-  CODEX_TOOL_START_EVENT,
+  CODEX_SHELL_CALL_EVENTS,
   CODEX_TOOL_EVENTS,
   CODEX_UNKNOWN_EVENT
 } from './constants/codex.constants.js';
@@ -37,7 +37,8 @@ export function parseCodexHookEvent(rawPayload: unknown, context: HookContext): 
 }
 
 /**
- * The command a `PreToolUse` for a shell call is about to run.
+ * The command a shell call runs, on its `PreToolUse` and its `PostToolUse` —
+ * the latter because a command can create the worktree it works in.
  *
  * Codex reports every shell call to hooks as `Bash` with `tool_input:
  * {command}` (openai/codex `core/src/tools/hook_names.rs`,
@@ -51,7 +52,7 @@ export function parseCodexHookEvent(rawPayload: unknown, context: HookContext): 
 export function codexShellCall(rawPayload: unknown): ShellCall | undefined {
   const parsed = codexPayloadSchema.safeParse(rawPayload);
 
-  if (!parsed.success || parsed.data.hook_event_name !== CODEX_TOOL_START_EVENT || classifyTool(parsed.data.tool_name) !== 'shell') return undefined;
+  if (!parsed.success || !CODEX_SHELL_CALL_EVENTS.has(parsed.data.hook_event_name ?? '') || classifyTool(parsed.data.tool_name) !== 'shell') return undefined;
 
   return shellCallOf(asRecord(parsed.data.tool_input)?.[SHELL_COMMAND_KEY], undefined);
 }

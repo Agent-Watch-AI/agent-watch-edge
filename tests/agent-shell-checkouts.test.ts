@@ -82,7 +82,8 @@ describe('shell tool names', () => {
 describe('shellCall per adapter', () => {
   it('reads a Codex command, and nothing it does not report', () => {
     expect(codexProvider.shellCall?.({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git status', workdir: '/w' } })).toEqual({ command: 'git status' });
-    expect(codexProvider.shellCall?.({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'ls' } })).toBeUndefined();
+    expect(codexProvider.shellCall?.({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'ls' } })).toEqual({ command: 'ls' });
+    expect(codexProvider.shellCall?.({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' } })).toBeUndefined();
   });
 
   it('reads both of Cursor\'s shell-start hooks, and no other', () => {

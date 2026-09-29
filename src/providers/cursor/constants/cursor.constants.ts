@@ -95,8 +95,8 @@ export const CURSOR_READ_TOOL_NAME = 'Read';
 export const CURSOR_EDIT_TOOL_NAME = 'Edit';
 export const CURSOR_SHELL_TOOL_NAME = 'Shell';
 
-/** The dedicated hook that fires before a shell command runs, with `command` and `cwd` at the top level. */
-export const CURSOR_SHELL_START_EVENT = 'beforeShellExecution';
+/** The dedicated shell hooks, with `command` (and, before the call, `cwd`) at the top level. */
+export const CURSOR_SHELL_EVENTS: ReadonlySet<string> = new Set(['beforeShellExecution', 'afterShellExecution']);
 
 /** The generic hook that fires before any tool call, the shell's included. */
 export const CURSOR_GENERIC_TOOL_START_EVENT = 'preToolUse';

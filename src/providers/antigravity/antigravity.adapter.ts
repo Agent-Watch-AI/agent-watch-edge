@@ -60,7 +60,8 @@ export function antigravityCwd(rawPayload: unknown): string | undefined {
 }
 
 /**
- * The command a `run_command` tool call is about to run, and its `Cwd`.
+ * The command a `run_command` tool call runs, and its `Cwd`, before and after it
+ * ran (a command can create the worktree it works in).
  *
  * Arguments as the fixtures record them, read off the tool schema in the `agy`
  * binary: `CommandLine` and `Cwd`, PascalCase.
@@ -70,7 +71,7 @@ export function antigravityCwd(rawPayload: unknown): string | undefined {
  */
 export function antigravityShellCall(rawPayload: unknown): ShellCall | undefined {
   const parsed = antigravityPayloadSchema.safeParse(rawPayload);
-  const toolCall = parsed.success ? parsed.data.preToolHookArgs?.toolCall : undefined;
+  const toolCall = parsed.success ? (parsed.data.preToolHookArgs ?? parsed.data.postToolHookArgs)?.toolCall : undefined;
 
   if (classifyTool(toolCall?.name) !== 'shell') return undefined;
 

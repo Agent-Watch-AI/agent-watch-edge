@@ -199,9 +199,14 @@ export const GIT_ENTRY_ABSENT_CODES: ReadonlySet<string> = new Set(['ENOENT', 'E
 
 /**
  * One fingerprint of a checkout: HEAD, branch and every dirty entry in one
- * process. NUL-separated so a path is never quoted, split or trimmed.
+ * process. NUL-separated so a path is never quoted, split or trimmed; every
+ * untracked file listed on its own, since editing a file inside an untracked
+ * directory need not re-stamp the directory.
  */
-export const GIT_FINGERPRINT_ARGS = ['status', '--porcelain=v2', '--branch', '-z'] as const;
+export const GIT_FINGERPRINT_ARGS = ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all'] as const;
+
+/** Git's empty tree: what an unborn HEAD's first commit is diffed against. */
+export const EMPTY_TREE_OID = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 
 /** Header lines of porcelain v2 `--branch` output that the fingerprint keeps. */
 export const PORCELAIN_V2_OID_HEADER = '# branch.oid ';

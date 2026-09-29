@@ -388,7 +388,10 @@ async function closeTurnLocked(
 
   // The next turn that changes nothing carries this one; the prompt gate asks it too.
   if (!readOnly && work.evidence === 'changed' && work.root && work.git?.repository) {
-    await store.rememberWorkCheckout(sessionId, { root: work.root, repository: work.git.repository, at: stopEvent.timestamp });
+    // After the records are consumed, so a failure here must not cost the summary.
+    await store.rememberWorkCheckout(sessionId, { root: work.root, repository: work.git.repository, at: stopEvent.timestamp }).catch((error: unknown) => {
+      debugLog('could not record the work checkout:', error);
+    });
   }
 
   return { summary: sanitizeValue(summary), workRoot: work.root };

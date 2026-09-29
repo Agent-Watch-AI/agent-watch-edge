@@ -7,7 +7,7 @@ import { sha256Hex } from '../events/event-id.js';
 import type { AgentWatchEvent, EventGit, FeatureCandidate } from '../events/types/events.types.js';
 import { featureCandidatesFromBranch } from '../feature/ticket-candidates.js';
 import { checkoutRootOf } from '../git/checkout-root.js';
-import { GIT_REMOTE_ARGS, GIT_TIMEOUT_MS, MAX_WORK_CHANGED_FILES } from '../git/constants/git.constants.js';
+import { EMPTY_TREE_OID, GIT_REMOTE_ARGS, GIT_TIMEOUT_MS, MAX_WORK_CHANGED_FILES } from '../git/constants/git.constants.js';
 import { asFingerprint, commitFiles, dirtyDelta, fingerprint } from '../git/fingerprint.js';
 import { repositoryIdentity, runGit } from '../git/git-context.js';
 import { isBeneath } from '../git/repository-root.js';
@@ -53,6 +53,8 @@ interface Probe {
   readonly closing?: Fingerprint;
   readonly remote?: string;
   readonly commits: readonly string[];
+  /** HEAD moved during the turn: a commit, even one that changed no file. */
+  readonly moved: boolean;
   /** The checkout's directory is gone; its baseline stands in for the closing state. */
   readonly vanished: boolean;
 }
@@ -62,8 +64,9 @@ interface Probe {
  *
  * On a tool-start hook: the checkout of the hook's cwd, of a file tool's path,
  * and of every directory the shell command named (`options.nominations`, roots
- * only). On a completion hook: the file's checkout, when the turn has not named
- * it yet. The first time a turn names a checkout, its baseline fingerprint is
+ * only). On a completion hook: the file's checkout and the shell command's
+ * checkouts, when the turn has not named them yet — a command can create the
+ * worktree it then works in. The first time a turn names a checkout, its baseline fingerprint is
  * taken — the one git process a tool hook may add — and later sightings are
  * votes, one small file each.
  *
@@ -82,8 +85,7 @@ export async function recordCheckouts(store: TurnStateStore, sessionId: string, 
 
   if (!options.config.capture.git || (!start && !TOOL_COMPLETION_TYPES.has(type))) return;
 
-  const named = start && (options.nominations?.length ?? 0) > 0;
-  const candidates = await hookCandidates(event, options, start);
+  const { candidates, named } = await hookCandidates(event, options, start);
 
   if (candidates.length === 0) return;
 
@@ -100,7 +102,9 @@ export async function recordCheckouts(store: TurnStateStore, sessionId: string, 
   for (const { root, via } of candidates) {
     const key = shortHash(root);
     const first = !seen.has(key);
-    const votes = start && (via === 'shell' || (via === 'cwd' && !named));
+    // A completion hook adds a vote only for a root a shell call created: a
+    // worktree the command itself added did not exist when its start hook ran.
+    const votes = (start || first) && (via === 'shell' || (start && via === 'cwd' && !named));
 
     if ((!first && !votes) || (first && seen.size >= MAX_TURN_CHECKOUTS) || !admits(root)) continue;
 
@@ -153,7 +157,9 @@ export async function resolveWorkCheckout(
 ): Promise<WorkCheckout> {
   const tools = records.filter((record): record is ToolRecord => record.kind === 'tool');
 
-  if (!options.config.capture.git) return { tools, git: stopEvent.git };
+  // Earlier hooks may have placed paths in checkouts this close will not judge;
+  // without git capture none of them is reported, only bare basenames.
+  if (!options.config.capture.git) return { tools: keepingPathsIn(tools, undefined), git: stopEvent.git };
 
   const admits = admission(options, (await store.readStart(sessionId)) ?? options.cwd);
   const candidates = candidatesOf(records, admits);
@@ -164,7 +170,9 @@ export async function resolveWorkCheckout(
   const probes = new Map(await Promise.all(batch.map(async (candidate) => [candidate.root, await probe(candidate)] as const)));
   const changed = new Map(candidates.map((candidate) => [candidate.root, changedFiles(candidate, probes.get(candidate.root)!)]));
   const reportable = candidates.filter((candidate) => probes.get(candidate.root)?.closing);
-  const byChange = best(reportable, (candidate) => changed.get(candidate.root)!.length);
+  // Ranked on the whole list, capped only when reported. A HEAD that moved with
+  // no file to show for it (an empty commit, an amend) is still a change.
+  const byChange = best(reportable, (candidate) => changed.get(candidate.root)!.length || (probes.get(candidate.root)!.moved ? 1 : 0));
 
   if (byChange) return reportCheckout(byChange.root, 'changed', probes.get(byChange.root)!, changed.get(byChange.root)!, tools, options);
 
@@ -186,24 +194,32 @@ export async function resolveWorkCheckout(
 }
 
 /**
- * The checkouts one tool hook names, the named ones first.
+ * The checkouts one tool hook names, the named ones first, and whether the call
+ * named one at all.
  *
- * A shell call that names the checkout it sits in votes for it through the
- * name, so the name comes first and the cwd's duplicate is dropped.
+ * A call that names a checkout — a shell command's directory or a file tool's
+ * file — votes through the name, so its cwd does not also vote: where an agent
+ * sits is weaker evidence than where it says it is looking. The cwd's duplicate
+ * of a named root is dropped.
  *
  * @param event - The tool event.
  * @param options - Tracking options.
  * @param start - Whether this is a tool-start hook.
  * @returns Distinct canonical roots with how each was named.
  */
-async function hookCandidates(event: AgentWatchEvent, options: TrackTurnOptions, start: boolean): Promise<{ root: string; via: CheckoutVia }[]> {
+async function hookCandidates(
+  event: AgentWatchEvent,
+  options: TrackTurnOptions,
+  start: boolean
+): Promise<{ candidates: { root: string; via: CheckoutVia }[]; named: boolean }> {
   const repositoryPath = event.metadata?.[REPOSITORY_PATH_METADATA_KEY];
   const fileRoot = typeof repositoryPath === 'string' && repositoryPath ? canonicalRoot(path.join(options.cwd, repositoryPath)) : undefined;
   const cwdRoot = start ? await checkoutRootOf(options.cwd) : undefined;
+  const nominations = options.nominations ?? [];
   const all: { root: string | undefined; via: CheckoutVia }[] = [
-    ...(start ? (options.nominations ?? []) : []).map((root) => ({ root, via: 'shell' as const })),
-    { root: cwdRoot, via: 'cwd' },
-    { root: fileRoot, via: 'file' }
+    ...nominations.map((root) => ({ root, via: 'shell' as const })),
+    { root: fileRoot, via: 'file' },
+    { root: cwdRoot, via: 'cwd' }
   ];
   const distinct = new Map<string, CheckoutVia>();
 
@@ -211,7 +227,7 @@ async function hookCandidates(event: AgentWatchEvent, options: TrackTurnOptions,
     if (root !== undefined && path.isAbsolute(root) && !distinct.has(root)) distinct.set(root, via);
   }
 
-  return [...distinct].map(([root, via]) => ({ root, via }));
+  return { candidates: [...distinct].map(([root, via]) => ({ root, via })), named: start && (nominations.length > 0 || fileRoot !== undefined) };
 }
 
 /**
@@ -221,7 +237,7 @@ async function hookCandidates(event: AgentWatchEvent, options: TrackTurnOptions,
  * alone decides which tenant a session sends as. With roots configured and the
  * start folder in one, any checkout of that tenant is admitted — worktrees sit
  * beside the start folder, not beneath it. Otherwise only checkouts beneath the
- * start folder are. Asked of real paths, because a symlink can lead anywhere.
+ * start folder are, and the one it lies in. Asked of real paths, because a symlink can lead anywhere.
  *
  * @param options - Tracking options; the machine's roots.
  * @param startFolder - The folder the session started in.
@@ -230,6 +246,10 @@ async function hookCandidates(event: AgentWatchEvent, options: TrackTurnOptions,
 function admission(options: TrackTurnOptions, startFolder: string): (root: string) => boolean {
   const roots = options.globalConfig.config.roots;
   const tenant = selectRoot(roots, startFolder)?.path;
+  // The identity this hook sends as is its own folder's. A session whose start
+  // and current folder sit in two tenants reports no checkout, rather than one
+  // tenant's under the other's token.
+  const sameIdentity = selectRoot(roots, options.cwd)?.path === tenant;
   const boundary = canonicalRoot(startFolder);
   const verdicts = new Map<string, boolean>();
 
@@ -239,7 +259,9 @@ function admission(options: TrackTurnOptions, startFolder: string): (root: strin
     if (known !== undefined) return known;
 
     const real = path.isAbsolute(root) ? canonicalRoot(root) : undefined;
-    const verdict = real !== undefined && selectRoot(roots, real)?.path === tenant && (tenant !== undefined || isBeneath(boundary, real));
+    // Beneath the start folder, or the checkout the start folder itself lies in.
+    const verdict
+      = real !== undefined && sameIdentity && selectRoot(roots, real)?.path === tenant && (tenant !== undefined || isBeneath(boundary, real) || isBeneath(real, boundary));
 
     verdicts.set(root, verdict);
 
@@ -290,7 +312,9 @@ function candidatesOf(records: readonly TurnRecord[], admits: (root: string) => 
       continue;
     }
 
-    if (record.kind !== 'tool' || typeof record.filePath !== 'string') continue;
+    // Only a completed read or edit is evidence: a failed call names a file it
+    // may never have touched, and carries no access marker.
+    if (record.kind !== 'tool' || typeof record.filePath !== 'string' || (record.access !== 'read' && record.access !== 'edit')) continue;
 
     const candidate = at(record.repositoryRoot);
 
@@ -313,22 +337,24 @@ async function probe(candidate: Candidate): Promise<Probe> {
   const from = candidate.baseline?.oid;
 
   if (closing) {
-    const moved = from !== undefined && closing.oid !== undefined && from !== closing.oid;
+    // A baseline with no oid was an unborn HEAD: the first commit is diffed against the empty tree.
+    const start = candidate.baseline && from === undefined ? EMPTY_TREE_OID : from;
+    const moved = start !== undefined && closing.oid !== undefined && start !== closing.oid;
 
-    return { closing, remote, commits: moved ? await commitFiles(candidate.root, from, closing.oid!) : [], vanished: false };
+    return { closing, remote, commits: moved ? await commitFiles(candidate.root, start, closing.oid!) : [], moved, vanished: false };
   }
 
   const common = candidate.baseline?.commonDir;
   const branch = candidate.baseline?.branch;
 
-  if (!common || !from || !branch || (await exists(candidate.root))) return { commits: [], vanished: false };
+  if (!common || !from || !branch || (await exists(candidate.root))) return { commits: [], moved: false, vanished: false };
 
   const [commits, commonRemote] = await Promise.all([
     commitFiles(common, from, `refs/heads/${branch}`, common),
     runGit(['--git-dir', common, ...GIT_REMOTE_ARGS], common, GIT_TIMEOUT_MS)
   ]);
 
-  return { closing: { oid: from, branch, commonDir: common, dirty: {} }, remote: commonRemote, commits, vanished: true };
+  return { closing: { oid: from, branch, commonDir: common, dirty: {} }, remote: commonRemote, commits, moved: commits.length > 0, vanished: true };
 }
 
 /**
@@ -338,7 +364,7 @@ async function probe(candidate: Candidate): Promise<Probe> {
  *
  * @param candidate - The checkout.
  * @param probed - What the Stop learned about it.
- * @returns Repository-relative paths, capped at {@link MAX_WORK_CHANGED_FILES}.
+ * @returns Repository-relative paths, uncapped: the count ranks candidates.
  */
 function changedFiles(candidate: Candidate, probed: Probe): string[] {
   if (!probed.closing) return [];
@@ -349,7 +375,7 @@ function changedFiles(candidate: Candidate, probed: Probe): string[] {
 
   for (const file of candidate.edited) files.add(file);
 
-  return [...files].slice(0, MAX_WORK_CHANGED_FILES);
+  return [...files];
 }
 
 /**
@@ -373,7 +399,10 @@ async function reportCheckout(
   tools: readonly ToolRecord[],
   options: TrackTurnOptions
 ): Promise<WorkCheckout> {
-  const capture = (await loadEffectiveConfig(options.paths, root, options.globalConfig)).config.capture;
+  // A worktree removed before the Stop has no file left to read; its main
+  // checkout, beside the shared git dir, carries the same committed one.
+  const configRoot = probed.vanished && probed.closing?.commonDir ? path.dirname(probed.closing.commonDir) : root;
+  const capture = (await loadEffectiveConfig(options.paths, configRoot, options.globalConfig)).config.capture;
   // Its own paths and nothing else: another checkout's are a wrong vote in the
   // placement corpus. The calls still count.
   const own = capture.files ? keepingPathsIn(tools, root) : keepingPathsIn(tools, undefined);
@@ -389,7 +418,7 @@ async function reportCheckout(
       ...repositoryIdentity(root, probed.remote),
       branch,
       commit: probed.closing?.oid,
-      changedFiles: capture.files && changed.length > 0 ? changed : undefined
+      changedFiles: capture.files && changed.length > 0 ? changed.slice(0, MAX_WORK_CHANGED_FILES) : undefined
     },
     featureCandidates: candidates.length > 0 ? candidates : undefined,
     tools: own,

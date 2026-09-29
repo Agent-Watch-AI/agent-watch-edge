@@ -27,7 +27,7 @@ import { identityPaths, settleLegacyQueue } from '../transport/queue-partition.j
 import type { EventTransport } from '../transport/types/transport.types.js';
 import { eventsUrl } from '../config/config.js';
 import { TurnStateStore } from '../turns/turn-state.js';
-import { TOOL_START_TYPES } from '../turns/constants/turns.constants.js';
+import { SHELL_COMPLETED_TYPE, TOOL_START_TYPES } from '../turns/constants/turns.constants.js';
 import { trackTurnOutcome, type TurnOutcome } from '../turns/turn-tracker.js';
 import {
   PAYLOAD_CWD_KEY,
@@ -135,14 +135,15 @@ async function parseEvents(state: HookPipelineState): Promise<StepOutcome<HookPi
  * holds either. A failure logs a fixed sentence, never its error, which could
  * quote a path.
  *
- * Only on a tool-start hook and only while git capture is on: which checkout a
+ * Only on a tool-start hook, or a shell call's completion (the command may have
+ * created the worktree it named), and only while git capture is on: which checkout a
  * turn worked in is git metadata, and a developer who turned that off said no.
  *
  * @param state - Current flow state.
  * @returns The state, with the named checkouts' roots.
  */
 async function nominate(state: HookPipelineState): Promise<StepOutcome<HookPipelineState>> {
-  if (!state.config.capture.git || !state.provider.shellCall || !state.events.some((event) => TOOL_START_TYPES.has(event.event.type))) {
+  if (!state.config.capture.git || !state.provider.shellCall || !state.events.some((event) => TOOL_START_TYPES.has(event.event.type) || event.event.type === SHELL_COMPLETED_TYPE)) {
     return next(state);
   }
 

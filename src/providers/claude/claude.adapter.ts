@@ -39,7 +39,7 @@ export function parseClaudeHookEvent(rawPayload: unknown, context: HookContext):
 }
 
 /**
- * The command a `PreToolUse` for Bash is about to run.
+ * The command a Bash tool hook is about to run, or has just run.
  *
  * Claude reports no separate working directory for the call: it runs in the
  * payload's `cwd`.
@@ -50,7 +50,11 @@ export function parseClaudeHookEvent(rawPayload: unknown, context: HookContext):
 export function claudeShellCall(rawPayload: unknown): ShellCall | undefined {
   const parsed = claudePayloadSchema.safeParse(rawPayload);
 
-  if (!parsed.success || !CLAUDE_TOOL_START_EVENTS.has(parsed.data.hook_event_name ?? '')) return undefined;
+  const hookName = parsed.success ? (parsed.data.hook_event_name ?? '') : '';
+
+  // PostToolUse too: a command can create the worktree it works in, which
+  // only exists to be found once the command has run.
+  if (!parsed.success || (!CLAUDE_TOOL_START_EVENTS.has(hookName) && hookName !== 'PostToolUse')) return undefined;
 
   if (classifyTool(parsed.data.tool_name) !== 'shell') return undefined;
 

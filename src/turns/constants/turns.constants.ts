@@ -13,6 +13,9 @@ export const TOOL_COMPLETION_TYPES: ReadonlySet<string> = new Set([
 /** Canonical event types that mean "a tool is about to run": where a turn names its checkouts. */
 export const TOOL_START_TYPES: ReadonlySet<string> = new Set(['tool.started', 'shell.started', 'mcp.started']);
 
+/** A shell call's completion: its command is read again for a checkout it created. */
+export const SHELL_COMPLETED_TYPE = 'shell.completed';
+
 /** Orphaned turn state (a crash without Stop/SessionEnd) is deleted after this. */
 export const TURN_STATE_TTL_MS = 24 * 60 * 60 * 1000;
 

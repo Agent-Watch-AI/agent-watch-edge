@@ -273,6 +273,94 @@ describe('the checkout a turn worked in', () => {
     expect(summary.work_evidence).toBeUndefined();
   });
 
+  it('admits the checkout a session started inside of, from a subfolder, with no roots configured', async () => {
+    const sub = path.join(core, 'src');
+    const target = path.join(sub, 'a.ts');
+
+    await hook(prompt('p1'), sub);
+    await hook(fileTool('PreToolUse', 'p1', 't1', 'Edit', target), sub);
+    await fs.writeFile(target, 'edited\n');
+    await hook(fileTool('PostToolUse', 'p1', 't1', 'Edit', target), sub);
+
+    expect(summaryOf(await hook(stop('p1'), sub))).toMatchObject({ branch: 'main', work_evidence: 'changed', files_changed: ['src/a.ts'] });
+  });
+
+  it("reports no checkout when the session started in one tenant's root and closes in another's", async () => {
+    const watch = path.join(base, 'watch');
+    const trip = path.join(base, 'trip');
+    const watchRepo = path.join(watch, 'repo');
+
+    await repository(watchRepo, 'AWT-5-watch');
+    await fs.mkdir(trip, { recursive: true });
+    await writeJson(resolvePaths(world.env).configFile, {
+      ...defaultConfig(),
+      developerEmail: 'dev@company.com',
+      roots: { [watch]: { token: 'watch-token' }, [trip]: { token: 'trip-token' } }
+    });
+    await hook(prompt('p1'), watch, true);
+    await shell('p1', 't1', `cd ${watchRepo} && touch src/new.ts`, watch, () => fs.writeFile(path.join(watchRepo, 'src', 'new.ts'), 'x\n'));
+
+    // The Stop fires from trip's root, and would be sent with trip's token.
+    const summary = summaryOf(await hook(stop('p1'), trip, true));
+
+    expect(summary.repository).toBeUndefined();
+    expect(JSON.stringify(summary)).not.toContain('AWT-5');
+  });
+
+  it('finds a worktree the shell call itself created, once the call has run', async () => {
+    const fresh = path.join(workspace, '.worktrees', 'core-AWT-11');
+    const command = `git -C ${core} worktree add -q -b AWT-11-new ${fresh}`;
+
+    await hook(prompt('p1'), workspace);
+    await shell('p1', 't1', command, workspace, () => {
+      git(core, 'worktree', 'add', '-q', '-b', 'AWT-11-new', fresh);
+    });
+    await shell('p1', 't2', `cd ${fresh} && git status`, workspace, () => {});
+
+    // At the first PreToolUse the new path named no checkout; read again after
+    // the call, it is one, and votes. Two votes to core's one; without the
+    // second read it would tie with core and lose to it as named later.
+    const summary = summaryOf(await hook(stop('p1'), workspace));
+
+    expect(summary.branch).toBe('AWT-11-new');
+  });
+
+  it('counts an empty commit as a change', async () => {
+    await hook(prompt('p1'), workspace);
+    await shell('p1', 't1', `git -C ${worktree} commit --allow-empty -m x`, workspace, () => {
+      git(worktree, 'commit', '-q', '--allow-empty', '-m', 'x');
+    });
+
+    const summary = summaryOf(await hook(stop('p1'), workspace));
+
+    expect(summary).toMatchObject({ branch: 'AWT-9-totals', work_evidence: 'changed' });
+    expect(summary.files_changed).toBeUndefined();
+  });
+
+  it('does not count a failed edit as a change', async () => {
+    const target = path.join(worktree, 'src', 'a.ts');
+
+    await hook(prompt('p1'), workspace);
+    await hook(fileTool('PreToolUse', 'p1', 't1', 'Edit', target), workspace);
+    await hook({ ...fileTool('PostToolUse', 'p1', 't1', 'Edit', target), hook_event_name: 'PostToolUseFailure', tool_error: 'no match' }, workspace);
+
+    expect(summaryOf(await hook(stop('p1'), workspace)).work_evidence).not.toBe('changed');
+  });
+
+  it('reports no checkout path once git capture is off at the Stop', async () => {
+    const target = path.join(worktree, 'src', 'a.ts');
+
+    await hook(prompt('p1'), workspace);
+    await hook(fileTool('PreToolUse', 'p1', 't1', 'Edit', target), workspace);
+    await hook(fileTool('PostToolUse', 'p1', 't1', 'Edit', target), workspace);
+    await writeJson(resolvePaths(world.env).configFile, { ...defaultConfig(), developerEmail: 'dev@company.com', capture: { ...defaultConfig().capture, git: false } });
+
+    const summary = summaryOf(await hook(stop('p1'), workspace));
+
+    expect(summary.repository).toBeUndefined();
+    expect(summary.files_touched).toBeUndefined();
+  });
+
   it('writes no checkout record and no work checkout on a dry run', async () => {
     const paths = resolvePaths(world.env);
 

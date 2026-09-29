@@ -36,6 +36,7 @@
     "dist",
     "README.md",
     "SECURITY.md",
+    "docs/AUDIT_PROMPT.md",
     "docs/DATA_HANDLING.md",
     "docs/ENTERPRISE_DEPLOYMENT.md",
     "docs/PERFORMANCE.md",

@@ -344,7 +344,7 @@ async function closeTurnLocked(
 interface WorkspaceRepository {
   readonly git?: EventGit;
   readonly featureCandidates?: readonly FeatureCandidate[];
-  /** The declared repository's root, local only: where the developer's git identity is read. */
+  /** The winning repository's root, local only: where the developer's git identity is read. */
   readonly root?: string;
   /** The turn's tools with every path dropped that this turn may not report. */
   readonly tools: readonly ToolRecord[];
@@ -409,11 +409,14 @@ async function resolveWorkspaceRepository(tools: readonly ToolRecord[], options:
   // declaring the winner, and the winner's are its own to withhold.
   const own = keepingPaths(admitted, (record) => record.repositoryRoot === winner && capture.files);
 
-  if (!capture.git) return { tools: own };
+  // `root` on every exit: the developer's git identity is read there whether
+  // or not the repository itself is declared, as it would be for a session
+  // started inside it with `capture.git: false`.
+  if (!capture.git) return { root, tools: own };
 
   const git: GitContext = await collectGitContext({ cwd: root, includeChangedFiles: capture.files }).catch(() => ({}));
 
-  if (!git.repositoryRoot) return { tools: own };
+  if (!git.repositoryRoot) return { root, tools: own };
 
   const candidates = featureCandidatesFromBranch(git.branch);
 
@@ -471,10 +474,14 @@ function admittedTools(tools: readonly ToolRecord[], options: TrackTurnOptions):
     }
 
     // Relative is garbled state: there is nothing it could safely be joined to.
-    const verdict = verdicts.get(root) ?? (path.isAbsolute(root) && isBeneath(boundary, canonicalRoot(root)) && selectRoot(roots, root)?.path === tenant);
+    const real = canonicalRoot(root);
+    const verdict = verdicts.get(root) ?? (path.isAbsolute(root) && isBeneath(boundary, real) && selectRoot(roots, root)?.path === tenant);
 
     verdicts.set(root, verdict);
-    admitted.push(verdict ? record : { ...record, filePath: undefined, repositoryRoot: undefined });
+    // Admitted under its real root: a repository reached both directly and
+    // through a symlink inside the start folder is one repository with one
+    // vote, not two aliases splitting it.
+    admitted.push(verdict ? { ...record, repositoryRoot: real } : { ...record, filePath: undefined, repositoryRoot: undefined });
   }
 
   return admitted;

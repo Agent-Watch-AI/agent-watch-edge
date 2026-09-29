@@ -1,9 +1,11 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { collectGitContext, gitUserEmail } from '../src/git/git-context.js';
 import { normalizeRemote, remoteHash, stripRemoteCredentials } from '../src/git/remote-sanitize.js';
+import { repositoryRootFinder } from '../src/git/repository-root.js';
 import { makeTempEnv, type TempWorld } from './helpers.js';
 
 describe('remote sanitization', () => {
@@ -129,5 +131,26 @@ describe('collectGitContext', () => {
     expect(context.commit).toBeUndefined();
     expect(context.remote).toBeUndefined();
     expect(context.changedFiles).toBeUndefined();
+  });
+});
+
+describe('repositoryRootFinder', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('refuses a root whose real location cannot be resolved', async () => {
+    // `.git` was found, then the link it was found through went away before
+    // its real path could be read. The lexical path would pass containment;
+    // where it really points was never proven to be inside.
+    const workspace = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'aw-root-'));
+    const repo = path.join(workspace, 'repo');
+
+    await fs.mkdir(path.join(repo, '.git'), { recursive: true });
+    expect(await repositoryRootFinder(workspace).find(path.join(repo, 'a.ts'))).toBe(repo);
+
+    vi.spyOn(fs, 'realpath').mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }));
+
+    expect(await repositoryRootFinder(workspace).find(path.join(repo, 'a.ts'))).toBeUndefined();
+    vi.restoreAllMocks();
+    await fs.rm(workspace, { recursive: true, force: true });
   });
 });

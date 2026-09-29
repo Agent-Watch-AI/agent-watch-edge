@@ -83,16 +83,22 @@ async function walkUp(dir: string, boundary: string, cache: Map<string, string |
  * machine, and `.git` is found through it: lexically beneath, on disk another
  * project's. Asked only once a root is found, so the walk itself stays `stat`s.
  * A refused root ends the walk rather than climbing past it — the file belongs
- * to that repository, whoever's it is.
+ * to that repository, whoever's it is. A path that cannot be resolved — a link
+ * removed or retargeted since the `.git` check — is refused too: its real
+ * location was never proven to be inside.
  *
  * @param boundary - Folder that bounds the walk.
  * @param dir - Directory a `.git` entry was found in.
  * @returns True when the directory really lies within the boundary.
  */
 async function isReallyBeneath(boundary: string, dir: string): Promise<boolean> {
-  const [realBoundary, realDir] = await Promise.all([fs.realpath(boundary).catch(() => boundary), fs.realpath(dir).catch(() => dir)]);
+  try {
+    const [realBoundary, realDir] = await Promise.all([fs.realpath(boundary), fs.realpath(dir)]);
 
-  return isBeneath(realBoundary, realDir);
+    return isBeneath(realBoundary, realDir);
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -1349,6 +1349,40 @@ describe('a turn of a session started above its repositories', () => {
     expect(summary.developer_id).toBe('repo-a@company.com');
   });
 
+  it("names the developer from the winning repository's git config even when it withholds git", async () => {
+    // `capture.git: false` withholds the repository, not the developer: a
+    // session started inside repo-a would still read its user.email.
+    const paths = resolvePaths(world.env);
+
+    await writeJson(paths.configFile, defaultConfig());
+    await writeJson(path.join(workspace, 'repo-a', '.agentwatch.json'), { capture: { git: false } });
+    execFileSync('git', ['config', 'user.email', 'repo-a@company.com'], { cwd: path.join(workspace, 'repo-a'), stdio: 'pipe', env: { ...process.env, HOME: world.home } });
+    await hook(prompt);
+    await hook(toolCall('Edit', 'repo-a/src/a.ts', 't0'));
+
+    const summary = await hook(stop);
+
+    expect(summary.repository).toBeUndefined();
+    expect(summary.developer_id).toBe('repo-a@company.com');
+  });
+
+  it('counts a repository reached directly and through a symlink inside the start folder as one', async () => {
+    // `<workspace>/alias` points at repo-a. Two aliases of one repository are
+    // one vote, not two that split it and hand the turn to repo-b.
+    await fs.symlink(path.join(workspace, 'repo-a'), path.join(workspace, 'alias'));
+    await hook(prompt);
+    await hook(toolCall('Edit', 'repo-b/src/y.ts', 't0'));
+    await hook(toolCall('Edit', 'repo-b/src/z.ts', 't1'));
+    await hook(toolCall('Edit', 'repo-a/src/a.ts', 't2'));
+    await hook(toolCall('Edit', 'alias/src/b.ts', 't3'));
+    await hook(toolCall('Edit', 'alias/src/c.ts', 't4'));
+
+    const summary = await hook(stop);
+
+    expect(summary.repository).toBe('repo-a');
+    expect(summary.files_touched).toEqual(['src/a.ts', 'src/b.ts', 'src/c.ts']);
+  });
+
   it('reports no repository when the turn touched none beneath the start folder', async () => {
     // Outside the start folder entirely: the file's own repository, if it has
     // one, is another project's — possibly another tenant's.

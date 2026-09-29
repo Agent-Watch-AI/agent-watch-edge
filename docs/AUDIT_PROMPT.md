@@ -6,8 +6,9 @@ reviewer asks about a telemetry collector, to cite a file and line for every
 claim, and to list what it could not verify. Compare the report it produces
 against [DATA_HANDLING.md](DATA_HANDLING.md), which answers questions 1 to 10.
 Question 11 has no written answer beyond the release controls in
-[ENTERPRISE_DEPLOYMENT.md](ENTERPRISE_DEPLOYMENT.md); `package.json` and the
-lockfile are the answer. If the report raises a question neither answers, tell us.
+[ENTERPRISE_DEPLOYMENT.md](ENTERPRISE_DEPLOYMENT.md) and the SBOM each release
+publishes. The repository lockfile does not ship and does not bind an install, so
+audit what your own install resolved. If the report raises a question neither answers, tell us.
 
 Run it against the exact revision you intend to install. The findings are
 only as good as the checkout they were made on.
@@ -95,8 +96,14 @@ uninstall restore agent configuration to its previous state? What is left on
 disk after uninstall --purge?
 
 ## 11. Supply chain
-Read package.json and the lockfile. List runtime dependencies and postinstall
-scripts. Note anything that downloads code at install or run time.
+List runtime dependencies from package.json with their declared version ranges.
+The repository's package-lock.json is not shipped in the npm package and does not
+bind a consumer's install, so do not treat it as what gets installed. Inspect the
+packed artifact (npm pack) and, if I give you one, the lockfile or SBOM of the
+target installation; otherwise report every range as unresolved. List lifecycle
+scripts (preinstall, install, postinstall, prepare) in this package and in the
+resolved dependencies you can see. Note anything that downloads code at install or
+run time.
 
 ## 12. Verdict
 Give a one-paragraph verdict. Then list, as a numbered list, the questions you

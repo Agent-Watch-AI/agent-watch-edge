@@ -70,7 +70,8 @@ The npm package itself is never removed by `uninstall`; `npm rm -g
 
 ## Release operation
 
-Ordinary pushes and PRs verify and build artifacts; they do not publish. Run
+Nothing runs on pushes or PRs. A release starts with a `workflow_dispatch` of
+`release.yml`, which verifies and builds artifacts; locally the same is: run
 `npm ci`, the test/lint/typecheck/build checks, then `npm run release:artifacts`
 to create a verified tarball, production dependency SBOM, and `SHA256SUMS`.
 Verify with `sha256sum --check SHA256SUMS` from `artifacts` (macOS:

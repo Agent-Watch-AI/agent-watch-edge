@@ -17,10 +17,32 @@ import { findGitDir } from './gate-checkout.js';
  * @returns The canonical checkout root, or undefined outside any repository.
  */
 export async function checkoutRootOf(target: string): Promise<string | undefined> {
-  const directory = await existingDirectory(target);
-  const location = directory === undefined ? undefined : await findGitDir(directory);
+  return (await checkoutOf(target))?.root;
+}
 
-  return location ? canonicalRoot(location.root) : undefined;
+/**
+ * The checkout a path lies in, and the path relative to it.
+ *
+ * The walk for `.git` starts from the real directory, not the spelling: a
+ * symlink into a checkout's subdirectory leads nowhere when walked up
+ * lexically, and the path is then made relative to where it really is.
+ *
+ * @param target - Absolute file or directory path.
+ * @returns The canonical root and the target relative to it, or undefined outside any repository.
+ */
+export async function checkoutOf(target: string): Promise<{ root: string; relative: string } | undefined> {
+  const directory = await existingDirectory(target);
+
+  if (directory === undefined) return undefined;
+
+  const real = await fs.realpath(directory).catch(() => directory);
+  const location = await findGitDir(real);
+
+  if (!location) return undefined;
+
+  const root = canonicalRoot(location.root);
+
+  return { root, relative: path.relative(root, path.join(real, path.relative(directory, path.resolve(target)))) };
 }
 
 /**

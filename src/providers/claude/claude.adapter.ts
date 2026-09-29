@@ -7,6 +7,7 @@ import {
   CLAUDE_DISPLAY_NAME,
   CLAUDE_EVENT_TYPE_MAP,
   CLAUDE_PROVIDER_ID,
+  CLAUDE_SHELL_REREAD_EVENTS,
   CLAUDE_TOOL_EVENTS,
   CLAUDE_TOOL_START_EVENTS,
   CLAUDE_UNKNOWN_EVENT
@@ -52,9 +53,10 @@ export function claudeShellCall(rawPayload: unknown): ShellCall | undefined {
 
   const hookName = parsed.success ? (parsed.data.hook_event_name ?? '') : '';
 
-  // PostToolUse too: a command can create the worktree it works in, which
-  // only exists to be found once the command has run.
-  if (!parsed.success || (!CLAUDE_TOOL_START_EVENTS.has(hookName) && hookName !== 'PostToolUse')) return undefined;
+  // The completion too, failed or not: a command can create the worktree it
+  // works in, which only exists to be found once the command has run — and a
+  // command that exits non-zero may have got that far.
+  if (!parsed.success || (!CLAUDE_TOOL_START_EVENTS.has(hookName) && !CLAUDE_SHELL_REREAD_EVENTS.has(hookName))) return undefined;
 
   if (classifyTool(parsed.data.tool_name) !== 'shell') return undefined;
 

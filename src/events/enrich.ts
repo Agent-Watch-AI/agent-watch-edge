@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { isRecord } from '../core/object.js';
 import { collectGitContext } from '../git/git-context.js';
-import { findGitDir } from '../git/gate-checkout.js';
+import { checkoutOf } from '../git/checkout-root.js';
 import type { GitContext } from '../git/types/git.types.js';
 import { featureCandidatesFromBranch } from '../feature/ticket-candidates.js';
 import { sanitizeValue } from '../privacy/sanitizer.js';
@@ -96,22 +96,28 @@ async function resolveGitContext(events: readonly AgentWatchEvent[], options: En
  * @param options - Effective config and working directory.
  * @returns Absolute file path → its checkout root; empty when git capture is off.
  */
-async function resolveFileRepositories(events: readonly AgentWatchEvent[], options: EnrichOptions): Promise<ReadonlyMap<string, string>> {
+async function resolveFileRepositories(events: readonly AgentWatchEvent[], options: EnrichOptions): Promise<ReadonlyMap<string, FileCheckout>> {
   if (!options.config.capture.git) return EMPTY_REPOSITORIES;
 
-  const roots = new Map<string, string>();
+  const roots = new Map<string, FileCheckout>();
 
   for (const event of events) {
     const filePath = event.metadata?.[FILE_PATH_METADATA_KEY];
 
     if (typeof filePath !== 'string' || !path.isAbsolute(filePath) || roots.has(filePath)) continue;
 
-    const location = await findGitDir(path.dirname(filePath)).catch(() => undefined);
+    const checkout = await checkoutOf(filePath).catch(() => undefined);
 
-    if (location) roots.set(filePath, location.root);
+    if (checkout) roots.set(filePath, checkout);
   }
 
   return roots;
+}
+
+/** The checkout a file really lies in: its canonical root, and the file's path there. */
+interface FileCheckout {
+  readonly root: string;
+  readonly relative: string;
 }
 
 /** Everything one event needs, resolved once for the whole batch. */
@@ -119,8 +125,8 @@ interface EnrichContext {
   readonly git: GitContext;
   readonly featureCandidates: readonly FeatureCandidate[];
   readonly rewriter: PathRewriter;
-  /** Absolute file path → the root of the checkout it lies in. */
-  readonly repositories: ReadonlyMap<string, string>;
+  /** Absolute file path → the checkout it really lies in, and its path there. */
+  readonly repositories: ReadonlyMap<string, FileCheckout>;
   readonly options: EnrichOptions;
 }
 
@@ -181,12 +187,14 @@ function enrichMetadata(metadata: AgentWatchEvent['metadata'], context: EnrichCo
  * @returns The metadata fields to overwrite.
  */
 function pathFields(filePath: string, context: EnrichContext): Record<string, string> {
-  const root = context.repositories.get(filePath);
+  const checkout = context.repositories.get(filePath);
 
-  if (!root) return { [FILE_PATH_METADATA_KEY]: toSafePath(filePath, context.git.repositoryRoot) };
+  if (!checkout) return { [FILE_PATH_METADATA_KEY]: toSafePath(filePath, context.git.repositoryRoot) };
+
+  const { root, relative } = checkout;
 
   return {
-    [FILE_PATH_METADATA_KEY]: path.relative(root, filePath),
+    [FILE_PATH_METADATA_KEY]: relative,
     // Relative, never absolute: the machine's layout is not the product's
     // business. The turn tracker anchors it to this same hook's cwd when it
     // records the call, because the next hook's cwd may not be this one.

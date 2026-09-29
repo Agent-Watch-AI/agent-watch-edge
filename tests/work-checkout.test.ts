@@ -409,6 +409,35 @@ describe('the checkout a turn worked in', () => {
     expect(summary.files_changed).toBeUndefined();
   });
 
+  it('re-reads a failed shell call: it may have created the worktree before it failed', async () => {
+    const fresh = path.join(workspace, '.worktrees', 'core-AWT-13');
+    const command = `git -C ${core} worktree add -q -b AWT-13-new ${fresh} && false`;
+
+    await hook(prompt('p1'), workspace);
+    await hook(bash('PreToolUse', 'p1', 't1', command), workspace);
+    git(core, 'worktree', 'add', '-q', '-b', 'AWT-13-new', fresh);
+    await hook({ ...bash('PostToolUse', 'p1', 't1', command), hook_event_name: 'PostToolUseFailure', tool_error: 'exit 1' }, workspace);
+    await shell('p1', 't2', `cd ${fresh} && git status`, workspace, () => {});
+
+    // core: one vote (named at PreToolUse); the new worktree: one from the
+    // failed call's re-read, one from t2. Without the re-read they would tie
+    // and core, named first, would win.
+    expect(summaryOf(await hook(stop('p1'), workspace)).branch).toBe('AWT-13-new');
+  });
+
+  it('counts an empty commit in a worktree the turn then removed', async () => {
+    const gone = path.join(workspace, '.worktrees', 'core-AWT-14');
+
+    git(core, 'worktree', 'add', '-q', '-b', 'AWT-14-gone', gone);
+    await hook(prompt('p1'), workspace);
+    await shell('p1', 't1', `cd ${gone} && git commit --allow-empty -m x && git -C ${core} worktree remove ${gone}`, workspace, () => {
+      git(gone, 'commit', '-q', '--allow-empty', '-m', 'x');
+      git(core, 'worktree', 'remove', gone);
+    });
+
+    expect(summaryOf(await hook(stop('p1'), workspace))).toMatchObject({ branch: 'AWT-14-gone', work_evidence: 'changed' });
+  });
+
   it('writes no checkout record and no work checkout on a dry run', async () => {
     const paths = resolvePaths(world.env);
 

@@ -7,7 +7,7 @@ import { sha256Hex } from '../events/event-id.js';
 import type { AgentWatchEvent, EventGit, FeatureCandidate } from '../events/types/events.types.js';
 import { featureCandidatesFromBranch } from '../feature/ticket-candidates.js';
 import { checkoutRootOf } from '../git/checkout-root.js';
-import { EMPTY_TREE_OID, EMPTY_TREE_OID_SHA256, GIT_REMOTE_ARGS, GIT_TIMEOUT_MS, MAX_WORK_CHANGED_FILES } from '../git/constants/git.constants.js';
+import { EMPTY_TREE_OID, EMPTY_TREE_OID_SHA256, GIT_REMOTE_ARGS, GIT_TIMEOUT_MS, MAX_WORK_CHANGED_FILES, gitVerifyRefArgs } from '../git/constants/git.constants.js';
 import { asFingerprint, commitFiles, dirtyDelta, fingerprint } from '../git/fingerprint.js';
 import { repositoryIdentity, runGit } from '../git/git-context.js';
 import { isBeneath } from '../git/repository-root.js';
@@ -362,12 +362,17 @@ async function probe(candidate: Candidate): Promise<Probe> {
 
   if (!common || !from || !branch || (await exists(candidate.root))) return { commits: [], moved: false, vanished: false };
 
-  const [commits, commonRemote] = await Promise.all([
+  const [commits, commonRemote, head] = await Promise.all([
     commitFiles(common, from, `refs/heads/${branch}`, common),
-    runGit(['--git-dir', common, ...GIT_REMOTE_ARGS], common, GIT_TIMEOUT_MS)
+    runGit(['--git-dir', common, ...GIT_REMOTE_ARGS], common, GIT_TIMEOUT_MS),
+    runGit(['--git-dir', common, ...gitVerifyRefArgs(`refs/heads/${branch}`)], common, GIT_TIMEOUT_MS)
   ]);
 
-  return { closing: { oid: from, branch, commonDir: common, dirty: {} }, remote: commonRemote, commits, moved: commits.length > 0, vanished: true };
+  // Moved when the branch no longer points where the turn started — an empty
+  // commit moves it too, with no file to show for it.
+  const moved = head !== undefined && head !== from;
+
+  return { closing: { oid: from, branch, commonDir: common, dirty: {} }, remote: commonRemote, commits, moved, vanished: true };
 }
 
 /**

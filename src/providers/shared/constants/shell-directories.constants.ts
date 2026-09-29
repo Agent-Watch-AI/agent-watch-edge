@@ -22,7 +22,9 @@ export const RE_CHANGE_DIRECTORY = new RegExp(String.raw`(?:^|[\s(])(?:cd|pushd)
 export const RE_DIRECTORY_ARGUMENTS: readonly RegExp[] = [
   new RegExp(String.raw`\bgit\s+(?:-c\s+\S+\s+)*-C\s+` + ARG, 'g'),
   new RegExp(String.raw`--(?:work-tree|git-dir)[= ]` + ARG, 'g'),
-  new RegExp(String.raw`\bworktree\s+add\s+(?:-\S+\s+(?:\S+\s+)?)*` + ARG, 'g')
+  // Only -b, -B and --reason take a value; every other option is a flag, and
+  // the first bare word after them is the path.
+  new RegExp(String.raw`\bworktree\s+add\s+(?:(?:-[bB]|--reason)\s+(?:"[^"]*"|'[^']*'|\S+)\s+|-\S+\s+)*` + ARG, 'g')
 ];
 
 /** A quoted absolute or home-relative path anywhere in the command. */

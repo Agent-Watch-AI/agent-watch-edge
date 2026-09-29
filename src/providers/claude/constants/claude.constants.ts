@@ -52,6 +52,9 @@ export const CLAUDE_TOOL_EVENTS: ReadonlySet<string> = new Set(['PreToolUse', 'P
 /** Hooks that report a tool call as starting rather than finishing. */
 export const CLAUDE_TOOL_START_EVENTS: ReadonlySet<string> = new Set(['PreToolUse', 'PermissionRequest']);
 
+/** Completions whose shell command is read again for a checkout the command created. */
+export const CLAUDE_SHELL_REREAD_EVENTS: ReadonlySet<string> = new Set(['PostToolUse', 'PostToolUseFailure']);
+
 /**
  * The one hook a budget refusal may travel on.
  *

@@ -116,13 +116,24 @@ describe('a session started above its repositories', () => {
     expect(event.metadata.repositoryPath).toBe(path.join('..', 'other'));
   });
 
-  it('places a file reached through a symlink by its lexical checkout; the close judges the real one', async () => {
+  it('places a file reached through a symlink in the checkout it really lies in', async () => {
+    // The close then judges that real checkout against the tenant and the start folder.
     await fs.symlink(outside, path.join(workspace, 'linked'));
 
     const [event] = await enrich([toolEvent(path.join(workspace, 'linked/src/app.ts'))], workspace);
 
     expect(event.metadata.filePath).toBe(path.join('src', 'app.ts'));
-    expect(event.metadata.repositoryPath).toBe('linked');
+    expect(event.metadata.repositoryPath).toBe(path.join('..', 'other'));
+  });
+
+  it('finds the checkout of a file reached through a symlink into one of its subdirectories', async () => {
+    // Walked up lexically, `<workspace>/shortcut/app.ts` meets no `.git`.
+    await fs.symlink(path.join(outside, 'src'), path.join(workspace, 'shortcut'));
+
+    const [event] = await enrich([toolEvent(path.join(workspace, 'shortcut/app.ts'))], workspace);
+
+    expect(event.metadata.filePath).toBe(path.join('src', 'app.ts'));
+    expect(event.metadata.repositoryPath).toBe(path.join('..', 'other'));
   });
 
   it('sends no absolute path, for a file in a repository or outside every one', async () => {

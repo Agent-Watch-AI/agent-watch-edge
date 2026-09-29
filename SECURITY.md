@@ -52,5 +52,7 @@ The [data handling contract](docs/DATA_HANDLING.md) specifies collection default
 global consent migration, native OTLP boundaries, credentials, retention and the
 local off switch. Native exporters require setup and an agent restart after an
 upgrade; the hook consent gate cannot filter traffic sent directly by an agent.
+To check that contract against the source with your own coding agent, use the
+[audit prompt](docs/AUDIT_PROMPT.md).
 No compliance attestation or completed penetration test is claimed. See
 [deferred enterprise work](docs/ENTERPRISE_DEPLOYMENT.md).

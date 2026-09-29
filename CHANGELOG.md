@@ -15,6 +15,12 @@
   Native prompt logging stays forced off for Claude, Codex and Gemini.
 - `contentCaptureConsent` now gates tool input/output only.
 
+### New: an audit prompt for security reviewers
+
+- `docs/AUDIT_PROMPT.md`, shipped in the package, is a prompt a reviewer pastes into
+  their own coding agent to audit this package from source, citing file:line for
+  every claim. `docs/DATA_HANDLING.md` and `SECURITY.md` link it.
+
 ### New: `agent-watch-otel`, a Python OpenTelemetry span processor
 
 `python/agent-watch-otel/` is this repository's first Python package and its

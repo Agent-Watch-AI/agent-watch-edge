@@ -1,7 +1,8 @@
 # AgentWatch Edge — Architecture
 
 Status: implementation blueprint (written before code, per project process).
-Date: 2026-08-07.
+Date: 2026-08-07. Sections 1–10 are that blueprint. Anything numbered above it is a
+dated addition written after the code it describes.
 
 Every provider-specific claim below is tagged:
 
@@ -50,6 +51,9 @@ Two telemetry sources, deliberately kept distinct:
   configuration so the agent exports per-request logs and multi-agent traces. The backend
   normalizes completed requests to `llm.call`, durably upserts them, and finalizes the token,
   cost and per-agent fields of `turn.summary`. Claude transcript totals are provisional only.
+
+Only Source A is synchronous — the agent waits for the hook process to exit — which
+makes it the only channel a turn can be refused on. See §11.
 
 Correlation happens downstream: both streams carry the provider session ID
 (Claude: hook `session_id` == OTel `session.id` **[docs]**; Codex: hook `thread_id`/`session_id` ==
@@ -231,3 +235,122 @@ total and degrades only to an agent-type or `unattributed` group. Calls are idem
    non-durable receiver lossless.
 7. Windows support: paths module isolates XDG/APPDATA decisions; hooks themselves are
    shell-command based and untested on Windows in this MVP (documented limitation).
+
+## 11. Enforcement **(added 2026-09-19, after the code)**
+
+Detailed design: `docs/superpowers/specs/2026-08-26-llm-block-enforcement-design.md`
+(status: implemented; counterpart in `agent-watch-core`). Configuration and behaviour:
+README, "Budget enforcement". Neither states what the two sources of §2 imply about
+enforcement, which is what this section is for.
+
+### Only one source can refuse anything
+
+The two telemetry sources are not interchangeable, and enforcement is where the
+difference becomes structural: **the agent waits on exactly one of them.**
+
+| | Source A — hooks | Source B — native OTel |
+|---|---|---|
+| Carries | lifecycle events, `turn.summary` | `llm.call` — the usage ledger |
+| Transport | stdin/stdout of one `agentwatch hook` process | the agent exports directly to the backend (§7) |
+| Agent blocks on it | yes, until the process exits | no, fire-and-forget |
+| Can refuse a turn | yes | never |
+
+A refusal can only travel back down a channel the agent is waiting on, so the hook
+path is the only enforcement point the Edge has. Source B cannot block by
+construction: by the time a request log exists, the request has been made and
+billed. This is FR-14's "passive telemetry collection must not claim to block AI
+traffic" as it lands in this codebase.
+
+### A cap depends on both sources
+
+The loop crosses them in opposite directions:
+
+1. Source B reports what was spent (`llm.call`, agent → backend).
+2. The backend resolves that against the policy and answers
+   `GET /v1/enforcement/decision`.
+3. Source A asks that question at prompt-submit, and refuses the turn.
+
+A cap is therefore only as good as the ledger feeding it — which is why
+`enforcement`, `delivery` and `otel` are whole blocks in `GLOBAL_ONLY_BLOCKS` and
+`emit.llmCalls`/`emit.turnSummaries` are in `GLOBAL_ONLY_EMIT_KEYS`. A committed
+`.agentwatch.json` that silenced the usage ledger would defeat every cap in the
+tenant as completely as one that turned the gate off, and far less visibly.
+
+The global off switch (`agentwatch off`) short-circuits before the pipeline, so it
+disables enforcement along with hook collection at once; `doctor` reports that as an
+explicit budget-enforcement warning rather than leaving it silent. Source B does not
+stop at once everywhere. Claude Code asks `agentwatch otel-headers` for its bearer,
+which answers `{}` once the Edge is off, though batches already queued may still
+leave. Codex and Gemini were given static credentials at setup and keep exporting
+until they are restarted or closed.
+
+### Gateability is per provider, and is not observability
+
+Whether a provider can be gated depends on its hook protocol documenting a
+refusal; whether its spend can be measured depends on it having an OTel exporter
+that is switched on. The two are independent, and Antigravity currently has neither:
+
+| Provider | Gated (Source A) | Ledger (Source B) |
+|---|---|---|
+| Claude Code | yes — `UserPromptSubmit` **[docs]** | native OTel |
+| Codex | yes — `UserPromptSubmit` **[docs]** | native OTel, only with tool-content consent; the default metadata-only install leaves it off |
+| Gemini CLI | yes — `BeforeAgent`/`UserPromptSubmit` **[docs]** | native OTel logs, only with tool-content consent; without it only metrics, and only when `otel.metrics` is on (off by default), so a default install exports nothing |
+| Cursor | IDE sessions only — `beforeSubmitPrompt` **[docs]**; the CLI emits shell hooks only, so it is not gated | **none** — no OTel export, and transcripts carry no token usage, so summaries stay `usage_status=pending` |
+| Antigravity | **no** — `PreToolUse` can deny mid-turn work, and a mid-turn tool gate is what the design rejected; `Stop` also takes a decision, but only `{"decision":"stop"}` | **none** — no OTLP exporter configuration exists |
+
+So "enforced" is a property of a (provider, source) pair, not of the product. A
+missing ledger and a missing gate fail differently. Cursor IDE, and Codex or Gemini
+without consent, still ask and still refuse a developer the platform already knows
+is over cap; what they lack is the spend that would move them over it. Cursor CLI
+and Antigravity cannot refuse at all. Both failures are quiet: without a ledger,
+the spend that should cross the cap goes unmeasured, and without a gate, a developer
+already over it keeps working.
+
+Under multi-tenant `roots` the ledger follows the root only on Claude Code. The
+hook applies the root's token before it asks. Claude Code's exporter gets its bearer
+per directory from `agentwatch otel-headers`, so a root sharing the machine's
+collector is billed to its own tenant, and a root enrolled against another backend
+gets no bearer at all. Codex and Gemini keep the machine token and endpoint written
+at setup, so on them a root with its own token asks about a cap its own usage never
+reaches.
+
+### Cost on the critical path
+
+The gate sits between the developer's keystroke and the agent's first token, so
+every part of it is bounded. `enforcementWouldAsk` is consulted before any
+gate-specific work (identity, checkout, model, cache, network), but it only asks
+whether enforcement is configured (enabled, a token, a decision URL), not whether
+the tenant has a cap: an enrolled machine pays for the question even when the
+answer will be "no cap". Config loading and event parsing happen before it either
+way. Identity, checkout and model resolve
+in one `Promise.all`. The decision request is bounded by `enforcement.timeoutMs`,
+300 ms by default; the config accepts a larger value, and the hook then waits that
+long, up to the 30-second hook timeout setup registers with the provider, which
+kills the hook first. A disk cache keyed on the whole question (endpoint, token, developer,
+repository and branch, model) means each distinct question costs one bounded
+request per TTL, as a best effort: cache and breaker writes swallow filesystem
+errors, and concurrent hooks take no lock, so an unwritable data directory or two
+simultaneous misses cost extra requests. Process-per-hook is why that cache exists on disk at all:
+there is no memory to hold "this developer is allowed" between prompts. The same
+reason puts the breaker on disk: a failed request is never cached as an answer, it
+opens a cooldown, and until it expires the turns after it fail open (`circuit_open`)
+without paying the timeout again.
+
+What travels on the question has grown past the spec's single `developer_id`:
+`repository` + `branch` when they can be resolved cheaply (both or neither, which is
+what lets a feature-scoped cap be judged), and `model` when one is known. All of
+them are part of the cache key, so an answer earned on one branch or model is never
+served for another. A feature-scoped cap still makes the platform answer
+`cache_ttl_ms: 0`, so feature spend is re-checked on every prompt rather than
+trusted for a TTL.
+
+### Trust boundary
+
+Every mechanism here is a config file in the developer's home directory, honoured
+by an agent that chose to read it. It can be edited, and the Edge can be
+uninstalled. MDM (`examples/mdm/`) installs the package everywhere, but only Claude
+Code has a managed policy file a non-admin cannot override; for Codex, Cursor,
+Gemini and Antigravity, setup still writes user-owned hook files the developer can
+remove. Even the managed file does not survive a developer who is a local
+administrator. Nothing here survives an adversary, and the spec says so at more
+length.

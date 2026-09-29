@@ -187,3 +187,9 @@ export const GATE_REMOTE_ABSENT_TTL_MS = 60_000;
  * that is what a linked worktree and a submodule check out as.
  */
 export const GIT_ENTRY_NAME = '.git';
+
+/**
+ * The errors that mean "no `.git` here". Anything else — a permission or I/O
+ * error — means the answer is unknown, not no.
+ */
+export const GIT_ENTRY_ABSENT_CODES: ReadonlySet<string> = new Set(['ENOENT', 'ENOTDIR']);

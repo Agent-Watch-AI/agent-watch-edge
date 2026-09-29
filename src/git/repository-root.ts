@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { GIT_ENTRY_NAME } from './constants/git.constants.js';
+import { GIT_ENTRY_ABSENT_CODES, GIT_ENTRY_NAME } from './constants/git.constants.js';
 import type { RepositoryRootFinder } from './types/repository-root.types.js';
 
 export type { RepositoryRootFinder } from './types/repository-root.types.js';
@@ -65,7 +65,14 @@ async function rootFor(dir: string, boundary: string, cache: Map<string, string 
  * @returns The root, or undefined once the boundary is passed.
  */
 async function walkUp(dir: string, boundary: string, cache: Map<string, string | undefined>): Promise<string | undefined> {
-  if (await hasGitEntry(dir)) return (await isReallyBeneath(boundary, dir)) ? dir : undefined;
+  const entry = await gitEntry(dir);
+
+  if (entry === 'present') return (await isReallyBeneath(boundary, dir)) ? dir : undefined;
+
+  // A `.git` that could not be checked may well be there: climbing past it
+  // would hand the file to an enclosing repository — the wrong branch, the
+  // wrong config. No repository is the answer this walk gives when unsure.
+  if (entry === 'unknown') return undefined;
 
   const parent = path.dirname(dir);
 
@@ -105,15 +112,17 @@ async function isReallyBeneath(boundary: string, dir: string): Promise<boolean> 
  * Whether a `.git` entry sits directly in a directory.
  *
  * @param dir - Directory to test.
- * @returns True when the entry exists and is reachable.
+ * @returns `present`, `absent`, or `unknown` when the check itself failed.
  */
-async function hasGitEntry(dir: string): Promise<boolean> {
+async function gitEntry(dir: string): Promise<'present' | 'absent' | 'unknown'> {
   try {
     await fs.access(path.join(dir, GIT_ENTRY_NAME));
 
-    return true;
-  } catch {
-    return false;
+    return 'present';
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+
+    return code !== undefined && GIT_ENTRY_ABSENT_CODES.has(code) ? 'absent' : 'unknown';
   }
 }
 

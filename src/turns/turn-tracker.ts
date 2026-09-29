@@ -309,10 +309,11 @@ async function closeTurnLocked(
   // GIT_TIMEOUT_MS, so taken in order a slow machine pays both inside the
   // lock on every close. The pre-turn path resolves the same pair this way.
   const [developerId, developerName] = await Promise.all([
-    // The declared repository's git config, when there is one: a
-    // per-repository user.email is where git-only machines name the developer.
-    developerIdentity(options.config.developerEmail, workspace?.root ?? options.cwd, { home: options.env.home }),
-    developerDisplayName(options.config.developerName, workspace?.root ?? options.cwd, { home: options.env.home })
+    // From this hook's cwd, never the winning repository's: the prompt gate
+    // enforced this turn as the developer it resolved there, before any
+    // repository was known, and one turn is one developer.
+    developerIdentity(options.config.developerEmail, options.cwd, { home: options.env.home }),
+    developerDisplayName(options.config.developerName, options.cwd, { home: options.env.home })
   ]);
 
   const summary = buildTurnSummary({
@@ -344,8 +345,6 @@ async function closeTurnLocked(
 interface WorkspaceRepository {
   readonly git?: EventGit;
   readonly featureCandidates?: readonly FeatureCandidate[];
-  /** The winning repository's root, local only: where the developer's git identity is read. */
-  readonly root?: string;
   /** The turn's tools with every path dropped that this turn may not report. */
   readonly tools: readonly ToolRecord[];
 }
@@ -409,14 +408,11 @@ async function resolveWorkspaceRepository(tools: readonly ToolRecord[], options:
   // declaring the winner, and the winner's are its own to withhold.
   const own = keepingPaths(admitted, (record) => record.repositoryRoot === winner && capture.files);
 
-  // `root` on every exit: the developer's git identity is read there whether
-  // or not the repository itself is declared, as it would be for a session
-  // started inside it with `capture.git: false`.
-  if (!capture.git) return { root, tools: own };
+  if (!capture.git) return { tools: own };
 
   const git: GitContext = await collectGitContext({ cwd: root, includeChangedFiles: capture.files }).catch(() => ({}));
 
-  if (!git.repositoryRoot) return { root, tools: own };
+  if (!git.repositoryRoot) return { tools: own };
 
   const candidates = featureCandidatesFromBranch(git.branch);
 
@@ -431,7 +427,6 @@ async function resolveWorkspaceRepository(tools: readonly ToolRecord[], options:
       changedFiles: git.changedFiles
     },
     featureCandidates: candidates.length > 0 ? candidates : undefined,
-    root,
     tools: own
   };
 }

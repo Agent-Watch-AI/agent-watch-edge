@@ -153,4 +153,27 @@ describe('repositoryRootFinder', () => {
     vi.restoreAllMocks();
     await fs.rm(workspace, { recursive: true, force: true });
   });
+
+  it('does not climb past a .git entry it could not check', async () => {
+    // `repo/inner/.git` answers EACCES rather than "not there". It may well be
+    // a repository of its own; handing its file to `repo` would report the
+    // wrong branch under the wrong config.
+    const workspace = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'aw-root-'));
+    const inner = path.join(workspace, 'repo', 'inner');
+
+    await fs.mkdir(path.join(workspace, 'repo', '.git'), { recursive: true });
+    await fs.mkdir(inner, { recursive: true });
+
+    const access = fs.access.bind(fs);
+
+    vi.spyOn(fs, 'access').mockImplementation(async (target, mode) => {
+      if (target === path.join(inner, '.git')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+
+      return access(target, mode);
+    });
+
+    expect(await repositoryRootFinder(workspace).find(path.join(inner, 'a.ts'))).toBeUndefined();
+    vi.restoreAllMocks();
+    await fs.rm(workspace, { recursive: true, force: true });
+  });
 });

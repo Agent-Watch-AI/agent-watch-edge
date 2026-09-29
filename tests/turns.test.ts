@@ -1332,10 +1332,11 @@ describe('a turn of a session started above its repositories', () => {
     expect(JSON.stringify(summary)).not.toContain('secret-plan');
   });
 
-  it("names the developer from the declared repository's git config", async () => {
-    // No developerEmail anywhere in config: this machine names its developer
-    // through git alone, and repo-a sets its own user.email. The workspace
-    // folder is not a repository, so asking git there would miss it.
+  it('names the developer as the prompt gate did, not from the winning repository', async () => {
+    // No developerEmail in config, and repo-a sets its own user.email. The
+    // prompt gate resolved this turn's developer from the workspace folder,
+    // before any repository was known; the summary must name the same one, or
+    // one turn's enforcement and its spend land on two developers.
     const paths = resolvePaths(world.env);
 
     await writeJson(paths.configFile, defaultConfig());
@@ -1346,24 +1347,7 @@ describe('a turn of a session started above its repositories', () => {
     const summary = await hook(stop);
 
     expect(summary.repository).toBe('repo-a');
-    expect(summary.developer_id).toBe('repo-a@company.com');
-  });
-
-  it("names the developer from the winning repository's git config even when it withholds git", async () => {
-    // `capture.git: false` withholds the repository, not the developer: a
-    // session started inside repo-a would still read its user.email.
-    const paths = resolvePaths(world.env);
-
-    await writeJson(paths.configFile, defaultConfig());
-    await writeJson(path.join(workspace, 'repo-a', '.agentwatch.json'), { capture: { git: false } });
-    execFileSync('git', ['config', 'user.email', 'repo-a@company.com'], { cwd: path.join(workspace, 'repo-a'), stdio: 'pipe', env: { ...process.env, HOME: world.home } });
-    await hook(prompt);
-    await hook(toolCall('Edit', 'repo-a/src/a.ts', 't0'));
-
-    const summary = await hook(stop);
-
-    expect(summary.repository).toBeUndefined();
-    expect(summary.developer_id).toBe('repo-a@company.com');
+    expect(summary.developer_id).not.toBe('repo-a@company.com');
   });
 
   it('counts a repository reached directly and through a symlink inside the start folder as one', async () => {

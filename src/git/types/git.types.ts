@@ -65,6 +65,9 @@ export interface DirtyEntry {
   /** Absent when the file is gone from disk. */
   readonly size?: number;
   readonly mtimeMs?: number;
+  /** Change time and inode: a rewrite that keeps size and mtime still moves these. */
+  readonly ctimeMs?: number;
+  readonly ino?: number;
 }
 
 /**

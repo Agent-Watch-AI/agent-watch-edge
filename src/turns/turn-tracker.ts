@@ -394,7 +394,7 @@ async function closeTurnLocked(
     });
   }
 
-  return { summary: sanitizeValue(summary), workRoot: work.root };
+  return { summary: sanitizeValue(summary), workRoot: work.root, capture: work.capture };
 }
 
 /**

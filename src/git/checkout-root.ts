@@ -31,18 +31,35 @@ export async function checkoutRootOf(target: string): Promise<string | undefined
  * @returns The canonical root and the target relative to it, or undefined outside any repository.
  */
 export async function checkoutOf(target: string): Promise<{ root: string; relative: string } | undefined> {
-  const directory = await existingDirectory(target);
+  const resolved = path.resolve(target);
+  // The target itself first: a symlink to a file lives in one checkout and
+  // points into another, and the one it points into is where the work lands.
+  const realTarget = await fs.realpath(resolved).catch(() => undefined);
+  const directory = realTarget === undefined ? await existingDirectory(resolved) : await directoryOf(realTarget);
 
   if (directory === undefined) return undefined;
 
-  const real = await fs.realpath(directory).catch(() => directory);
+  const real = realTarget === undefined ? await fs.realpath(directory).catch(() => directory) : directory;
   const location = await findGitDir(real);
 
   if (!location) return undefined;
 
   const root = canonicalRoot(location.root);
+  const realPath = realTarget ?? path.join(real, path.relative(directory, resolved));
 
-  return { root, relative: path.relative(root, path.join(real, path.relative(directory, path.resolve(target)))) };
+  return { root, relative: path.relative(root, realPath) };
+}
+
+/**
+ * The directory an existing path is, or lies in.
+ *
+ * @param real - A real, existing path.
+ * @returns It, when a directory; else its parent.
+ */
+async function directoryOf(real: string): Promise<string> {
+  const stat = await fs.stat(real).catch(() => undefined);
+
+  return stat?.isDirectory() ? real : path.dirname(real);
 }
 
 /**

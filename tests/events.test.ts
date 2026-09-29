@@ -126,6 +126,17 @@ describe('a session started above its repositories', () => {
     expect(event.metadata.repositoryPath).toBe(path.join('..', 'other'));
   });
 
+  it('places a symlinked file in the checkout the link points into', async () => {
+    // The link lives in core; the file it names is the other repository's.
+    await fs.writeFile(path.join(outside, 'src', 'app.ts'), 'x\n');
+    await fs.symlink(path.join(outside, 'src', 'app.ts'), path.join(workspace, 'core', 'src', 'link.ts'));
+
+    const [event] = await enrich([toolEvent(path.join(workspace, 'core/src/link.ts'))], workspace);
+
+    expect(event.metadata.filePath).toBe(path.join('src', 'app.ts'));
+    expect(event.metadata.repositoryPath).toBe(path.join('..', 'other'));
+  });
+
   it('finds the checkout of a file reached through a symlink into one of its subdirectories', async () => {
     // Walked up lexically, `<workspace>/shortcut/app.ts` meets no `.git`.
     await fs.symlink(path.join(outside, 'src'), path.join(workspace, 'shortcut'));

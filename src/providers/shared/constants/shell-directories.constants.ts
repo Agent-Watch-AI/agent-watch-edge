@@ -4,7 +4,7 @@
  */
 
 /** A heredoc and its body: file content, not the command. */
-export const RE_HEREDOC = /<<-?\s*(['"]?)(\w+)\1[^\n]*\n[\s\S]*?\n\s*\2\s*(?=\n|$)/g;
+export const RE_HEREDOC = /<<-?\s*(?:'([^'\n]+)'|"([^"\n]+)"|([\w.-]+))[^\n]*\n[\s\S]*?\n\s*\1\2\3\s*(?=\n|$)/g;
 
 /** What a heredoc is replaced with, so the command around it still reads. */
 export const HEREDOC_PLACEHOLDER = '<<HEREDOC';
@@ -20,7 +20,8 @@ export const RE_CHANGE_DIRECTORY = new RegExp(String.raw`(?:^|[\s(])(?:cd|pushd)
 
 /** Arguments that name a directory outright, relative or not. */
 export const RE_DIRECTORY_ARGUMENTS: readonly RegExp[] = [
-  new RegExp(String.raw`\bgit\s+(?:-c\s+\S+\s+)*-C\s+` + ARG, 'g'),
+  // Any global option may come first: `git --no-pager -C X`, `git -c k=v -C X`.
+  new RegExp(String.raw`\bgit\s+(?:(?:-c\s+\S+|--?[\w-]+(?:=\S+)?)\s+)*-C\s+` + ARG, 'g'),
   new RegExp(String.raw`--(?:work-tree|git-dir)[= ]` + ARG, 'g'),
   // Only -b, -B and --reason take a value; every other option is a flag, and
   // the first bare word after them is the path.

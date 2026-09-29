@@ -8,6 +8,10 @@ import { defaultConfig } from '../src/config/config.js';
 import { setVerbose } from '../src/core/logger.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { TurnStateStore } from '../src/turns/turn-state.js';
+import { trackTurn } from '../src/turns/turn-tracker.js';
+import { configSchema } from '../src/config/schemas/config.schema.js';
+import { parseCodexHookEvent } from '../src/providers/codex/codex.adapter.js';
+import { codexStop } from './fixtures/codex.js';
 import { makeTempEnv, queueEntryFiles, writeJson, type TempWorld } from './helpers.js';
 
 // Every turn reports the checkout its work changed (AWT-127). Real repositories,
@@ -436,6 +440,95 @@ describe('the checkout a turn worked in', () => {
     });
 
     expect(summaryOf(await hook(stop('p1'), workspace))).toMatchObject({ branch: 'AWT-14-gone', work_evidence: 'changed' });
+  });
+
+  it("withholds what a removed worktree's own committed .agentwatch.json withholds", async () => {
+    const gone = path.join(workspace, '.worktrees', 'core-AWT-15');
+
+    git(core, 'worktree', 'add', '-q', '-b', 'AWT-15-private', gone);
+    await writeJson(path.join(gone, '.agentwatch.json'), { capture: { files: false } });
+    git(gone, 'add', '.agentwatch.json');
+    git(gone, 'commit', '-qm', 'private');
+    await hook(prompt('p1'), workspace);
+    await shell('p1', 't1', `cd ${gone} && git commit -qam x && git -C ${core} worktree remove ${gone}`, workspace, async () => {
+      await fs.writeFile(path.join(gone, 'src', 'a.ts'), 'secret-plan\n');
+      git(gone, 'commit', '-qam', 'x');
+      git(core, 'worktree', 'remove', gone);
+    });
+
+    const summary = summaryOf(await hook(stop('p1'), workspace));
+
+    expect(summary).toMatchObject({ branch: 'AWT-15-private', work_evidence: 'changed' });
+    expect(summary.files_changed).toBeUndefined();
+  });
+
+  it("reports a removed worktree's first commit on an unborn branch", async () => {
+    const orphan = path.join(workspace, '.worktrees', 'core-AWT-16');
+
+    git(core, 'worktree', 'add', '-q', '--orphan', '-b', 'AWT-16-orphan', orphan);
+    await hook(prompt('p1'), workspace);
+    await shell('p1', 't1', `cd ${orphan} && git commit -qm first && git -C ${core} worktree remove ${orphan}`, workspace, async () => {
+      await fs.writeFile(path.join(orphan, 'first.ts'), 'x\n');
+      git(orphan, 'add', '.');
+      git(orphan, 'commit', '-qm', 'first');
+      git(core, 'worktree', 'remove', orphan);
+    });
+
+    expect(summaryOf(await hook(stop('p1'), workspace))).toMatchObject({ branch: 'AWT-16-orphan', work_evidence: 'changed', files_changed: ['first.ts'] });
+  });
+
+  it('carries a checkout only while it is still the repository remembered', async () => {
+    await hook(prompt('p1'), workspace);
+    await shell('p1', 't1', `git -C ${worktree} commit --allow-empty -m x`, workspace, () => {
+      git(worktree, 'commit', '-q', '--allow-empty', '-m', 'x');
+    });
+    expect(summaryOf(await hook(stop('p1'), workspace)).work_evidence).toBe('changed');
+
+    git(core, 'remote', 'set-url', 'origin', 'git@github.com:someone-else/other.git');
+    await hook(prompt('p2'), workspace);
+
+    const next = summaryOf(await hook(stop('p2'), workspace));
+
+    expect(next.work_evidence).not.toBe('carried');
+    expect(JSON.stringify(next)).not.toContain('AWT-9');
+  });
+
+  it("applies the reported checkout's capture policy, not the Stop folder's", async () => {
+    // core withholds its own paths; the turn's work is the worktree's, which does not.
+    await writeJson(path.join(core, '.agentwatch.json'), { capture: { files: false } });
+    await hook(prompt('p1'), workspace);
+    await shell('p1', 't1', `cd ${worktree} && git commit -qam x`, workspace, async () => {
+      await fs.writeFile(path.join(worktree, 'src', 'a.ts'), 'x\n');
+      git(worktree, 'commit', '-qam', 'x');
+    });
+
+    expect(summaryOf(await hook(stop('p1'), core))).toMatchObject({ branch: 'AWT-9-totals', work_evidence: 'changed', files_changed: ['src/a.ts'] });
+  });
+
+  it('reports no repository for a Stop folder whose checkout cannot be found, whatever git said', async () => {
+    const paths = resolvePaths(world.env);
+    const config = configSchema.parse({ ...defaultConfig(), developerEmail: 'dev@company.com' });
+    const loose = path.join(base, 'loose');
+    const [stopEvent] = parseCodexHookEvent({ ...codexStop, session_id: 'sess-deep', cwd: loose }, { env: world.env, config });
+
+    await fs.mkdir(loose);
+    await new TurnStateStore(paths.turnsDir).append('sess-deep', 'p', { kind: 'prompt', at: new Date().toISOString(), turnId: stopEvent!.session.turnId });
+
+    const summary = await trackTurn({
+      agentId: 'codex',
+      rawPayload: {},
+      // As if git had resolved a repository the .git walk cannot reach.
+      events: [{ ...stopEvent!, git: { repository: 'github.com/acme/deep', branch: 'AWT-17-deep' } }],
+      config,
+      globalConfig: { state: 'ok', config, warnings: [] },
+      paths,
+      turnsDir: paths.turnsDir,
+      locksDir: paths.locksDir,
+      env: world.env,
+      cwd: loose
+    });
+
+    expect(summary?.repository).toBeUndefined();
   });
 
   it('writes no checkout record and no work checkout on a dry run', async () => {

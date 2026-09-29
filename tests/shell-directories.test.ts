@@ -15,6 +15,8 @@ describe('the directories a shell command names', () => {
     ['pushd /repo/x; make', ['/repo/x']],
     ['git -C /repo/wt commit -qm "x"', ['/repo/wt']],
     ['git -c core.pager=cat -C ../wt log', ['/work/wt']],
+    ['git --no-pager -C ../wt log', ['/work/wt']],
+    ['git --git-dir=/repo/a/.git -C /repo/b status', ['/repo/b', '/repo/a/.git']],
     ['git --work-tree=/repo/a --git-dir=/repo/a/.git status', ['/repo/a', '/repo/a/.git']],
     ['git worktree add -b AWT-9-x ../.worktrees/core-AWT-9 origin/main', ['/work/.worktrees/core-AWT-9']],
     ['git worktree add --force ../wt main', ['/work/wt']],
@@ -43,6 +45,12 @@ describe('the directories a shell command names', () => {
     const command = ["cat > /repo/a/notes.md <<'EOF'", 'cd /secret/elsewhere', 'see /also/not/this', 'EOF', 'git -C /repo/a add notes.md'].join('\n');
 
     expect(dirs(command)).toEqual(['/repo/a/notes.md', '/repo/a']);
+  });
+
+  it('ignores a heredoc body whatever its delimiter', () => {
+    const command = ["cat > /repo/a/x.json <<'END-JSON'", '{ "p": "/secret/elsewhere" }', 'END-JSON', 'cat <<"A.B"', '/also/secret', 'A.B'].join('\n');
+
+    expect(dirs(command)).toEqual(['/repo/a/x.json']);
   });
 
   it('names nothing for a command without a path', () => {

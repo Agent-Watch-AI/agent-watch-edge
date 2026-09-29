@@ -1,6 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { REPO_CONFIG_NAME } from '../config/constants/config.constants.js';
 import { loadEffectiveConfig } from '../config/repo-config.js';
+import type { CaptureConfig } from '../config/types/config.types.js';
+import { asRecord } from '../core/object.js';
 import { canonicalRoot, selectRoot } from '../config/root-config.js';
 import { REPOSITORY_PATH_METADATA_KEY } from '../events/constants/enrich.constants.js';
 import { sha256Hex } from '../events/event-id.js';
@@ -34,6 +37,8 @@ export interface WorkCheckout {
   readonly evidence?: WorkEvidence;
   /** Local root of the reported checkout. Never sent. */
   readonly root?: string;
+  /** The reported checkout's own capture policy, which delivery re-applies. */
+  readonly capture?: CaptureConfig;
 }
 
 /** One checkout a turn named, with everything the close weighs it by. */
@@ -182,7 +187,12 @@ export async function resolveWorkCheckout(
 
   if (byChange) return reportCheckout(byChange.root, 'changed', probes.get(byChange.root)!, changed.get(byChange.root)!, tools, options);
 
-  if (carried !== undefined && probes.get(carried)?.closing) return reportCheckout(carried, 'carried', probes.get(carried)!, [], tools, options);
+  // Carried only while the folder is still the repository that was
+  // remembered: a directory re-cloned from another remote is not that work.
+  const carriedProbe = carried === undefined ? undefined : probes.get(carried);
+  const stillSame = carriedProbe?.closing !== undefined && repositoryIdentity(carried!, carriedProbe.remote).repository === memo?.repository;
+
+  if (stillSame) return reportCheckout(carried!, 'carried', carriedProbe, [], tools, options);
 
   const byVotes = best(reportable, (candidate) => candidate.votes + candidate.read.size);
 
@@ -193,7 +203,9 @@ export async function resolveWorkCheckout(
   // The Stop folder's own repository is held to the same admission as every
   // candidate: a lasting cd can end the turn in another tenant's checkout, or
   // outside the start folder.
-  if (stopRoot !== undefined && !admits(stopRoot)) return { tools: keepingPathsIn(tools, undefined) };
+  // A folder whose checkout cannot be found is not admitted either: git may
+  // still have named a repository there, past what the walk reaches.
+  if (stopRoot === undefined || !admits(stopRoot)) return { tools: keepingPathsIn(tools, undefined) };
 
   return {
     git: stopEvent.git,
@@ -359,20 +371,22 @@ async function probe(candidate: Candidate): Promise<Probe> {
 
   const common = candidate.baseline?.commonDir;
   const branch = candidate.baseline?.branch;
+  const unborn = candidate.baseline?.unborn === true;
 
-  if (!common || !from || !branch || (await exists(candidate.root))) return { commits: [], moved: false, vanished: false };
+  if (!common || (!from && !unborn) || !branch || (await exists(candidate.root))) return { commits: [], moved: false, vanished: false };
 
-  const [commits, commonRemote, head] = await Promise.all([
-    commitFiles(common, from, `refs/heads/${branch}`, common),
-    runGit(['--git-dir', common, ...GIT_REMOTE_ARGS], common, GIT_TIMEOUT_MS),
-    runGit(['--git-dir', common, ...gitVerifyRefArgs(`refs/heads/${branch}`)], common, GIT_TIMEOUT_MS)
+  const [head, commonRemote] = await Promise.all([
+    runGit(['--git-dir', common, ...gitVerifyRefArgs(`refs/heads/${branch}`)], common, GIT_TIMEOUT_MS),
+    runGit(['--git-dir', common, ...GIT_REMOTE_ARGS], common, GIT_TIMEOUT_MS)
   ]);
-
   // Moved when the branch no longer points where the turn started — an empty
-  // commit moves it too, with no file to show for it.
-  const moved = head !== undefined && head !== from;
+  // commit moves it too, with no file to show for it. An unborn baseline's
+  // first commit is diffed against the empty tree.
+  const start = from ?? (head === undefined ? undefined : emptyTreeFor(head));
+  const moved = head !== undefined && head !== start;
+  const commits = moved && start !== undefined ? await commitFiles(common, start, `refs/heads/${branch}`, common) : [];
 
-  return { closing: { oid: from, branch, commonDir: common, dirty: {} }, remote: commonRemote, commits, moved, vanished: true };
+  return { closing: { oid: from ?? head, branch, commonDir: common, dirty: {} }, remote: commonRemote, commits, moved, vanished: true };
 }
 
 /**
@@ -420,13 +434,16 @@ async function reportCheckout(
   // A worktree removed before the Stop has no file left to read; its main
   // checkout, beside the shared git dir, carries the same committed one.
   const configRoot = probed.vanished && probed.closing?.commonDir ? path.dirname(probed.closing.commonDir) : root;
-  const capture = (await loadEffectiveConfig(options.paths, configRoot, options.globalConfig)).config.capture;
+  const loaded = (await loadEffectiveConfig(options.paths, configRoot, options.globalConfig)).config.capture;
+  // The main checkout's file may be looser than the one the removed branch
+  // committed: the branch's own may only narrow what is reported, never widen it.
+  const capture = probed.vanished ? narrowedByBranch(loaded, await branchCapture(probed.closing)) : loaded;
   // Its own paths and nothing else: another checkout's are a wrong vote in the
   // placement corpus. The calls still count.
   // capture.files: false withholds every path, bare basenames included.
   const own = capture.files ? keepingPathsIn(tools, root) : tools.map((record) => (record.filePath === undefined ? record : { ...record, filePath: undefined }));
 
-  if (!capture.git) return { tools: own };
+  if (!capture.git) return { tools: own, capture };
 
   const branch = probed.closing?.branch;
   const candidates = featureCandidatesFromBranch(branch);
@@ -442,7 +459,8 @@ async function reportCheckout(
     featureCandidates: candidates.length > 0 ? candidates : undefined,
     tools: own,
     evidence,
-    root
+    root,
+    capture
   };
 }
 
@@ -486,6 +504,36 @@ function best(candidates: readonly Candidate[], score: (candidate: Candidate) =>
   }
 
   return winner;
+}
+
+/**
+ * The capture flags a vanished worktree's branch committed in its own
+ * `.agentwatch.json`, read from the shared git dir.
+ *
+ * @param closing - The vanished checkout's stand-in fingerprint.
+ * @returns The flags it sets, or undefined when it has no such file.
+ */
+async function branchCapture(closing: Fingerprint | undefined): Promise<{ git?: unknown; files?: unknown } | undefined> {
+  if (!closing?.commonDir || !closing.branch) return undefined;
+
+  const text = await runGit(['--git-dir', closing.commonDir, 'show', `refs/heads/${closing.branch}:${REPO_CONFIG_NAME}`], closing.commonDir, GIT_TIMEOUT_MS);
+
+  try {
+    return asRecord(asRecord(text === undefined ? undefined : JSON.parse(text))?.['capture']);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A capture policy narrowed by another file's explicit `false`s.
+ *
+ * @param capture - The policy loaded from disk.
+ * @param branch - The branch file's capture flags, if any.
+ * @returns The policy, with git and files off wherever either says so.
+ */
+function narrowedByBranch(capture: CaptureConfig, branch: { git?: unknown; files?: unknown } | undefined): CaptureConfig {
+  return { ...capture, git: capture.git && branch?.git !== false, files: capture.files && branch?.files !== false };
 }
 
 /**

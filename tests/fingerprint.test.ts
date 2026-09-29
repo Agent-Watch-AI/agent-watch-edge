@@ -80,6 +80,19 @@ describe('a checkout fingerprint', () => {
     expect(dirtyDelta(before, (await fingerprint(repo))!).sort()).toEqual(['a.ts', 'b.ts']);
   });
 
+  it('counts a same-size rewrite that restores the modification time', async () => {
+    await fs.writeFile(path.join(repo, 'a.ts'), 'AAAA\n');
+
+    const before = (await fingerprint(repo))!;
+    const { mtime } = await fs.stat(path.join(repo, 'a.ts'));
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await fs.writeFile(path.join(repo, 'a.ts'), 'BBBB\n');
+    await fs.utimes(path.join(repo, 'a.ts'), mtime, mtime);
+
+    expect(dirtyDelta(before, (await fingerprint(repo))!)).toEqual(['a.ts']);
+  });
+
   it("names a commit's files once HEAD moved", async () => {
     const before = (await fingerprint(repo))!;
 
@@ -125,7 +138,7 @@ describe('a checkout fingerprint', () => {
       unborn: undefined,
       branch: undefined,
       commonDir: undefined,
-      dirty: { 'a.ts': { xy: '.M', size: undefined, mtimeMs: undefined } }
+      dirty: { 'a.ts': { xy: '.M', size: undefined, mtimeMs: undefined, ctimeMs: undefined, ino: undefined } }
     });
     expect(asFingerprint('nope')).toBeUndefined();
   });

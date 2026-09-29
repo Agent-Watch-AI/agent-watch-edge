@@ -1,4 +1,4 @@
-import type { AgentWatchConfig, ConfigLoadResult } from '../../config/types/config.types.js';
+import type { AgentWatchConfig, CaptureConfig, ConfigLoadResult } from '../../config/types/config.types.js';
 import type { FailOpenReason } from '../../enforcement/types/enforcement.types.js';
 import type { Env } from '../../core/types/core.types.js';
 import type { AgentWatchEvent } from '../../events/types/events.types.js';
@@ -38,6 +38,8 @@ export interface TurnOutcome {
   readonly summary?: TurnSummaryEvent;
   /** Local root of the checkout that summary reported. Never sent. */
   readonly workRoot?: string;
+  /** That checkout's own capture policy, when it is not the hook folder's. */
+  readonly capture?: CaptureConfig;
 }
 
 /** The window a closing turn may claim transcript usage from. */

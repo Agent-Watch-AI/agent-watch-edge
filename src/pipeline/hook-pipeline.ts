@@ -301,11 +301,14 @@ async function trackTurnStage(state: HookPipelineState): Promise<StepOutcome<Hoo
   // Assembly failing must not cost the *queue* its drain: a hook that produced
   // no summary still has a backlog to move, so this stage degrades to "no
   // summary" instead of ending the flow.
-  const { summary, workRoot } = await trackTurnSafely(state);
-  const gated = summary && state.config.emit.turnSummaries ? applyProductCapture(summary, state.config.capture) : undefined;
+  const { summary, workRoot, capture } = await trackTurnSafely(state);
+  // Re-applied under the reported checkout's own policy when it has one: that
+  // checkout's file decides what is said about it, not the folder the Stop ran in.
+  const workCapture = capture ?? state.config.capture;
+  const gated = summary && state.config.emit.turnSummaries ? applyProductCapture(summary, workCapture) : undefined;
   const outbound = gated ? [gated] : [];
 
-  return next({ ...state, summary, workRoot, outbound });
+  return next({ ...state, summary, workRoot, workCapture, outbound });
 }
 
 /**
@@ -386,7 +389,7 @@ async function deliver(state: HookPipelineState): Promise<StepOutcome<HookPipeli
 async function snapshot(state: HookPipelineState): Promise<StepOutcome<HookPipelineState>> {
   const repository = state.summary?.repository;
 
-  if (!repository || !state.config.capture.git) return stop(state, STOP_NO_SNAPSHOT);
+  if (!repository || !(state.workCapture ?? state.config.capture).git) return stop(state, STOP_NO_SNAPSHOT);
 
   await runSnapshotPipeline({
     input: {

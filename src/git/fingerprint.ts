@@ -118,7 +118,7 @@ export function dirtyDelta(baseline: Fingerprint, closing: Fingerprint): string[
 
     before.delete(file);
 
-    if (old && old.xy === entry.xy && old.size === entry.size && old.mtimeMs === entry.mtimeMs) continue;
+    if (old && old.xy === entry.xy && old.size === entry.size && old.mtimeMs === entry.mtimeMs && old.ctimeMs === entry.ctimeMs && old.ino === entry.ino) continue;
 
     changed.push(file);
   }
@@ -167,7 +167,10 @@ export function asFingerprint(value: unknown): Fingerprint | undefined {
 
     if (typeof entry?.['xy'] !== 'string') continue;
 
-    entries.push([file, { xy: entry['xy'], size: numberOr(entry['size']), mtimeMs: numberOr(entry['mtimeMs']) }]);
+    entries.push([
+      file,
+      { xy: entry['xy'], size: numberOr(entry['size']), mtimeMs: numberOr(entry['mtimeMs']), ctimeMs: numberOr(entry['ctimeMs']), ino: numberOr(entry['ino']) }
+    ]);
   }
 
   const oid = stringOr(record['oid']);
@@ -220,7 +223,7 @@ async function stampEntry(root: string, file: string, xy: string): Promise<Dirty
   try {
     const stat = await fs.lstat(path.join(root, file));
 
-    return { xy, size: stat.size, mtimeMs: stat.mtimeMs };
+    return { xy, size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, ino: stat.ino };
   } catch {
     // Deleted: its status letters are all there is to compare.
     return { xy };

@@ -277,51 +277,64 @@ A cap is therefore only as good as the ledger feeding it — which is why
 tenant as completely as one that turned the gate off, and far less visibly.
 
 The global off switch (`agentwatch off`) short-circuits before the pipeline, so it
-disables enforcement along with collection; `doctor` reports that as an explicit
-budget-enforcement warning rather than leaving it silent.
+disables enforcement along with hook collection at once; `doctor` reports that as an
+explicit budget-enforcement warning rather than leaving it silent. Source B does not
+stop at once: an agent already running keeps the exporter and credentials it started
+with until it is restarted or closed.
 
 ### Gateability is per provider, and is not observability
 
 Whether a provider can be gated depends on its hook protocol documenting a
-refusal; whether its spend can be measured depends on it having an OTel exporter.
-The two are independent, and Antigravity currently has neither:
+refusal; whether its spend can be measured depends on it having an OTel exporter
+that is switched on. The two are independent, and Antigravity currently has neither:
 
 | Provider | Gated (Source A) | Ledger (Source B) |
 |---|---|---|
 | Claude Code | yes — `UserPromptSubmit` **[docs]** | native OTel |
-| Codex | yes — `UserPromptSubmit` **[docs]** | native OTel |
-| Gemini CLI | yes — `BeforeAgent`/`UserPromptSubmit` **[docs]** | native OTel |
-| Cursor | yes — `beforeSubmitPrompt` **[docs]** | **none** — no OTel export; usage comes from transcripts and stays `usage_status=pending` until Cursor enriches them |
-| Antigravity | **no** — only `PreToolUse` carries a decision, and a mid-turn tool gate is what the design rejected | **none** — no OTLP exporter configuration exists |
+| Codex | yes — `UserPromptSubmit` **[docs]** | native OTel, only with tool-content consent; the default metadata-only install leaves it off |
+| Gemini CLI | yes — `BeforeAgent`/`UserPromptSubmit` **[docs]** | native OTel logs, only with tool-content consent; without it only metrics are exported |
+| Cursor | IDE sessions only — `beforeSubmitPrompt` **[docs]**; the CLI emits shell hooks only, so it is not gated | **none** — no OTel export, and transcripts carry no token usage, so summaries stay `usage_status=pending` |
+| Antigravity | **no** — `PreToolUse` can deny mid-turn work, and a mid-turn tool gate is what the design rejected; `Stop` also takes a decision, but only `{"decision":"stop"}` | **none** — no OTLP exporter configuration exists |
 
 So "enforced" is a property of a (provider, source) pair, not of the product: a
-Cursor tenant can hold a `block` cap whose ledger is provisional, and an
-Antigravity tenant one that can be neither measured nor applied. Both degrade
-quietly — an over-cap developer keeps working and keeps producing alerts.
+Cursor tenant can hold a `block` cap that no spend ever advances, a default Codex or
+Gemini install one whose ledger is off until consent is given, and an Antigravity
+tenant one that can be neither measured nor applied. All of them degrade quietly: an
+over-cap developer keeps working.
 
 ### Cost on the critical path
 
 The gate sits between the developer's keystroke and the agent's first token, so
-every part of it is bounded: `enforcementWouldAsk` is consulted before anything is
-paid for (a machine with no cap never walks the working copy), identity, checkout
-and model resolve in one `Promise.all`, the decision request has a 300 ms ceiling,
-and a disk cache keyed on the whole question (endpoint, token, developer, checkout,
-model) means a flat cap costs at most one bounded request per TTL. Process-per-hook
-is why that cache exists on disk at all: there is no memory to hold "this developer
-is allowed" between prompts. The same reason puts the breaker on disk: a failed
-request is never cached as an answer, it opens a cooldown, and until it expires the
-turns after it fail open (`circuit_open`) without paying the timeout again.
+every part of it is bounded. `enforcementWouldAsk` is consulted before anything is
+paid for, but it only asks whether enforcement is configured (enabled, a token, a
+decision URL), not whether the tenant has a cap: a machine that is not enrolled for
+enforcement never walks the working copy, while an enrolled one pays for the
+question even when the answer will be "no cap". Identity, checkout and model resolve
+in one `Promise.all`. The decision request is bounded by `enforcement.timeoutMs`,
+300 ms by default; the config accepts a larger value, and the hook then waits that
+long. A disk cache keyed on the whole question (endpoint, token, developer,
+repository and branch, model) means each distinct question costs at most one
+bounded request per TTL. Process-per-hook is why that cache exists on disk at all:
+there is no memory to hold "this developer is allowed" between prompts. The same
+reason puts the breaker on disk: a failed request is never cached as an answer, it
+opens a cooldown, and until it expires the turns after it fail open (`circuit_open`)
+without paying the timeout again.
 
 What travels on the question has grown past the spec's single `developer_id`:
-`repository` + `branch` when they can be resolved cheaply (both or neither — what
-lets a feature-scoped cap be judged), and `model` when one is known. A
-feature-scoped cap makes the platform answer `cache_ttl_ms: 0`, because the answer
-is a fact about one checkout while the cache is keyed on the developer.
+`repository` + `branch` when they can be resolved cheaply (both or neither, which is
+what lets a feature-scoped cap be judged), and `model` when one is known. All of
+them are part of the cache key, so an answer earned on one branch or model is never
+served for another. A feature-scoped cap still makes the platform answer
+`cache_ttl_ms: 0`, so feature spend is re-checked on every prompt rather than
+trusted for a TTL.
 
 ### Trust boundary
 
 Every mechanism here is a config file in the developer's home directory, honoured
 by an agent that chose to read it. It can be edited, and the Edge can be
-uninstalled. MDM (`examples/mdm/`) is the deployment answer for an organization
-that needs the registration to survive a non-admin; nothing here survives an
-adversary, and the spec says so at more length.
+uninstalled. MDM (`examples/mdm/`) installs the package everywhere, but only Claude
+Code has a managed policy file a non-admin cannot override; for Codex, Cursor,
+Gemini and Antigravity, setup still writes user-owned hook files the developer can
+remove. Even the managed file does not survive a developer who is a local
+administrator. Nothing here survives an adversary, and the spec says so at more
+length.

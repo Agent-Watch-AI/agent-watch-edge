@@ -80,16 +80,15 @@ describe('shell tool names', () => {
 });
 
 describe('shellCall per adapter', () => {
-  it('reads a Codex command, as a string or an argv array, and nothing it does not report', () => {
-    expect(codexProvider.shellCall?.({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git status' } })).toEqual({ command: 'git status' });
-    // The older `shell` tool, as tests/fixtures/codex.ts records it.
-    expect(codexProvider.shellCall?.({ hook_event_name: 'PreToolUse', tool_name: 'shell', tool_input: { command: ['bash', '-lc', 'ls'] } })).toEqual({ command: 'bash -lc ls' });
+  it('reads a Codex command, and nothing it does not report', () => {
+    expect(codexProvider.shellCall?.({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git status', workdir: '/w' } })).toEqual({ command: 'git status' });
     expect(codexProvider.shellCall?.({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'ls' } })).toBeUndefined();
   });
 
-  it('reads Cursor beforeShellExecution only, not the duplicate preToolUse', () => {
+  it('reads both of Cursor\'s shell-start hooks, and no other', () => {
     expect(cursorProvider.shellCall?.(cursorBeforeShellExecution)).toEqual({ command: 'git status --porcelain', workdir: '/work/project' });
-    expect(cursorProvider.shellCall?.(cursorPreToolUseShell)).toBeUndefined();
+    expect(cursorProvider.shellCall?.(cursorPreToolUseShell)).toEqual({ command: 'npm test', workdir: '/work/project' });
+    expect(cursorProvider.shellCall?.({ ...cursorPreToolUseShell, tool_name: 'Read' })).toBeUndefined();
     expect(cursorProvider.workspaceRoots?.(cursorBeforeShellExecution)).toEqual(['/work/project']);
   });
 

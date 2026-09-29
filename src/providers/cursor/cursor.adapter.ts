@@ -14,7 +14,10 @@ import {
   CURSOR_EVENT_TYPE_MAP,
   CURSOR_PROVIDER_ID,
   CURSOR_READ_TOOL_NAME,
+  CURSOR_GENERIC_TOOL_START_EVENT,
+  CURSOR_SHELL_COMMAND_KEY,
   CURSOR_SHELL_START_EVENT,
+  CURSOR_SHELL_WORKDIR_KEY,
   CURSOR_SHELL_TOOL_NAME,
   CURSOR_TOOL_KINDS,
   CURSOR_UNKNOWN_EVENT
@@ -43,10 +46,13 @@ export function parseCursorHookEvent(rawPayload: unknown, context: HookContext):
 }
 
 /**
- * The command `beforeShellExecution` is about to run, and the `cwd` it runs in.
+ * The command a shell call is about to run, and the directory it runs in.
  *
- * Only the dedicated shell hook: Cursor fires the generic `preToolUse` for the
- * same call too, and reading both would count one call twice.
+ * Cursor announces one call twice (cursor.com/docs/hooks): `beforeShellExecution`
+ * with `command` and `cwd` at the top level, and the generic `preToolUse` for
+ * `Shell` with `tool_input.command` and `tool_input.working_directory`. Both are
+ * read, so both name the same checkout; a hook left unread would instead vote
+ * for the cwd it sits in.
  *
  * @param rawPayload - Raw JSON from the hook's stdin.
  * @returns The call, or undefined for any other payload.
@@ -54,9 +60,17 @@ export function parseCursorHookEvent(rawPayload: unknown, context: HookContext):
 export function cursorShellCall(rawPayload: unknown): ShellCall | undefined {
   const parsed = cursorPayloadSchema.safeParse(rawPayload);
 
-  if (!parsed.success || parsed.data.hook_event_name !== CURSOR_SHELL_START_EVENT) return undefined;
+  if (!parsed.success) return undefined;
 
-  return shellCallOf(parsed.data.command, parsed.data.cwd);
+  const payload = parsed.data;
+
+  if (payload.hook_event_name === CURSOR_SHELL_START_EVENT) return shellCallOf(payload.command, payload.cwd);
+
+  if (payload.hook_event_name !== CURSOR_GENERIC_TOOL_START_EVENT || cursorToolKind(payload.tool_name) !== 'shell') return undefined;
+
+  const input = asRecord(payload.tool_input);
+
+  return shellCallOf(input?.[CURSOR_SHELL_COMMAND_KEY], input?.[CURSOR_SHELL_WORKDIR_KEY]);
 }
 
 /**

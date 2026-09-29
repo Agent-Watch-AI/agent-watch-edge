@@ -44,7 +44,6 @@ export function parseCodexHookEvent(rawPayload: unknown, context: HookContext): 
  * `handlers/unified_exec/exec_command.rs`, 2026-09). The model's own `workdir`
  * argument is dropped before the hook, so there is no working directory to
  * read: the call runs in the payload's `cwd` unless its command says otherwise.
- * A command given as an argv array (the older `shell` tool) is read too.
  *
  * @param rawPayload - Raw JSON from the hook's stdin.
  * @returns The command, or undefined for any other payload.

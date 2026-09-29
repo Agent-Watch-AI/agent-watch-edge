@@ -37,6 +37,7 @@ import {
   STAGE_DELIVER,
   STAGE_ENFORCE,
   STAGE_ENRICH,
+  MAX_WORKSPACE_ROOTS,
   STAGE_NOMINATE,
   STAGE_PARSE_EVENTS,
   STAGE_RESOLVE_CONTEXT,
@@ -165,7 +166,12 @@ async function nominate(state: HookPipelineState): Promise<StepOutcome<HookPipel
       ...(workdir ? [workdir] : []),
       ...(typeof call?.command === 'string' && call.command ? shellDirectories(call.command, workdir ?? state.cwd, state.env.home) : [])
     ];
-    const open = (start ? (state.provider.workspaceRoots?.(state.payload) ?? []) : []).filter((root) => typeof root === 'string' && path.isAbsolute(root));
+    // ponytail: the first few open folders only, so weak candidates never fill a
+    // turn's checkout slots before a call names one; a wider window loses the rest.
+    const open = [...new Set((start ? (state.provider.workspaceRoots?.(state.payload) ?? []) : []).filter((root) => typeof root === 'string' && path.isAbsolute(root)))].slice(
+      0,
+      MAX_WORKSPACE_ROOTS
+    );
     const [nominations, workspaceRoots] = await Promise.all([checkoutRoots(named), checkoutRoots(open)]);
 
     return next({ ...state, nominations, workspaceRoots });

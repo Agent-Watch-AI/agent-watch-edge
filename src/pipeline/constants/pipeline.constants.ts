@@ -3,6 +3,9 @@ import type { CanonicalEventType } from '../../events/types/events.types.js';
 /** Stage names, used in the flow definition and in its debug trace. */
 export const STAGE_RESOLVE_CONTEXT = 'resolve-context';
 export const STAGE_PARSE_EVENTS = 'parse-events';
+/** Open folders a tool hook nominates, at most: half of a turn's checkout slots. */
+export const MAX_WORKSPACE_ROOTS = 4;
+
 export const STAGE_NOMINATE = 'nominate';
 export const STAGE_ENFORCE = 'enforce';
 export const STAGE_ENRICH = 'enrich';

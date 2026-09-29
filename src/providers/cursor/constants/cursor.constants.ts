@@ -98,6 +98,13 @@ export const CURSOR_SHELL_TOOL_NAME = 'Shell';
 /** The dedicated hook that fires before a shell command runs, with `command` and `cwd` at the top level. */
 export const CURSOR_SHELL_START_EVENT = 'beforeShellExecution';
 
+/** The generic hook that fires before any tool call, the shell's included. */
+export const CURSOR_GENERIC_TOOL_START_EVENT = 'preToolUse';
+
+/** Where `preToolUse` for `Shell` puts the command and its directory in `tool_input`. */
+export const CURSOR_SHELL_COMMAND_KEY = 'command';
+export const CURSOR_SHELL_WORKDIR_KEY = 'working_directory';
+
 /** Attachment field carrying a file path. */
 export const ATTACHMENT_FILE_PATH_KEY = 'file_path';
 

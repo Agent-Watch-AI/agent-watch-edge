@@ -128,19 +128,16 @@ export function extractCommand(toolInput: unknown): string | undefined {
 /**
  * A shell call out of untrusted payload fields, type-checked.
  *
- * A command may arrive as an argv array (Codex's `["bash", "-lc", "…"]`); its
- * words are joined, which keeps every directory name in it. A working directory
- * counts only when it is an absolute path: a relative one would have to be
- * resolved against a guess.
+ * A working directory counts only when it is an absolute path: a relative one
+ * would have to be resolved against a guess.
  *
  * @param command - The command field as the payload carries it.
  * @param workdir - The working-directory field as the payload carries it.
  * @returns The call, or undefined when neither field is usable.
  */
 export function shellCallOf(command: unknown, workdir: unknown): ShellCall | undefined {
-  const words = Array.isArray(command) && command.every((word) => typeof word === 'string') ? command.join(' ') : command;
   const call = {
-    command: typeof words === 'string' && words.length > 0 ? words : undefined,
+    command: typeof command === 'string' && command.length > 0 ? command : undefined,
     workdir: typeof workdir === 'string' && path.isAbsolute(workdir) ? workdir : undefined
   };
 

@@ -47,11 +47,15 @@ export async function readGateCheckout(options: GateCheckoutOptions): Promise<Ga
 
     if (!gitDir) return undefined;
 
+    // A remembered checkout that is gone must not lend its name to whatever
+    // repository encloses the folder it left.
+    if (options.repository !== undefined && gitDir.root !== path.resolve(options.cwd)) return undefined;
+
     const branch = await readBranch(gitDir.gitDir);
 
     if (!branch) return undefined;
 
-    const repository = await resolveRepository(gitDir.root, options);
+    const repository = options.repository ?? await resolveRepository(gitDir.root, options);
 
     if (!repository) return undefined;
 

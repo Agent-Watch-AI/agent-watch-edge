@@ -194,7 +194,10 @@ another root claims is refused outright: it gets no record and is never
 fingerprinted. Checkouts are judged by where they really are, not through symlinks.
 Local turn state keeps the candidate roots, the fingerprints, the start folder
 and the session's last changed checkout's root (`work-checkout.json`); none of it
-is sent, and it goes with the session's other turn state.
+is sent, and it goes with the session's other turn state. The prompt gate reads
+that file to ask about that checkout's repository and branch instead of the
+folder the agent sits in; the same two fields travel as before, and never for a
+checkout the asking folder's root does not govern.
 
 What is reported about that repository follows *its* effective config, not the
 start folder's: a `.agentwatch.json` committed inside it narrows the turn exactly

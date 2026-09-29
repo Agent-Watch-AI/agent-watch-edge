@@ -347,6 +347,14 @@ served for another. A feature-scoped cap still makes the platform answer
 `cache_ttl_ms: 0`, so feature spend is re-checked on every prompt rather than
 trusted for a TTL.
 
+From a session's second turn on, the checkout asked about is the one its last turn
+changed (`work-checkout.json`, written at Stop), not the folder the agent sits in:
+a session parked in a docs repository that edits a feature worktree is asked about
+that feature. The root and repository come from that file and the branch from its
+`HEAD` on disk, so the prompt hook still starts no git process. It is used only when
+the asking folder's root also governs it; a missing, corrupt or removed checkout, or
+a detached `HEAD`, falls back to the folder's own answer.
+
 ### Trust boundary
 
 Every mechanism here is a config file in the developer's home directory, honoured

@@ -5,13 +5,14 @@ import { debugLog } from '../core/logger.js';
 import { next, runFlow, step, stop } from '../core/pipe.js';
 import type { FlowResult, Step, StepOutcome } from '../core/types/core.types.js';
 import { loadEffectiveConfig } from '../config/repo-config.js';
-import { servesMultipleIdentities } from '../config/root-config.js';
+import { selectRoot, servesMultipleIdentities } from '../config/root-config.js';
 import { DECISION_BLOCK } from '../enforcement/constants/enforcement.constants.js';
 import { enforcementWouldAsk, resolveEnforcement } from '../enforcement/enforcement.js';
 import { enrichEvents } from '../events/enrich.js';
 import type { AgentWatchEvent } from '../events/types/events.types.js';
-import { readGateCheckout } from '../git/gate-checkout.js';
+import { readGateCheckout, type GateCheckout } from '../git/gate-checkout.js';
 import { checkoutRootOf } from '../git/checkout-root.js';
+import { normalizeRemote } from '../git/remote-sanitize.js';
 import { developerIdentity, runGit } from '../git/git-context.js';
 import { shellDirectories } from '../providers/shared/shell-directories.js';
 import { runSnapshotPipeline } from '../snapshot/snapshot-pipeline.js';
@@ -28,6 +29,7 @@ import type { EventTransport } from '../transport/types/transport.types.js';
 import { eventsUrl } from '../config/config.js';
 import { TurnStateStore } from '../turns/turn-state.js';
 import { SHELL_REREAD_TYPES, TOOL_START_TYPES } from '../turns/constants/turns.constants.js';
+import type { WorkCheckoutMemo } from '../turns/types/turn-state.types.js';
 import { trackTurnOutcome, type TurnOutcome } from '../turns/turn-tracker.js';
 import {
   PAYLOAD_CWD_KEY,
@@ -201,11 +203,7 @@ async function enforce(state: HookPipelineState): Promise<StepOutcome<HookPipeli
   // reason: it is one small file, and it is still a file.
   const [developerId, checkout, model] = await Promise.all([
     developerIdentity(state.config.developerEmail, state.cwd, { home: state.env.home }),
-    readGateCheckout({
-      cwd: state.cwd,
-      checkoutsDir: state.paths.checkoutsDir,
-      now: state.env.now
-    }),
+    gateCheckout(state, prompt),
     statedModel(state, prompt)
   ]);
 
@@ -236,6 +234,66 @@ function turnGateEvent(state: HookPipelineState): AgentWatchEvent | undefined {
   }
 
   return undefined;
+}
+
+/**
+ * The checkout to state on the gate request.
+ *
+ * From a session's second turn on, the checkout its last turn changed, wherever
+ * the agent sits now: a spinoff parked in the docs repository that edits a
+ * feature worktree is working on that feature. The turn tracker wrote down the
+ * checkout's root and repository, so this costs one small file and the same
+ * `.git` walk as today, and the branch is still read from `HEAD` on disk, so a
+ * switch since that turn is seen. No git process: the repository is the one
+ * remembered.
+ *
+ * Only a checkout the asking tenant's root governs: the config (and so the token)
+ * asking here comes from the folder the agent sits in, and another tenant's
+ * repository must never travel on it. With no roots there is one tenant, and the
+ * tracker only remembered a checkout beneath the session's start folder.
+ *
+ * Anything missing, unreadable, gone or on a detached HEAD answers exactly what
+ * today's lookup of the agent's own folder answers.
+ *
+ * @param state - Current flow state.
+ * @param prompt - The prompt event being gated.
+ * @returns The checkout, or undefined when none is known.
+ */
+async function gateCheckout(state: HookPipelineState, prompt: AgentWatchEvent): Promise<GateCheckout | undefined> {
+  const base = { checkoutsDir: state.paths.checkoutsDir, now: state.env.now };
+  const work = await lastWorkCheckout(state, prompt.session.id);
+  const carried = work && await readGateCheckout({ ...base, cwd: work.root, repository: work.repository });
+
+  return carried ?? readGateCheckout({ ...base, cwd: state.cwd });
+}
+
+/**
+ * The session's last changed checkout, when the asking tenant may name it.
+ *
+ * @param state - Current flow state.
+ * @param sessionId - Provider session id, if the prompt has one.
+ * @returns The remembered checkout, or undefined.
+ */
+async function lastWorkCheckout(state: HookPipelineState, sessionId: string | undefined): Promise<WorkCheckoutMemo | undefined> {
+  if (!sessionId) return undefined;
+
+  try {
+    const work = await new TurnStateStore(state.paths.turnsDir).readWorkCheckout(sessionId);
+    const roots = state.globalConfig.config.roots;
+
+    // Only a value already in the canonical, credential-free form git capture
+    // produces: a checkout with no remote is remembered by its folder name, which
+    // names no repository (today's gate states nothing for it either), and a
+    // damaged or hand-edited file must never put anything else on the request.
+    if (!work || normalizeRemote(`https://${work.repository}`) !== work.repository) return undefined;
+
+    return selectRoot(roots, work.root)?.path === selectRoot(roots, state.cwd)?.path ? work : undefined;
+  } catch {
+    // A fixed sentence: the error could quote a path.
+    debugLog('enforcement: last work checkout unreadable; asking about the current folder');
+
+    return undefined;
+  }
 }
 
 /**

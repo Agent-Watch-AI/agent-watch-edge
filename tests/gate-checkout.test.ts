@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readGateCheckout } from '../src/git/gate-checkout.js';
 import { resolvePaths } from '../src/storage/paths.js';
+import { TurnStateStore } from '../src/turns/turn-state.js';
 import { makeTempEnv, type TempWorld } from './helpers.js';
 
 /**
@@ -162,5 +163,69 @@ describe('the checkout a gated prompt is happening in', () => {
     await readGateCheckout({ cwd: root, checkoutsDir, run: run as never });
 
     expect(spawned).toBe(1);
+  });
+
+  it('asks git nothing about a checkout whose repository is already known', async () => {
+    // The session's last work checkout, as the turn tracker remembered it: the
+    // prompt hook states it without a process.
+    const root = await repository('known');
+    let spawned = 0;
+    const run = async (..._args: unknown[]) => {
+      spawned += 1;
+
+      return undefined;
+    };
+
+    execFileSync('git', ['checkout', '-q', '-b', 'AWT-1-x'], { cwd: root });
+
+    const checkout = await readGateCheckout({
+      cwd: root,
+      repository: 'github.com/Acme/Known',
+      checkoutsDir: resolvePaths(world.env).checkoutsDir,
+      run: run as never
+    });
+
+    expect(checkout).toEqual({ repository: 'github.com/Acme/Known', branch: 'AWT-1-x' });
+    expect(spawned).toBe(0);
+  });
+
+  it('does not lend a known repository to the repository enclosing a removed checkout', async () => {
+    const outer = await repository('outer', 'git@github.com:Acme/Outer.git');
+
+    expect(
+      await readGateCheckout({
+        cwd: path.join(outer, 'removed-worktree'),
+        repository: 'github.com/Acme/Removed',
+        checkoutsDir: resolvePaths(world.env).checkoutsDir
+      })
+    ).toBeUndefined();
+  });
+});
+
+describe('the work checkout a session remembered', () => {
+  let world: TempWorld;
+
+  beforeEach(async () => {
+    world = await makeTempEnv();
+  });
+
+  afterEach(() => world.cleanup());
+
+  it('reads back what the tracker wrote, and nothing of any other shape', async () => {
+    const store = new TurnStateStore(resolvePaths(world.env).turnsDir);
+    const good = { root: path.join(world.home, 'w'), repository: 'github.com/Acme/W', at: '2026-09-29T00:00:00.000Z' };
+
+    await store.rememberWorkCheckout('s1', good);
+    expect(await store.readWorkCheckout('s1')).toEqual(good);
+
+    const [dir] = await fs.readdir(store.turnsDir);
+    const file = path.join(store.turnsDir, dir!, 'work-checkout.json');
+
+    for (const bad of ['not json', '[]', 'null', JSON.stringify({ ...good, root: 'relative/w' }), JSON.stringify({ ...good, repository: 7 }), JSON.stringify({ root: good.root })]) {
+      await fs.writeFile(file, bad);
+      expect(await store.readWorkCheckout('s1')).toBeUndefined();
+    }
+
+    expect(await store.readWorkCheckout('never-seen')).toBeUndefined();
   });
 });

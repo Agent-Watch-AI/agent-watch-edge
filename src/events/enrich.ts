@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { isRecord } from '../core/object.js';
 import { collectGitContext } from '../git/git-context.js';
-import { repositoryRootFinder } from '../git/repository-root.js';
+import { findGitDir } from '../git/gate-checkout.js';
 import type { GitContext } from '../git/types/git.types.js';
 import { featureCandidatesFromBranch } from '../feature/ticket-candidates.js';
 import { sanitizeValue } from '../privacy/sanitizer.js';
@@ -39,7 +39,7 @@ export async function enrichEvents(events: readonly AgentWatchEvent[], options: 
   const git = await resolveGitContext(events, options);
   const featureCandidates = featureCandidatesFromBranch(git.branch);
   const rewriter = buildPathRewriter(git.repositoryRoot, options.home);
-  const repositories = await resolveFileRepositories(events, git, options);
+  const repositories = await resolveFileRepositories(events, options);
   const enriched: AgentWatchEvent[] = [];
 
   for (const event of events) {
@@ -69,7 +69,9 @@ async function resolveGitContext(events: readonly AgentWatchEvent[], options: En
   try {
     return await collectGitContext({
       cwd: options.cwd,
-      includeChangedFiles: options.config.capture.files && needsFullGit,
+      // Never the folder's whole dirty tree: a turn reports the files it
+      // changed, and those come from the tracker's fingerprints.
+      includeChangedFiles: false,
       timeoutMs: options.gitTimeoutMs,
       rootOnly: !needsFullGit
     });
@@ -79,33 +81,24 @@ async function resolveGitContext(events: readonly AgentWatchEvent[], options: En
 }
 
 /**
- * The repository each file of this batch belongs to, when the session started
- * above its repositories rather than inside one.
+ * The checkout each file of this batch lies in, wherever that is.
  *
- * Two thirds of real sessions start in a workspace folder holding several
- * repositories. The start folder is not a repository, so without this every
- * path in the batch would degrade to a bare basename and the turn would report
- * no repository at all — leaving the session unattributable.
+ * A file's path is reported relative to its own checkout, and the turn tracker
+ * keeps that checkout's root beside it: which checkout the turn worked in is
+ * decided when it closes, against the tenant and the start folder, so nothing
+ * is refused here — only placed. A session started inside one repository finds
+ * that repository for its own files, exactly as before.
  *
  * Resolved up front, for the batch, so enriching one event stays synchronous.
- * The walk is `stat` calls only: the one hook that may shell out to git is the
- * turn-closing one.
+ * The walk is `stat` calls only: no tool hook pays a git process for it.
  *
  * @param events - The batch being enriched.
- * @param git - Context already resolved for the start folder.
  * @param options - Effective config and working directory.
- * @returns Absolute file path → its repository root; empty when this does not apply.
+ * @returns Absolute file path → its checkout root; empty when git capture is off.
  */
-async function resolveFileRepositories(
-  events: readonly AgentWatchEvent[],
-  git: GitContext,
-  options: EnrichOptions
-): Promise<ReadonlyMap<string, string>> {
-  // A session started inside a repository takes this path never: that
-  // repository wins, including over a nested one beneath it.
-  if (git.repositoryRoot || !options.config.capture.git) return EMPTY_REPOSITORIES;
+async function resolveFileRepositories(events: readonly AgentWatchEvent[], options: EnrichOptions): Promise<ReadonlyMap<string, string>> {
+  if (!options.config.capture.git) return EMPTY_REPOSITORIES;
 
-  const finder = repositoryRootFinder(options.cwd);
   const roots = new Map<string, string>();
 
   for (const event of events) {
@@ -113,9 +106,9 @@ async function resolveFileRepositories(
 
     if (typeof filePath !== 'string' || !path.isAbsolute(filePath) || roots.has(filePath)) continue;
 
-    const root = await finder.find(filePath);
+    const location = await findGitDir(path.dirname(filePath)).catch(() => undefined);
 
-    if (root) roots.set(filePath, root);
+    if (location) roots.set(filePath, location.root);
   }
 
   return roots;
@@ -126,7 +119,7 @@ interface EnrichContext {
   readonly git: GitContext;
   readonly featureCandidates: readonly FeatureCandidate[];
   readonly rewriter: PathRewriter;
-  /** Absolute file path → repository root, for a session started above one. */
+  /** Absolute file path → the root of the checkout it lies in. */
   readonly repositories: ReadonlyMap<string, string>;
   readonly options: EnrichOptions;
 }
@@ -180,8 +173,8 @@ function enrichMetadata(metadata: AgentWatchEvent['metadata'], context: EnrichCo
 }
 
 /**
- * The path fields for one tool call: the safe path, plus which repository it is
- * relative to when that repository was found beneath the start folder.
+ * The path fields for one tool call: the safe path, plus which checkout it is
+ * relative to when it lies in one.
  *
  * @param filePath - Absolute path from a tool payload.
  * @param context - Batch-wide resolved context.

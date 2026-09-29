@@ -57,3 +57,27 @@ export interface GateCheckoutOptions {
   /** Git runner override, injectable for tests. */
   readonly run?: GitRunner;
 }
+
+/** One dirty entry of a checkout, stamped so a later edit to it shows. */
+export interface DirtyEntry {
+  /** Porcelain status letters; `??` for untracked. */
+  readonly xy: string;
+  /** Absent when the file is gone from disk. */
+  readonly size?: number;
+  readonly mtimeMs?: number;
+}
+
+/**
+ * A checkout at one moment, as `git status --porcelain=v2 --branch` and `lstat`
+ * see it. Local turn state only; never sent.
+ */
+export interface Fingerprint {
+  /** HEAD; absent before the first commit. */
+  readonly oid?: string;
+  /** Checked-out branch; absent on a detached HEAD. */
+  readonly branch?: string;
+  /** The git dir every worktree of the repository shares, read from disk. */
+  readonly commonDir?: string;
+  /** Repository-relative path → its entry. */
+  readonly dirty: Readonly<Record<string, DirtyEntry>>;
+}

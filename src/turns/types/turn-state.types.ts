@@ -1,5 +1,6 @@
 import type { FailOpenReason } from '../../enforcement/types/enforcement.types.js';
 import type { ContentEvidence } from '../../events/types/events.types.js';
+import type { Fingerprint } from '../../git/types/git.types.js';
 
 /** A prompt the developer submitted: when, and its length and SHA-256 — never its text. */
 export interface PromptRecord {
@@ -26,12 +27,11 @@ export interface ToolRecord {
   readonly tool?: string;
   readonly filePath?: string;
   /**
-   * The absolute root of the repository `filePath` is relative to — set only
-   * for a tool call made from a folder *above* its repositories, where that
-   * folder is not one.
+   * The absolute root of the checkout `filePath` is relative to, wherever it
+   * lies; absent for a file in no checkout, whose path is a bare basename.
    *
    * Local turn state only, never on the wire: it exists so the closing turn can
-   * decide which repository the turn worked in. Absolute because the cwd each
+   * decide which checkout the turn worked in. Absolute because the cwd each
    * hook reports moves with a lasting `cd`, so a path relative to the tool
    * hook's cwd means nothing to the Stop hook's.
    */
@@ -41,6 +41,33 @@ export interface ToolRecord {
    * read must not appear in the summary's files_touched (modified) list.
    */
   readonly access?: 'read' | 'edit';
+}
+
+/** How a turn came to name a checkout. */
+export type CheckoutVia = 'cwd' | 'file' | 'shell';
+
+/**
+ * A checkout a turn named, from one tool hook. Local turn state only, never sent.
+ *
+ * The first record of a root in a turn carries its `seq` (order of first
+ * sight) and its `baseline`; later ones are votes. A root's record from a shell
+ * call is a vote for it; the call's own cwd votes only when the call named no
+ * checkout (`named: false`), because where an agent sits is weaker evidence
+ * than where it says it is looking.
+ */
+export interface CheckoutRecord {
+  readonly kind: 'checkout';
+  readonly at: string;
+  readonly turnId?: string;
+  /** Canonical absolute root. */
+  readonly root: string;
+  readonly via: CheckoutVia;
+  /** The call named a checkout in its shell command. */
+  readonly named: boolean;
+  /** Order of first sight in the turn; only on a root's first record. */
+  readonly seq?: number;
+  /** The checkout when the turn first named it; absent when git could not say. */
+  readonly baseline?: Fingerprint;
 }
 
 /** A response delivered outside the Stop event (Cursor's afterAgentResponse); evidence only. */
@@ -62,7 +89,14 @@ export interface SessionModelRecord {
 }
 
 /** Anything the accumulator persists between hook invocations. */
-export type TurnRecord = PromptRecord | ToolRecord | ResponseRecord;
+export type TurnRecord = PromptRecord | ToolRecord | ResponseRecord | CheckoutRecord;
+
+/** The session's last changed checkout, as `work-checkout.json` holds it. Local only. */
+export interface WorkCheckoutMemo {
+  readonly root: string;
+  readonly repository: string;
+  readonly at: string;
+}
 
 /** A record together with the file it was read from, so it can be consumed. */
 export interface TurnStateEntry {

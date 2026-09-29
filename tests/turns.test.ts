@@ -1120,19 +1120,19 @@ describe('a turn of a session started above its repositories', () => {
     expect(summary.files_touched).toBeUndefined();
   });
 
-  it('gives a tie on edit count to the repository edited first', async () => {
+  it('gives a tie on changed files to the checkout the turn named first', async () => {
     await hook(prompt);
-    await hook(toolCall('Read', 'repo-b/src/z.ts', 't0'));
+    await hook(toolCall('Read', 'repo-b/src/y.ts', 't0'));
     await hook(toolCall('Edit', 'repo-a/src/a.ts', 't1'));
     await hook(toolCall('Edit', 'repo-b/src/z.ts', 't2'));
 
     const summary = await hook(stop);
 
-    // One edit each. Reading repo-b first does not make it the winner: only
-    // edits are counted while any edit exists.
-    expect(summary.repository).toBe('repo-a');
-    expect(summary.files_touched).toEqual(['src/a.ts']);
-    expect(summary.files_read).toBeUndefined();
+    // One changed file each; repo-b was named first (by the read).
+    expect(summary.repository).toBe('repo-b');
+    expect(summary.work_evidence).toBe('changed');
+    expect(summary.files_touched).toEqual(['src/z.ts']);
+    expect(summary.files_read).toEqual(['src/y.ts']);
   });
 
   it("follows the repository's own .agentwatch.json, which the start folder never read", async () => {
@@ -1183,8 +1183,8 @@ describe('a turn of a session started above its repositories', () => {
 
     expect(summary.repository).toBeUndefined();
     expect(summary.branch).toBeUndefined();
-    // A bare basename: what any file outside the start folder has always sent.
-    expect(summary.files_touched).toEqual(['a.ts']);
+    // The refused checkout's path goes with it; the call still counts.
+    expect(summary.files_touched).toBeUndefined();
     expect(summary.tool_calls).toBe(1);
   });
 
@@ -1316,17 +1316,17 @@ describe('a turn of a session started above its repositories', () => {
     expect(JSON.stringify(summary)).not.toContain('secret-plan');
   });
 
-  it("drops another repository's path when a lasting cd put the Stop hook inside a repository", async () => {
-    // The Edit is seen from the workspace and resolved against repo-b; the
-    // Stop from inside repo-a, whose repository the turn now reports. repo-b's
-    // path relative to repo-b is a wrong vote under repo-a's name.
+  it('reports the checkout the turn changed, not the one a lasting cd left the Stop hook in', async () => {
+    // The Edit changed repo-b; the Stop fires from inside repo-a. The turn's
+    // work is repo-b's, under repo-b's own file, which withholds its paths.
     await writeJson(path.join(workspace, 'repo-b', '.agentwatch.json'), { capture: { files: false } });
     await hook(prompt);
     await hook(toolCall('Edit', 'repo-b/src/secret-plan.ts', 't0'));
 
     const summary = await hook(stop, path.join(workspace, 'repo-a'));
 
-    expect(summary.repository).toBe('repo-a');
+    expect(summary.repository).toBe('repo-b');
+    expect(summary.work_evidence).toBe('changed');
     expect(summary.files_touched).toBeUndefined();
     expect(summary.tool_calls).toBe(1);
     expect(JSON.stringify(summary)).not.toContain('secret-plan');

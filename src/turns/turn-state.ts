@@ -9,13 +9,16 @@ import { claimSweep } from '../storage/sweep-marker.js';
 import {
   RE_UNSAFE_NAME_CHARS,
   SESSION_DIR_HASH_LENGTH,
+  SESSION_FILES,
   SESSION_MODEL_FILE,
+  SESSION_START_FILE,
   TURN_STATE_SWEEP_INTERVAL_MS,
-  USAGE_CLAIM_PREFIX
+  USAGE_CLAIM_PREFIX,
+  WORK_CHECKOUT_FILE
 } from './constants/turns.constants.js';
-import type { SessionModelRecord, TurnRecord, TurnStateEntry } from './types/turn-state.types.js';
+import type { SessionModelRecord, TurnRecord, TurnStateEntry, WorkCheckoutMemo } from './types/turn-state.types.js';
 
-export type { PromptRecord, ResponseRecord, SessionModelRecord, ToolRecord, TurnRecord, TurnStateEntry } from './types/turn-state.types.js';
+export type { CheckoutRecord, PromptRecord, ResponseRecord, SessionModelRecord, ToolRecord, TurnRecord, TurnStateEntry } from './types/turn-state.types.js';
 
 /**
  * Per-session accumulator for turn summaries.
@@ -77,7 +80,7 @@ export class TurnStateStore {
     const entries: TurnStateEntry[] = [];
 
     for (const name of names) {
-      if (!name.endsWith('.json') || name.startsWith(USAGE_CLAIM_PREFIX) || name === SESSION_MODEL_FILE) continue;
+      if (!name.endsWith('.json') || name.startsWith(USAGE_CLAIM_PREFIX) || SESSION_FILES.has(name)) continue;
 
       const file = path.join(dir, name);
       const read = await readJsonFile(file);
@@ -204,6 +207,77 @@ export class TurnStateStore {
     if (typeof model !== 'string' || model === '') return undefined;
 
     return model;
+  }
+
+  /**
+   * The names of a session's files, and nothing read: how a tool hook learns
+   * which checkouts its turn already named, for the price of one `readdir`.
+   *
+   * @param sessionId - Provider session id.
+   * @returns The file names; empty when the session has none.
+   */
+  async names(sessionId: string): Promise<string[]> {
+    return readSessionDirSafely(this.sessionDir(sessionId));
+  }
+
+  /**
+   * Remember the folder the session started in, once.
+   *
+   * The tenant and the no-roots boundary are asked of it, and the cwd each
+   * later hook reports follows the agent's `cd`. The first hook of a session
+   * writes it; every later one finds it there (`wx` fails, which is the point).
+   *
+   * @param sessionId - Provider session id.
+   * @param cwd - The first hook's cwd.
+   */
+  async rememberStart(sessionId: string, cwd: string): Promise<void> {
+    const file = path.join(this.sessionDir(sessionId), SESSION_START_FILE);
+
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify({ cwd }), { flag: 'wx', mode: SECRET_FILE_MODE }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'EEXIST') throw error;
+    });
+  }
+
+  /**
+   * The folder the session started in.
+   *
+   * @param sessionId - Provider session id.
+   * @returns The folder, or undefined when none was usably remembered.
+   */
+  async readStart(sessionId: string): Promise<string | undefined> {
+    const read = await readJsonFile(path.join(this.sessionDir(sessionId), SESSION_START_FILE));
+    const cwd = read.state === 'ok' ? asRecord(read.value)?.['cwd'] : undefined;
+
+    return typeof cwd === 'string' && path.isAbsolute(cwd) ? cwd : undefined;
+  }
+
+  /**
+   * Remember the checkout this session's turn just changed.
+   *
+   * @param sessionId - Provider session id.
+   * @param memo - Its root, repository and when.
+   */
+  async rememberWorkCheckout(sessionId: string, memo: WorkCheckoutMemo): Promise<void> {
+    await writeFileAtomic(path.join(this.sessionDir(sessionId), WORK_CHECKOUT_FILE), JSON.stringify(memo), SECRET_FILE_MODE);
+  }
+
+  /**
+   * The checkout this session last changed.
+   *
+   * @param sessionId - Provider session id.
+   * @returns The memo, or undefined when none was usably remembered.
+   */
+  async readWorkCheckout(sessionId: string): Promise<WorkCheckoutMemo | undefined> {
+    const read = await readJsonFile(path.join(this.sessionDir(sessionId), WORK_CHECKOUT_FILE));
+    const memo = read.state === 'ok' ? asRecord(read.value) : undefined;
+    const root = memo?.['root'];
+    const repository = memo?.['repository'];
+    const at = memo?.['at'];
+
+    if (typeof root !== 'string' || !path.isAbsolute(root) || typeof repository !== 'string' || typeof at !== 'string') return undefined;
+
+    return { root, repository, at };
   }
 
   /**
@@ -341,5 +415,5 @@ function isTurnRecord(value: unknown): value is TurnRecord {
 
   if (!record || typeof record['at'] !== 'string') return false;
 
-  return record['kind'] === 'prompt' || record['kind'] === 'tool' || record['kind'] === 'response';
+  return record['kind'] === 'prompt' || record['kind'] === 'tool' || record['kind'] === 'response' || record['kind'] === 'checkout';
 }

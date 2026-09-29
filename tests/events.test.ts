@@ -106,25 +106,23 @@ describe('a session started above its repositories', () => {
     expect(event.metadata.repositoryPath).toBe('core');
   });
 
-  it('reports no repository for a file outside the start folder', async () => {
-    // The walk stops at the start folder, so a sibling repository — another
-    // project's, possibly another tenant's — contributes nothing.
+  it('places a file outside the start folder in its own checkout, for the close to admit or refuse', async () => {
+    // Agents work in worktrees beside the folder they started in. Enrichment
+    // only places the file; the turn's close decides, against the tenant and
+    // the start folder, whether that checkout may be reported at all.
     const [event] = await enrich([toolEvent(path.join(outside, 'src/app.ts'))], workspace);
 
-    expect(event.metadata.filePath).toBe('app.ts');
-    expect(event.metadata.repositoryPath).toBeUndefined();
+    expect(event.metadata.filePath).toBe(path.join('src', 'app.ts'));
+    expect(event.metadata.repositoryPath).toBe(path.join('..', 'other'));
   });
 
-  it('reports no repository for one reached through a symlink that leaves the start folder', async () => {
-    // Lexically `<workspace>/linked/src/app.ts` is beneath the start folder
-    // and `.git` is found through the link; on disk it is the sibling
-    // repository — another project's, possibly another tenant's.
+  it('places a file reached through a symlink by its lexical checkout; the close judges the real one', async () => {
     await fs.symlink(outside, path.join(workspace, 'linked'));
 
     const [event] = await enrich([toolEvent(path.join(workspace, 'linked/src/app.ts'))], workspace);
 
-    expect(event.metadata.filePath).toBe('app.ts');
-    expect(event.metadata.repositoryPath).toBeUndefined();
+    expect(event.metadata.filePath).toBe(path.join('src', 'app.ts'));
+    expect(event.metadata.repositoryPath).toBe('linked');
   });
 
   it('sends no absolute path, for a file in a repository or outside every one', async () => {
@@ -143,10 +141,10 @@ describe('a session started above its repositories', () => {
     }
   });
 
-  it('leaves a start folder that is itself a repository exactly as it was', async () => {
-    // A real repository, so git resolves the root and the new path is never
-    // reached: the start folder's repository wins, including over one nested
-    // beneath it.
+  it('places files of a start folder that is a repository in it, and a nested checkout in its own', async () => {
+    // The start folder's files keep the paths they always had. A nested
+    // checkout (a submodule, a vendored worktree) is a checkout of its own:
+    // work there is reported there.
     const repo = path.join(workspace, 'real');
 
     await fs.mkdir(path.join(repo, 'src'), { recursive: true });
@@ -160,9 +158,9 @@ describe('a session started above its repositories', () => {
     );
 
     expect(inside.metadata.filePath).toBe(path.join('src', 'totals.ts'));
-    expect(inside.metadata.repositoryPath).toBeUndefined();
-    expect(nested.metadata.filePath).toBe(path.join('vendor', 'nested', 'dep.ts'));
-    expect(nested.metadata.repositoryPath).toBeUndefined();
+    expect(inside.metadata.repositoryPath).toBe('.');
+    expect(nested.metadata.filePath).toBe(path.join('nested', 'dep.ts'));
+    expect(nested.metadata.repositoryPath).toBe('vendor');
   });
 
   it('resolves nothing when git capture is off', async () => {

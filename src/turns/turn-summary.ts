@@ -13,7 +13,8 @@ export type {
   BuildTurnSummaryInput,
   TouchedFiles,
   TurnSummaryEvent,
-  TurnUsageStatus
+  TurnUsageStatus,
+  WorkEvidence
 } from './types/turn-summary.types.js';
 
 /**
@@ -61,6 +62,7 @@ export function buildTurnSummary(input: BuildTurnSummaryInput): TurnSummaryEvent
     commit: input.git?.commit,
     jira_ids: jiraIds.length > 0 ? jiraIds : undefined,
     files_changed: input.git?.changedFiles,
+    work_evidence: input.git?.repository ? input.workEvidence : undefined,
     files_touched: files.filesTouched.length > 0 ? files.filesTouched : undefined,
     files_read: files.filesRead.length > 0 ? files.filesRead : undefined,
     prompt_evidence: input.prompts[0]?.evidence,

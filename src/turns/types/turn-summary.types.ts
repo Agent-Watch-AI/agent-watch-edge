@@ -31,6 +31,13 @@ export interface AgentUsageSummary {
 export type TurnUsageStatus = 'pending' | 'provisional' | 'complete' | 'partial';
 
 /**
+ * How a turn's checkout was chosen: it `changed` there; it changed nothing and
+ * `carried` the session's last changed checkout; it only `referenced` one; or it
+ * reports the folder it ended in (`cwd`), as before this existed.
+ */
+export type WorkEvidence = 'changed' | 'carried' | 'referenced' | 'cwd';
+
+/**
  * One prompt→response turn, flattened for direct backend consumption: who
  * (developer), where (repo/branch/commit/ticket), what (prompt and response
  * evidence, tools, files) and how much it cost.
@@ -53,8 +60,10 @@ export interface TurnSummaryEvent extends AgentWatchEvent<'turn.summary'> {
   readonly branch?: string;
   readonly commit?: string;
   readonly jira_ids?: readonly string[];
-  /** Working-tree changes reported by git at the end of the turn. */
+  /** The files this turn changed in its checkout: its edits, its commits' files, its new dirt. */
   readonly files_changed?: readonly string[];
+  /** How the repository and branch above were chosen; absent when the turn names none. */
+  readonly work_evidence?: WorkEvidence;
   /** Files edited by the agent's tools during this turn (repo-relative). */
   readonly files_touched?: readonly string[];
   /** Files the agent's tools only read during this turn (repo-relative). */
@@ -101,6 +110,7 @@ export interface BuildTurnSummaryInput {
   readonly installationId?: string;
   readonly git?: EventGit;
   readonly featureCandidates?: readonly FeatureCandidate[];
+  readonly workEvidence?: WorkEvidence;
   readonly prompts: readonly PromptRecord[];
   readonly tools: readonly ToolRecord[];
   /** Evidence of the response the user actually saw, however the provider delivered it. */

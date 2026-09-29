@@ -1,8 +1,8 @@
 import type { AgentWatchEvent, CanonicalEventType, EventPatch } from '../../events/types/events.types.js';
 import { sha256Hex } from '../../events/event-id.js';
 import { baseEvent, promptPatch, responsePatch, toolPatch, withPatch } from '../shared/event-builder.js';
-import { classifyTool, parseMcpToolName, toolCompleteType, toolStartType } from '../shared/tooling.js';
-import type { HookContext, ToolStatus } from '../types/provider.types.js';
+import { classifyTool, extractCommand, parseMcpToolName, toolCompleteType, toolStartType } from '../shared/tooling.js';
+import type { HookContext, ShellCall, ToolStatus } from '../types/provider.types.js';
 import {
   CLAUDE_DISPLAY_NAME,
   CLAUDE_EVENT_TYPE_MAP,
@@ -36,6 +36,27 @@ export function parseClaudeHookEvent(rawPayload: unknown, context: HookContext):
   const providerEventType = payload.hook_event_name ?? CLAUDE_UNKNOWN_EVENT;
 
   return [withPatch(claudeBaseEvent(payload, providerEventType), hookPatch(payload, providerEventType, context))];
+}
+
+/**
+ * The command a `PreToolUse` for Bash is about to run.
+ *
+ * Claude reports no separate working directory for the call: it runs in the
+ * payload's `cwd`.
+ *
+ * @param rawPayload - Raw JSON from the hook's stdin.
+ * @returns The command, or undefined for any other payload.
+ */
+export function claudeShellCall(rawPayload: unknown): ShellCall | undefined {
+  const parsed = claudePayloadSchema.safeParse(rawPayload);
+
+  if (!parsed.success || !CLAUDE_TOOL_START_EVENTS.has(parsed.data.hook_event_name ?? '')) return undefined;
+
+  if (classifyTool(parsed.data.tool_name) !== 'shell') return undefined;
+
+  const command = extractCommand(parsed.data.tool_input);
+
+  return command ? { command } : undefined;
 }
 
 /**

@@ -47,7 +47,7 @@ export async function fingerprint(root: string, run: GitRunner = runGit, timeout
   const parsed = parsePorcelainV2(status);
   const stamped = await Promise.all(parsed.entries.map(async ([file, xy]) => [file, await stampEntry(root, file, xy)] as const));
 
-  return { oid: parsed.oid, branch: parsed.branch, commonDir, dirty: Object.fromEntries(stamped) };
+  return { oid: parsed.oid, unborn: parsed.unborn || undefined, branch: parsed.branch, commonDir, dirty: Object.fromEntries(stamped) };
 }
 
 /**
@@ -58,12 +58,13 @@ export async function fingerprint(root: string, run: GitRunner = runGit, timeout
  * `--ignored`.
  *
  * @param output - Raw NUL-separated output.
- * @returns HEAD, branch and the dirty entries as `[path, xy]`, in git's order.
+ * @returns HEAD (and whether it is unborn), branch and the dirty entries as `[path, xy]`, in git's order.
  */
-export function parsePorcelainV2(output: string): { oid?: string; branch?: string; entries: (readonly [string, string])[] } {
+export function parsePorcelainV2(output: string): { oid?: string; unborn: boolean; branch?: string; entries: (readonly [string, string])[] } {
   const records = output.split('\0');
   const entries: (readonly [string, string])[] = [];
   let oid: string | undefined;
+  let unborn = false;
   let branch: string | undefined;
 
   for (let index = 0; index < records.length; index++) {
@@ -72,7 +73,8 @@ export function parsePorcelainV2(output: string): { oid?: string; branch?: strin
     if (record.startsWith(PORCELAIN_V2_OID_HEADER)) {
       const value = record.slice(PORCELAIN_V2_OID_HEADER.length);
 
-      oid = value === PORCELAIN_V2_NO_OID ? undefined : value;
+      unborn = value === PORCELAIN_V2_NO_OID;
+      oid = unborn ? undefined : value;
       continue;
     }
 
@@ -93,7 +95,7 @@ export function parsePorcelainV2(output: string): { oid?: string; branch?: strin
     entries.push([file, kind === '?' ? PORCELAIN_V2_UNTRACKED_XY : record.slice(2, 4)]);
   }
 
-  return { oid, branch, entries };
+  return { oid, unborn, branch, entries };
 }
 
 /**
@@ -175,6 +177,7 @@ export function asFingerprint(value: unknown): Fingerprint | undefined {
     // Both reach a git command line: an oid that is not one could be read as
     // an option, and a relative git dir resolves against nobody knows what.
     oid: oid !== undefined && RE_OBJECT_ID.test(oid) ? oid : undefined,
+    unborn: record['unborn'] === true || undefined,
     branch: stringOr(record['branch']),
     commonDir: commonDir !== undefined && path.isAbsolute(commonDir) ? commonDir : undefined,
     dirty: Object.fromEntries(entries)

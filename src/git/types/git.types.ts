@@ -74,6 +74,8 @@ export interface DirtyEntry {
 export interface Fingerprint {
   /** HEAD; absent before the first commit. */
   readonly oid?: string;
+  /** Git said HEAD is unborn (`(initial)`): the first commit is yet to come. */
+  readonly unborn?: boolean;
   /** Checked-out branch; absent on a detached HEAD. */
   readonly branch?: string;
   /** The git dir every worktree of the repository shares, read from disk. */

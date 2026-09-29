@@ -207,6 +207,7 @@ export const GIT_FINGERPRINT_ARGS = ['status', '--porcelain=v2', '--branch', '-z
 
 /** Git's empty tree: what an unborn HEAD's first commit is diffed against. */
 export const EMPTY_TREE_OID = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+export const EMPTY_TREE_OID_SHA256 = '6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321';
 
 /** Header lines of porcelain v2 `--branch` output that the fingerprint keeps. */
 export const PORCELAIN_V2_OID_HEADER = '# branch.oid ';

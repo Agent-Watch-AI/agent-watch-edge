@@ -21,6 +21,7 @@ describe('porcelain v2 -z', () => {
 
     expect(parsePorcelainV2(output)).toEqual({
       oid: '1111111111111111111111111111111111111111',
+      unborn: false,
       branch: 'AWT-1-x',
       entries: [
         ['src/with space.ts', '.M'],
@@ -32,7 +33,7 @@ describe('porcelain v2 -z', () => {
   });
 
   it('names no oid before the first commit and no branch on a detached HEAD', () => {
-    expect(parsePorcelainV2('# branch.oid (initial)\0# branch.head (detached)\0')).toEqual({ oid: undefined, branch: undefined, entries: [] });
+    expect(parsePorcelainV2('# branch.oid (initial)\0# branch.head (detached)\0')).toEqual({ oid: undefined, unborn: true, branch: undefined, entries: [] });
   });
 });
 
@@ -121,6 +122,7 @@ describe('a checkout fingerprint', () => {
   it('reads back from turn state only in the shape it was written', () => {
     expect(asFingerprint({ oid: '--output=/tmp/x', commonDir: 'relative', dirty: { 'a.ts': { xy: '.M', size: 'big' }, 'b.ts': 3 } })).toEqual({
       oid: undefined,
+      unborn: undefined,
       branch: undefined,
       commonDir: undefined,
       dirty: { 'a.ts': { xy: '.M', size: undefined, mtimeMs: undefined } }

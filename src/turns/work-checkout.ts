@@ -7,7 +7,7 @@ import { sha256Hex } from '../events/event-id.js';
 import type { AgentWatchEvent, EventGit, FeatureCandidate } from '../events/types/events.types.js';
 import { featureCandidatesFromBranch } from '../feature/ticket-candidates.js';
 import { checkoutRootOf } from '../git/checkout-root.js';
-import { EMPTY_TREE_OID, GIT_REMOTE_ARGS, GIT_TIMEOUT_MS, MAX_WORK_CHANGED_FILES } from '../git/constants/git.constants.js';
+import { EMPTY_TREE_OID, EMPTY_TREE_OID_SHA256, GIT_REMOTE_ARGS, GIT_TIMEOUT_MS, MAX_WORK_CHANGED_FILES } from '../git/constants/git.constants.js';
 import { asFingerprint, commitFiles, dirtyDelta, fingerprint } from '../git/fingerprint.js';
 import { repositoryIdentity, runGit } from '../git/git-context.js';
 import { isBeneath } from '../git/repository-root.js';
@@ -92,8 +92,10 @@ export async function recordCheckouts(store: TurnStateStore, sessionId: string, 
   const admits = admission(options, (await store.readStart(sessionId)) ?? options.cwd);
   const prefix = `${CHECKOUT_RECORD_PREFIX}${shortHash(event.session.turnId ?? '')}-`;
   const seen = new Set<string>();
+  const names = new Set(await store.names(sessionId));
+  const callKey = shortHash(event.id);
 
-  for (const name of await store.names(sessionId)) {
+  for (const name of names) {
     if (name.startsWith(prefix)) seen.add(name.slice(prefix.length, prefix.length + CHECKOUT_KEY_HASH_LENGTH));
   }
 
@@ -106,7 +108,11 @@ export async function recordCheckouts(store: TurnStateStore, sessionId: string, 
     // worktree the command itself added did not exist when its start hook ran.
     const votes = (start || first) && (via === 'shell' || (start && via === 'cwd' && !named));
 
-    if ((!first && !votes) || (first && seen.size >= MAX_TURN_CHECKOUTS) || !admits(root)) continue;
+    // A re-fired hook has the same event id: its record is already there, and
+    // rewriting it would drop the first sighting's seq and baseline.
+    const duplicate = names.has(`${prefix}${key}-${callKey}.json`);
+
+    if (duplicate || (!first && !votes) || (first && seen.size >= MAX_TURN_CHECKOUTS) || !admits(root)) continue;
 
     writes.push({ root, via, key, seq: first ? seen.size : undefined });
 
@@ -126,7 +132,7 @@ export async function recordCheckouts(store: TurnStateStore, sessionId: string, 
         baseline: seq === undefined ? undefined : await fingerprint(root)
       };
 
-      await store.append(sessionId, `${prefix}${key}-${shortHash(event.id)}`, record);
+      await store.append(sessionId, `${prefix}${key}-${callKey}`, record);
     })
   );
 }
@@ -183,6 +189,11 @@ export async function resolveWorkCheckout(
   if (byVotes) return reportCheckout(byVotes.root, 'referenced', probes.get(byVotes.root)!, [], tools, options);
 
   const stopRoot = await checkoutRootOf(options.cwd);
+
+  // The Stop folder's own repository is held to the same admission as every
+  // candidate: a lasting cd can end the turn in another tenant's checkout, or
+  // outside the start folder.
+  if (stopRoot !== undefined && !admits(stopRoot)) return { tools: keepingPathsIn(tools, undefined) };
 
   return {
     git: stopEvent.git,
@@ -337,8 +348,10 @@ async function probe(candidate: Candidate): Promise<Probe> {
   const from = candidate.baseline?.oid;
 
   if (closing) {
-    // A baseline with no oid was an unborn HEAD: the first commit is diffed against the empty tree.
-    const start = candidate.baseline && from === undefined ? EMPTY_TREE_OID : from;
+    // Only a baseline git called unborn diffs its first commit against the
+    // empty tree; a baseline that merely lacks an oid proves nothing, and
+    // diffing it that way would call the whole tree changed.
+    const start = candidate.baseline?.unborn && closing.oid !== undefined ? emptyTreeFor(closing.oid) : from;
     const moved = start !== undefined && closing.oid !== undefined && start !== closing.oid;
 
     return { closing, remote, commits: moved ? await commitFiles(candidate.root, start, closing.oid!) : [], moved, vanished: false };
@@ -405,7 +418,8 @@ async function reportCheckout(
   const capture = (await loadEffectiveConfig(options.paths, configRoot, options.globalConfig)).config.capture;
   // Its own paths and nothing else: another checkout's are a wrong vote in the
   // placement corpus. The calls still count.
-  const own = capture.files ? keepingPathsIn(tools, root) : keepingPathsIn(tools, undefined);
+  // capture.files: false withholds every path, bare basenames included.
+  const own = capture.files ? keepingPathsIn(tools, root) : tools.map((record) => (record.filePath === undefined ? record : { ...record, filePath: undefined }));
 
   if (!capture.git) return { tools: own };
 
@@ -467,6 +481,16 @@ function best(candidates: readonly Candidate[], score: (candidate: Candidate) =>
   }
 
   return winner;
+}
+
+/**
+ * The empty tree in the object format this oid is written in.
+ *
+ * @param oid - An oid of the repository.
+ * @returns Its empty tree's oid.
+ */
+function emptyTreeFor(oid: string): string {
+  return oid.length === EMPTY_TREE_OID_SHA256.length ? EMPTY_TREE_OID_SHA256 : EMPTY_TREE_OID;
 }
 
 function byFirstSight(a: Candidate, b: Candidate): number {

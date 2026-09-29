@@ -7,6 +7,7 @@ import { runHook } from '../src/cli/hook.js';
 import { defaultConfig } from '../src/config/config.js';
 import { setVerbose } from '../src/core/logger.js';
 import { resolvePaths } from '../src/storage/paths.js';
+import { TurnStateStore } from '../src/turns/turn-state.js';
 import { makeTempEnv, queueEntryFiles, writeJson, type TempWorld } from './helpers.js';
 
 // Every turn reports the checkout its work changed (AWT-127). Real repositories,
@@ -359,6 +360,53 @@ describe('the checkout a turn worked in', () => {
 
     expect(summary.repository).toBeUndefined();
     expect(summary.files_touched).toBeUndefined();
+  });
+
+  it("does not report the Stop folder's repository when it lies outside the start folder", async () => {
+    const notes = path.join(workspace, 'notes');
+
+    await fs.mkdir(notes);
+    await hook(prompt('p1'), notes);
+
+    // A lasting cd ended the turn in core, which is not beneath `notes`.
+    const summary = summaryOf(await hook(stop('p1'), core));
+
+    expect(summary.repository).toBeUndefined();
+    expect(summary.work_evidence).toBeUndefined();
+  });
+
+  it("diffs a new repository's first commit against the empty tree", async () => {
+    const fresh = path.join(workspace, 'fresh');
+
+    await fs.mkdir(path.join(fresh, 'src'), { recursive: true });
+    git(fresh, 'init', '-q', '-b', 'AWT-12-new');
+    git(fresh, 'config', 'user.email', 'dev@company.com');
+    git(fresh, 'config', 'user.name', 'Dev');
+    await hook(prompt('p1'), workspace);
+    await shell('p1', 't1', `cd ${fresh} && git commit -qm first`, workspace, async () => {
+      await fs.writeFile(path.join(fresh, 'src', 'first.ts'), 'x\n');
+      git(fresh, 'add', '.');
+      git(fresh, 'commit', '-qm', 'first');
+    });
+
+    expect(summaryOf(await hook(stop('p1'), workspace))).toMatchObject({ branch: 'AWT-12-new', work_evidence: 'changed', files_changed: ['src/first.ts'] });
+  });
+
+  it('never calls a whole tree changed because a baseline lacks an oid', async () => {
+    // A baseline read back without its oid (garbled, or from a git that did not
+    // say) is not an unborn HEAD: diffing it against the empty tree would list
+    // every file of the repository.
+    const paths = resolvePaths(world.env);
+
+    await hook(prompt('p1'), workspace);
+    await new TurnStateStore(paths.turnsDir).append(session, 'checkout--manual', {
+      kind: 'checkout', at: new Date().toISOString(), turnId: 'p1', root: worktree, via: 'shell', named: true, seq: 0, baseline: { branch: 'AWT-9-totals', dirty: {} }
+    });
+
+    const summary = summaryOf(await hook(stop('p1'), workspace));
+
+    expect(summary.work_evidence).toBe('referenced');
+    expect(summary.files_changed).toBeUndefined();
   });
 
   it('writes no checkout record and no work checkout on a dry run', async () => {

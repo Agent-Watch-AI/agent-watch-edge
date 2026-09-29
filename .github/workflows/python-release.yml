@@ -1,11 +1,8 @@
 name: Verify and prepare the Python release
 
+# Release-only: nothing runs on pull requests or pushes; run it from the
+# Actions tab (or `gh workflow run python-release.yml`).
 on:
-  pull_request:
-    paths: ['python/**', '.github/workflows/python-release.yml']
-  push:
-    branches: [main]
-    paths: ['python/**', '.github/workflows/python-release.yml']
   workflow_dispatch:
     inputs:
       publish:

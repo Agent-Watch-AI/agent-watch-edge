@@ -1,9 +1,9 @@
 name: Verify and prepare release
 
+# Release-only: nothing runs on pull requests or pushes. Run it from the Actions
+# tab (or `gh workflow run release.yml`) to verify a release candidate, and tick
+# `publish` to ship it.
 on:
-  pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       publish:
@@ -73,9 +73,26 @@ jobs:
           path: artifacts/
           if-no-files-found: error
 
+  # Static analysis of the release candidate. The package is TypeScript only, so
+  # one language and no build step of its own.
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          languages: typescript
+          # The extended suite as well: this package's whole job is to handle
+          # credentials and other people's config files.
+          queries: security-and-quality
+      - uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+
   publish:
     if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
-    needs: verify
+    needs: [verify, analyze]
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:

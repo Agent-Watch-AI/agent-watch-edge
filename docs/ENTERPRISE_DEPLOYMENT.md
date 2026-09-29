@@ -70,7 +70,8 @@ The npm package itself is never removed by `uninstall`; `npm rm -g
 
 ## Release operation
 
-Ordinary pushes and PRs verify and build artifacts; they do not publish. Run
+Nothing runs on pushes or PRs. A release starts with a `workflow_dispatch` of
+`release.yml`, which verifies and builds artifacts; locally the same is: run
 `npm ci`, the test/lint/typecheck/build checks, then `npm run release:artifacts`
 to create a verified tarball, production dependency SBOM, and `SHA256SUMS`.
 Verify with `sha256sum --check SHA256SUMS` from `artifacts` (macOS:
@@ -101,7 +102,7 @@ the YAML to find them: every action is pinned to a commit SHA rather than a
 mutable tag; `npm ci` runs with `--ignore-scripts`, as pack and publish already
 did, so no dependency lifecycle script executes in the job that builds the
 published tarball; `npm audit --omit=dev --audit-level=high` gates on advisories
-in what actually ships; CodeQL runs on every change and weekly; and Dependabot
+in what actually ships; CodeQL runs on every release (the release workflow is dispatch-only, nothing runs on pull requests); and Dependabot
 opens grouped weekly updates for both npm and the pinned actions. Package verification permits built JS/types and public
 documentation only, with a 2 MB unpacked review ceiling. Hundreds of small files
 are expected from the existing module layout and declarations; bundling solely
@@ -150,8 +151,8 @@ as a fallback.
 
 ## Verification scope and performance
 
-CI runs lint, type checking, coverage and build on Linux and macOS with Node 20
-and 24. Provider configuration is tested in isolated temporary homes; this does
+The release workflow runs lint, type checking, coverage and build on Linux and
+macOS with Node 20 and 24. Provider configuration is tested in isolated temporary homes; this does
 not replace a managed-fleet pilot with the real agent versions. Windows remains
 unverified. The release artifact is produced once on Linux/Node 24.
 

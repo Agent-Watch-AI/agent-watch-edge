@@ -938,11 +938,18 @@ describe('the checkout the gate asks about, from a session’s second turn on (A
     expect(asked[1]).toMatchObject({ repository: 'github.com/acme/core', branch: 'main' });
   });
 
-  it('falls back to today’s answer when the remembered checkout has no remote, only a folder name', async () => {
-    await new TurnStateStore(resolvePaths(world.env).turnsDir).rememberWorkCheckout('gate-session', { root: worktree, repository: 'core-AWT-1', at: new Date().toISOString() });
-    await hook(prompt('p1'), core);
+  it('falls back to today’s answer when the remembered repository is not a canonical remote', async () => {
+    // A folder name (a checkout with no remote), and what a damaged or edited file could hold.
+    const store = new TurnStateStore(resolvePaths(world.env).turnsDir);
 
-    expect(asked[0]).toMatchObject({ repository: 'github.com/acme/core', branch: 'main' });
+    for (const repository of ['core-AWT-1', 'https://user:secret@github.com/acme/core', 'user:secret@github.com/acme/core', 'github.com/acme/core?token=secret']) {
+      await store.rememberWorkCheckout('gate-session', { root: worktree, repository, at: new Date().toISOString() });
+      await hook(prompt(`p-${asked.length}`), core);
+    }
+
+    expect(asked).toHaveLength(4);
+
+    for (const entry of asked) expect(entry).toMatchObject({ repository: 'github.com/acme/core', branch: 'main' });
   });
 
   it('never names a checkout another tenant’s root governs', async () => {

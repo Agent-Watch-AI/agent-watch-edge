@@ -12,6 +12,7 @@ import { enrichEvents } from '../events/enrich.js';
 import type { AgentWatchEvent } from '../events/types/events.types.js';
 import { readGateCheckout, type GateCheckout } from '../git/gate-checkout.js';
 import { checkoutRootOf } from '../git/checkout-root.js';
+import { normalizeRemote } from '../git/remote-sanitize.js';
 import { developerIdentity, runGit } from '../git/git-context.js';
 import { shellDirectories } from '../providers/shared/shell-directories.js';
 import { runSnapshotPipeline } from '../snapshot/snapshot-pipeline.js';
@@ -280,9 +281,11 @@ async function lastWorkCheckout(state: HookPipelineState, sessionId: string | un
     const work = await new TurnStateStore(state.paths.turnsDir).readWorkCheckout(sessionId);
     const roots = state.globalConfig.config.roots;
 
-    // A checkout with no remote is remembered by its folder name, which names no
-    // repository the platform knows; today's gate states nothing for it either.
-    if (!work?.repository.includes('/')) return undefined;
+    // Only a value already in the canonical, credential-free form git capture
+    // produces: a checkout with no remote is remembered by its folder name, which
+    // names no repository (today's gate states nothing for it either), and a
+    // damaged or hand-edited file must never put anything else on the request.
+    if (!work || normalizeRemote(`https://${work.repository}`) !== work.repository) return undefined;
 
     return selectRoot(roots, work.root)?.path === selectRoot(roots, state.cwd)?.path ? work : undefined;
   } catch {

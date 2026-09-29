@@ -1,7 +1,7 @@
 # Audit this package with your own coding agent
 
-Paste the prompt below into Claude Code, Codex, Cursor or Gemini CLI with this
-repository checked out. It asks the agent to answer the questions a security
+Paste the prompt below into Claude Code, Codex, Cursor or Gemini CLI, run on a copy
+of this repository prepared as described below. It asks the agent to answer the questions a security
 reviewer asks about a telemetry collector, to cite a file and line for every
 claim, and to list what it could not verify. Compare the report it produces
 against [DATA_HANDLING.md](DATA_HANDLING.md), which answers questions 1 to 10.
@@ -14,16 +14,21 @@ Run it against the exact revision you intend to install. The findings are
 only as good as the checkout they were made on.
 
 The checkout is the thing under audit, so it must neither steer the auditor nor
-run. Two rules, both required:
+run. Coding agents treat project files as configuration: instructions (`AGENTS.md`,
+`CLAUDE.md` and their variants, nested copies), hooks that run when a session
+starts, and MCP servers. Some of it acts before your prompt is read, and no list of
+file names stays complete. So isolate by construction:
 
-- **No checkout instructions.** Coding agents load files such as `AGENTS.md`,
-  `CLAUDE.md`, `GEMINI.md` and `.cursor/rules` as instructions, above anything a
-  prompt says. Run the agent with project instructions disabled. If it cannot
-  disable them, audit a copy of the checkout with those files removed, and read
-  the removed files yourself as part of the audit.
-- **No checkout code.** Do not run `npm install`, `npm pack` or any script from
-  the checkout: `prepack` and `prepare` run package-controlled code. To inspect
-  what is published, fetch the registry artifact instead (below).
+1. Work in a disposable VM or container with no credentials in it.
+2. Export the revision as plain files, never a live checkout the agent opens first:
+   `git archive <revision> | tar -x -C audit/`.
+3. Before starting any agent there, set aside every dot-directory except `.github`
+   (`.claude`, `.codex`, `.cursor`, `.gemini`, `.agents`, `.vscode` and any other),
+   every dotfile except `.gitignore` and `.npmignore`, and every file whose name
+   contains `AGENTS`, `CLAUDE` or `GEMINI`, at any depth. Read what you set aside
+   yourself, as part of the audit.
+4. Start the agent with project configuration disabled where it offers that, and
+   run nothing from the export: no `npm install`, `npm pack` or scripts.
 
 ---
 
@@ -109,10 +114,12 @@ bind a consumer's install, so do not treat it as what gets installed. Inspect th
 published artifact without running it: `npm pack @agent-watch-ai/edge@<version>
 --ignore-scripts` from outside the checkout downloads the tarball, then compare
 it with the source. If I give you the lockfile or SBOM of the target
-installation, use it; otherwise report every range as unresolved. List lifecycle
-scripts (preinstall, install, postinstall, prepack, prepare, postpack) in this
-package and in the resolved dependencies you can see, read statically. Note anything that downloads code at install or
-run time.
+installation, use it; otherwise report every range as unresolved. List every script
+npm runs without being asked (any `scripts` entry whose name is an npm lifecycle
+event, including pre and post variants, and the implicit `node-gyp rebuild` when a
+package has `binding.gyp`) in this package and in the resolved dependencies you
+can see, read statically, never run. Note anything that downloads code at install
+or run time.
 
 ## 12. Verdict
 Give a one-paragraph verdict. Then list, as a numbered list, the questions you

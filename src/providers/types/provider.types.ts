@@ -113,6 +113,12 @@ export interface AgentProvider {
    * Undefined for any payload that is not a shell call.
    */
   shellCall?(payload: unknown): ShellCall | undefined;
+  /**
+   * The folders the agent has open, when it reports them apart from `cwd`
+   * (Cursor's `workspace_roots`). Candidates for the checkout a turn worked in,
+   * as weak as the cwd: git decides whether the turn changed one.
+   */
+  workspaceRoots?(payload: unknown): readonly string[] | undefined;
   readonly nativeTelemetry?: NativeTelemetryConfigurator;
 }
 

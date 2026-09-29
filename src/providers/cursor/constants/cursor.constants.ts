@@ -95,6 +95,16 @@ export const CURSOR_READ_TOOL_NAME = 'Read';
 export const CURSOR_EDIT_TOOL_NAME = 'Edit';
 export const CURSOR_SHELL_TOOL_NAME = 'Shell';
 
+/** The dedicated shell hooks, with `command` (and, before the call, `cwd`) at the top level. */
+export const CURSOR_SHELL_EVENTS: ReadonlySet<string> = new Set(['beforeShellExecution', 'afterShellExecution']);
+
+/** The generic hook that fires before any tool call, the shell's included. */
+export const CURSOR_GENERIC_TOOL_START_EVENT = 'preToolUse';
+
+/** Where `preToolUse` for `Shell` puts the command and its directory in `tool_input`. */
+export const CURSOR_SHELL_COMMAND_KEY = 'command';
+export const CURSOR_SHELL_WORKDIR_KEY = 'working_directory';
+
 /** Attachment field carrying a file path. */
 export const ATTACHMENT_FILE_PATH_KEY = 'file_path';
 

@@ -18,6 +18,12 @@
   session last changed, not the folder the agent sits in. The first prompt, and a
   session that has changed nothing, are asked about exactly as before; the prompt
   hook still starts no git process.
+- Codex, Cursor, Gemini CLI and Antigravity shell calls are read the same way.
+  Gemini's `run_shell_command` now counts as a shell call. A working directory the
+  agent reports for the call (Cursor's shell `cwd`, Gemini's absolute `dir_path`,
+  Antigravity's `Cwd`) is a candidate as it stands, and so are Cursor's workspace
+  roots. A Cursor hook that reports no `cwd` now resolves to its first workspace
+  root, not the directory Cursor started the hook process in.
 
 ### Behaviour change: developer prompts are never collected
 

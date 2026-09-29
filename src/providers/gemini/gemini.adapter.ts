@@ -1,8 +1,10 @@
 import type { AgentWatchEvent, CanonicalEventType, EventPatch } from '../../events/types/events.types.js';
 import { sha256Hex } from '../../events/event-id.js';
 import { baseEvent, promptPatch, responsePatch, toolPatch, withPatch } from '../shared/event-builder.js';
-import { classifyTool, parseMcpToolName, toolCompleteType, toolStartType } from '../shared/tooling.js';
-import type { HookContext, ToolStatus } from '../types/provider.types.js';
+import { asRecord } from '../../core/object.js';
+import { SHELL_COMMAND_KEY } from '../shared/constants/tooling.constants.js';
+import { classifyTool, parseMcpToolName, shellCallOf, toolCompleteType, toolStartType } from '../shared/tooling.js';
+import type { HookContext, ShellCall, ToolStatus } from '../types/provider.types.js';
 import {
   GEMINI_DISPLAY_NAME,
   GEMINI_EVENT_TYPE_MAP,
@@ -11,6 +13,8 @@ import {
   GEMINI_STOP_EVENTS,
   GEMINI_TOOL_COMPLETE_EVENTS,
   GEMINI_TOOL_EVENTS,
+  GEMINI_SHELL_DIR_KEY,
+  GEMINI_SHELL_CALL_EVENTS,
   GEMINI_TOOL_START_EVENTS,
   GEMINI_UNKNOWN_EVENT
 } from './constants/gemini.constants.js';
@@ -39,6 +43,28 @@ export function parseGeminiHookEvent(rawPayload: unknown, context: HookContext):
   const providerEventType = payload.hook_event_name ?? GEMINI_UNKNOWN_EVENT;
 
   return [withPatch(geminiBaseEvent(payload, providerEventType), hookPatch(payload, providerEventType, context))];
+}
+
+/**
+ * The command a `run_shell_command` call is about to run, and its `dir_path`.
+ *
+ * Gemini CLI's shell tool takes `command` and an optional `dir_path`
+ * (google-gemini/gemini-cli `packages/core/src/tools/definitions/base-declarations.ts`,
+ * 2026-09); the hook's `tool_input` is the model's raw arguments. `dir_path`
+ * counts only when absolute: Gemini resolves a relative one against its project
+ * root, which the hook payload does not name.
+ *
+ * @param rawPayload - Raw JSON from the hook's stdin.
+ * @returns The call, or undefined for any other payload.
+ */
+export function geminiShellCall(rawPayload: unknown): ShellCall | undefined {
+  const parsed = geminiPayloadSchema.safeParse(rawPayload);
+
+  if (!parsed.success || !GEMINI_SHELL_CALL_EVENTS.has(parsed.data.hook_event_name ?? '') || classifyTool(parsed.data.tool_name) !== 'shell') return undefined;
+
+  const input = asRecord(parsed.data.tool_input);
+
+  return shellCallOf(input?.[SHELL_COMMAND_KEY], input?.[GEMINI_SHELL_DIR_KEY]);
 }
 
 /**

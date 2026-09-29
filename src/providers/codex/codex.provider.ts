@@ -3,7 +3,7 @@ import type { AgentProvider, HookContext, ProviderHookResponse } from '../provid
 import { CODEX_PROMPT_SUBMIT_EVENTS } from './constants/codex.constants.js';
 import { detectCodex } from './codex.detect.js';
 import { installCodexHooks, uninstallCodexHooks } from './codex.hooks.js';
-import { parseCodexHookEvent } from './codex.adapter.js';
+import { codexShellCall, parseCodexHookEvent } from './codex.adapter.js';
 import { CodexOtelConfigurator } from './codex.otel.js';
 
 export const codexProvider: AgentProvider = {
@@ -24,5 +24,6 @@ export const codexProvider: AgentProvider = {
    */
   getBlockResponse: (payload: unknown, message: string): ProviderHookResponse | undefined =>
     hookRefusal(payload, CODEX_PROMPT_SUBMIT_EVENTS, { continue: false, stopReason: message, systemMessage: message }),
+  shellCall: codexShellCall,
   nativeTelemetry: new CodexOtelConfigurator()
 };

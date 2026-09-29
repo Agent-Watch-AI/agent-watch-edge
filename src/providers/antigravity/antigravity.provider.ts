@@ -1,5 +1,5 @@
 import type { AgentProvider, HookContext, ProviderHookResponse } from '../types/provider.types.js';
-import { antigravityCwd, antigravityHookEvent, parseAntigravityHookEvent } from './antigravity.adapter.js';
+import { antigravityCwd, antigravityHookEvent, antigravityShellCall, parseAntigravityHookEvent } from './antigravity.adapter.js';
 import { detectAntigravity } from './antigravity.detect.js';
 import { installAntigravityHooks, uninstallAntigravityHooks } from './antigravity.hooks.js';
 import {
@@ -22,7 +22,8 @@ export const antigravityProvider: AgentProvider = {
 
     return { stdout: JSON.stringify(decision ?? {}), exitCode: 0 };
   },
-  resolveCwd: antigravityCwd
+  resolveCwd: antigravityCwd,
+  shellCall: antigravityShellCall
   // No nativeTelemetry: Antigravity exposes no OTLP exporter configuration, so
   // there is no llm.call ledger source and turn summaries stay
   // usage_status=pending. Adding a configurator would claim a capability the

@@ -28,7 +28,7 @@ import { identityPaths, settleLegacyQueue } from '../transport/queue-partition.j
 import type { EventTransport } from '../transport/types/transport.types.js';
 import { eventsUrl } from '../config/config.js';
 import { TurnStateStore } from '../turns/turn-state.js';
-import { SHELL_REREAD_TYPES, TOOL_START_TYPES } from '../turns/constants/turns.constants.js';
+import { MAX_TURN_CHECKOUTS, SHELL_REREAD_TYPES, TOOL_START_TYPES } from '../turns/constants/turns.constants.js';
 import type { WorkCheckoutMemo } from '../turns/types/turn-state.types.js';
 import { trackTurnOutcome, type TurnOutcome } from '../turns/turn-tracker.js';
 import {
@@ -37,6 +37,7 @@ import {
   STAGE_DELIVER,
   STAGE_ENFORCE,
   STAGE_ENRICH,
+  MAX_WORKSPACE_ROOTS,
   STAGE_NOMINATE,
   STAGE_PARSE_EVENTS,
   STAGE_RESOLVE_CONTEXT,
@@ -137,34 +138,61 @@ async function parseEvents(state: HookPipelineState): Promise<StepOutcome<HookPi
  * holds either. A failure logs a fixed sentence, never its error, which could
  * quote a path.
  *
+ * A working directory the agent names for the call (Codex `workdir`, Cursor's
+ * shell `cwd`) is nominated as it stands, and the command's relative paths are
+ * read against it. The folders an agent has open (Cursor's workspace roots) are
+ * candidates too, but weak ones: they say where the agent sits, not what the
+ * call named.
+ *
  * Only on a tool-start hook, or a tool call's completion, failed or not (a shell
  * command may have created the worktree it named; `shellCall` answers only for
  * a shell), and only while git capture is on: which checkout a
  * turn worked in is git metadata, and a developer who turned that off said no.
+ * Open folders are read on a tool start only.
  *
  * @param state - Current flow state.
  * @returns The state, with the named checkouts' roots.
  */
 async function nominate(state: HookPipelineState): Promise<StepOutcome<HookPipelineState>> {
-  if (!state.config.capture.git || !state.provider.shellCall || !state.events.some((event) => TOOL_START_TYPES.has(event.event.type) || SHELL_REREAD_TYPES.has(event.event.type))) {
-    return next(state);
-  }
+  const start = state.events.some((event) => TOOL_START_TYPES.has(event.event.type));
+
+  if (!state.config.capture.git || (!start && !state.events.some((event) => SHELL_REREAD_TYPES.has(event.event.type)))) return next(state);
 
   try {
-    const call = state.provider.shellCall(state.payload);
+    const call = state.provider.shellCall?.(state.payload);
+    // Untrusted: only an absolute directory is taken, never one resolved against a guess.
+    const workdir = typeof call?.workdir === 'string' && path.isAbsolute(call.workdir) ? call.workdir : undefined;
+    const named = [
+      ...(workdir ? [workdir] : []),
+      ...(typeof call?.command === 'string' && call.command ? shellDirectories(call.command, workdir ?? state.cwd, state.env.home) : [])
+    ];
+    // ponytail: the first few open checkouts only, so weak candidates never fill a
+    // turn's checkout slots before a call names one; a wider window loses the rest.
+    // The folders looked at are bounded too, since the list is untrusted.
+    const open = [...new Set((start ? (state.provider.workspaceRoots?.(state.payload) ?? []) : []).filter((root) => typeof root === 'string' && path.isAbsolute(root)))].slice(
+      0,
+      MAX_TURN_CHECKOUTS
+    );
+    const [nominations, openRoots] = await Promise.all([checkoutRoots(named), checkoutRoots(open)]);
 
-    if (!call?.command) return next(state);
-
-    const cwd = call.workdir ? path.resolve(state.cwd, call.workdir) : state.cwd;
-    const roots = await Promise.all(shellDirectories(call.command, cwd, state.env.home).map(checkoutRootOf));
-    const nominations = [...new Set(roots.filter((root): root is string => root !== undefined))];
-
-    return next({ ...state, nominations });
+    return next({ ...state, nominations, workspaceRoots: openRoots.slice(0, MAX_WORKSPACE_ROOTS) });
   } catch {
     debugLog('shell nomination failed; this call names no checkout');
 
     return next(state);
   }
+}
+
+/**
+ * The distinct checkout roots a list of paths lies in, `stat`s only.
+ *
+ * @param paths - Absolute paths.
+ * @returns Canonical roots, in first-seen order.
+ */
+async function checkoutRoots(paths: readonly string[]): Promise<string[]> {
+  const roots = await Promise.all(paths.map(checkoutRootOf));
+
+  return [...new Set(roots.filter((root): root is string => root !== undefined))];
 }
 
 /**
@@ -390,7 +418,8 @@ async function trackTurnSafely(state: HookPipelineState): Promise<TurnOutcome> {
       cwd: state.cwd,
       readOnly: state.dryRun,
       failOpenReason: state.failOpenReason,
-      nominations: state.nominations
+      nominations: state.nominations,
+      workspaceRoots: state.workspaceRoots
     });
   } catch (error) {
     debugLog('turn summary failed:', error);

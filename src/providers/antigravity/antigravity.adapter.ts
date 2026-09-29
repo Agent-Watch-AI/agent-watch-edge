@@ -1,9 +1,11 @@
 import type { AgentWatchEvent, CanonicalEventType, EventPatch } from '../../events/types/events.types.js';
 import { sha256Hex } from '../../events/event-id.js';
 import { baseEvent, promptPatch, responsePatch, toolPatch, withPatch } from '../shared/event-builder.js';
-import { classifyTool, parseMcpToolName, toolCompleteType, toolStartType } from '../shared/tooling.js';
-import type { HookContext, ToolStatus } from '../types/provider.types.js';
+import { asRecord } from '../../core/object.js';
+import { classifyTool, extractCommand, parseMcpToolName, shellCallOf, toolCompleteType, toolStartType } from '../shared/tooling.js';
+import type { HookContext, ShellCall, ToolStatus } from '../types/provider.types.js';
 import {
+  ANTIGRAVITY_CWD_KEY,
   ANTIGRAVITY_DISPLAY_NAME,
   ANTIGRAVITY_HOOK_EVENT_BY_ARGS,
   ANTIGRAVITY_PROVIDER_ID,
@@ -55,6 +57,25 @@ export function antigravityCwd(rawPayload: unknown): string | undefined {
   if (!parsed.success) return undefined;
 
   return parsed.data.common?.workspacePaths?.[0];
+}
+
+/**
+ * The command a `run_command` tool call runs, and its `Cwd`, before and after it
+ * ran (a command can create the worktree it works in).
+ *
+ * Arguments as the fixtures record them, read off the tool schema in the `agy`
+ * binary: `CommandLine` and `Cwd`, PascalCase.
+ *
+ * @param rawPayload - Raw JSON from the hook's stdin.
+ * @returns The call, or undefined for any other payload.
+ */
+export function antigravityShellCall(rawPayload: unknown): ShellCall | undefined {
+  const parsed = antigravityPayloadSchema.safeParse(rawPayload);
+  const toolCall = parsed.success ? (parsed.data.preToolHookArgs ?? parsed.data.postToolHookArgs)?.toolCall : undefined;
+
+  if (classifyTool(toolCall?.name) !== 'shell') return undefined;
+
+  return shellCallOf(extractCommand(toolCall?.args), asRecord(toolCall?.args)?.[ANTIGRAVITY_CWD_KEY]);
 }
 
 /**

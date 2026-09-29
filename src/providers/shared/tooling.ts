@@ -1,7 +1,8 @@
+import path from 'node:path';
 import { asRecord, firstString } from '../../core/object.js';
 import { sha256Hex } from '../../events/event-id.js';
 import type { CanonicalEventType, ContentEvidence } from '../../events/types/events.types.js';
-import type { McpToolName, ToolKind } from '../types/provider.types.js';
+import type { McpToolName, ShellCall, ToolKind } from '../types/provider.types.js';
 import {
   COMMAND_KEYS,
   FILE_EDIT_TOOLS,
@@ -122,4 +123,23 @@ export function extractCommand(toolInput: unknown): string | undefined {
   if (!record) return undefined;
 
   return firstString(record, COMMAND_KEYS);
+}
+
+/**
+ * A shell call out of untrusted payload fields, type-checked.
+ *
+ * A working directory counts only when it is an absolute path: a relative one
+ * would have to be resolved against a guess.
+ *
+ * @param command - The command field as the payload carries it.
+ * @param workdir - The working-directory field as the payload carries it.
+ * @returns The call, or undefined when neither field is usable.
+ */
+export function shellCallOf(command: unknown, workdir: unknown): ShellCall | undefined {
+  const call = {
+    command: typeof command === 'string' && command.length > 0 ? command : undefined,
+    workdir: typeof workdir === 'string' && path.isAbsolute(workdir) ? workdir : undefined
+  };
+
+  return call.command || call.workdir ? call : undefined;
 }

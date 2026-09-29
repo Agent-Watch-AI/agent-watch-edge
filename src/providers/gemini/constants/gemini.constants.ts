@@ -68,4 +68,15 @@ export const GEMINI_TOOL_START_EVENTS: ReadonlySet<string> = new Set(['BeforeToo
 /** Tool hooks that report a completion. */
 export const GEMINI_TOOL_COMPLETE_EVENTS: ReadonlySet<string> = new Set(['AfterTool', 'PostToolUse', 'PostToolUseFailure']);
 
+/**
+ * Tool hooks a shell call is read on: the ones that fire once before it runs,
+ * and once after it ran (a command can create the worktree it works in), across
+ * both namings. `PermissionRequest` also counts as a start, but only for calls
+ * that ask, and reading it too would count those calls twice.
+ */
+export const GEMINI_SHELL_CALL_EVENTS: ReadonlySet<string> = new Set(['BeforeTool', 'PreToolUse', 'AfterTool', 'PostToolUse']);
+
+/** `run_shell_command`'s working-directory argument. */
+export const GEMINI_SHELL_DIR_KEY = 'dir_path';
+
 export const GEMINI_UNKNOWN_EVENT = 'unknown';

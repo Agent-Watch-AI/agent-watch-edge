@@ -279,8 +279,10 @@ tenant as completely as one that turned the gate off, and far less visibly.
 The global off switch (`agentwatch off`) short-circuits before the pipeline, so it
 disables enforcement along with hook collection at once; `doctor` reports that as an
 explicit budget-enforcement warning rather than leaving it silent. Source B does not
-stop at once: an agent already running keeps the exporter and credentials it started
-with until it is restarted or closed.
+stop at once everywhere. Claude Code asks `agentwatch otel-headers` for its bearer,
+which answers `{}` once the Edge is off, though batches already queued may still
+leave. Codex and Gemini were given static credentials at setup and keep exporting
+until they are restarted or closed.
 
 ### Gateability is per provider, and is not observability
 
@@ -303,10 +305,13 @@ is over cap; what they lack is the spend that would move them over it. Cursor CL
 and Antigravity cannot refuse at all. Either way the failure is quiet: an over-cap
 developer keeps working.
 
-The ledger is also machine-wide. Under multi-tenant `roots`, the hook applies the
-root's token before it asks, while the native exporters keep the machine token and
-endpoint written at setup, so a root with its own token is asking about a cap that
-its own usage never reaches.
+Under multi-tenant `roots` the ledger follows the root only on Claude Code. The
+hook applies the root's token before it asks. Claude Code's exporter gets its bearer
+per directory from `agentwatch otel-headers`, so a root sharing the machine's
+collector is billed to its own tenant, and a root enrolled against another backend
+gets no bearer at all. Codex and Gemini keep the machine token and endpoint written
+at setup, so on them a root with its own token asks about a cap its own usage never
+reaches.
 
 ### Cost on the critical path
 

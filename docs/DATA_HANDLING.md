@@ -190,8 +190,8 @@ started inside a repository.
 Which checkouts may be reported is decided by the folder the session started in.
 With project roots configured, only checkouts that the start folder's root
 claims; without them, only checkouts beneath the start folder. A checkout
-another root claims is refused outright: it gets no record and no git process
-runs in it. Checkouts are judged by where they really are, not through symlinks.
+another root claims is refused outright: it gets no record and is never
+fingerprinted. Checkouts are judged by where they really are, not through symlinks.
 Local turn state keeps the candidate roots, the fingerprints, the start folder
 and the session's last changed checkout's root (`work-checkout.json`); none of it
 is sent, and it goes with the session's other turn state.

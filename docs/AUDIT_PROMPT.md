@@ -4,8 +4,9 @@ Paste the prompt below into Claude Code, Codex, Cursor or Gemini CLI with this
 repository checked out. It asks the agent to answer the questions a security
 reviewer asks about a telemetry collector, to cite a file and line for every
 claim, and to list what it could not verify. Compare the report it produces
-against [DATA_HANDLING.md](DATA_HANDLING.md): every question the report raises
-should already be answered there, and if one is not, tell us.
+against [DATA_HANDLING.md](DATA_HANDLING.md), and the supply-chain section against
+[ENTERPRISE_DEPLOYMENT.md](ENTERPRISE_DEPLOYMENT.md): every question the report
+raises should already be answered there, and if one is not, tell us.
 
 Run it against the exact revision you intend to install. The findings are
 only as good as the checkout they were made on.

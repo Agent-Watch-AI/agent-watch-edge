@@ -6,8 +6,8 @@ reviewer asks about a telemetry collector, to cite a file and line for every
 claim, and to list what it could not verify. Compare the report it produces
 against [DATA_HANDLING.md](DATA_HANDLING.md), which answers questions 1 to 10.
 Question 11 has no written answer beyond the release controls in
-[ENTERPRISE_DEPLOYMENT.md](ENTERPRISE_DEPLOYMENT.md) and the SBOM each release
-publishes. The repository lockfile does not ship and does not bind an install, so
+[ENTERPRISE_DEPLOYMENT.md](ENTERPRISE_DEPLOYMENT.md) and the production
+dependency SBOM that `npm run release:artifacts` generates. The repository lockfile does not ship and does not bind an install, so
 audit what your own install resolved. If the report raises a question neither answers, tell us.
 
 Run it against the exact revision you intend to install. The findings are

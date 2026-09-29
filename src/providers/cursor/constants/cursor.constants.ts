@@ -95,6 +95,9 @@ export const CURSOR_READ_TOOL_NAME = 'Read';
 export const CURSOR_EDIT_TOOL_NAME = 'Edit';
 export const CURSOR_SHELL_TOOL_NAME = 'Shell';
 
+/** The dedicated hook that fires before a shell command runs, with `command` and `cwd` at the top level. */
+export const CURSOR_SHELL_START_EVENT = 'beforeShellExecution';
+
 /** Attachment field carrying a file path. */
 export const ATTACHMENT_FILE_PATH_KEY = 'file_path';
 

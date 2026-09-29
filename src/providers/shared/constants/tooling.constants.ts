@@ -2,10 +2,13 @@
  * Tool-name vocabularies, as O(1) sets.
  *
  * `run_command`, `edit_file` and `write_to_file` are Antigravity's names, read
- * off the tool schemas in the `agy` binary. A name no set lists falls through
- * to 'other' -> tool.completed, which is accurate rather than guessed.
+ * off the tool schemas in the `agy` binary. `run_shell_command` is Gemini CLI's
+ * (`SHELL_TOOL_NAME` in gemini-cli `packages/core/src/tools/definitions/base-declarations.ts`).
+ * Cursor's hooks call their shell tool `Shell` (cursor.com/docs/hooks), which
+ * `CURSOR_TOOL_KINDS` maps. A name no set lists falls through to 'other' ->
+ * tool.completed, which is accurate rather than guessed.
  */
-export const SHELL_TOOLS: ReadonlySet<string> = new Set(['Bash', 'shell', 'local_shell', 'exec_command', 'run_command']);
+export const SHELL_TOOLS: ReadonlySet<string> = new Set(['Bash', 'shell', 'local_shell', 'exec_command', 'run_command', 'run_shell_command']);
 export const FILE_READ_TOOLS: ReadonlySet<string> = new Set(['Read', 'read_file', 'view_image']);
 export const FILE_EDIT_TOOLS: ReadonlySet<string> = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'apply_patch', 'edit_file', 'write_to_file']);
 
@@ -26,3 +29,6 @@ export const FILE_PATH_KEYS = ['file_path', 'path', 'notebook_path', 'filePath',
  * Antigravity's name for it (`run_command`); everything else uses `command`.
  */
 export const COMMAND_KEYS = ['CommandLine', 'command'] as const;
+
+/** Where Codex and Gemini put the command in a shell call's `tool_input`. */
+export const SHELL_COMMAND_KEY = 'command';

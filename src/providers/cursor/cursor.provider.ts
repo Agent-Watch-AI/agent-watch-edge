@@ -3,7 +3,7 @@ import type { AgentProvider, HookContext, ProviderHookResponse } from '../provid
 import { CURSOR_PROMPT_SUBMIT_EVENTS } from './constants/cursor.constants.js';
 import { detectCursor } from './cursor.detect.js';
 import { installCursorHooks, uninstallCursorHooks } from './cursor.hooks.js';
-import { parseCursorHookEvent } from './cursor.adapter.js';
+import { cursorCwd, cursorShellCall, cursorWorkspaceRoots, parseCursorHookEvent } from './cursor.adapter.js';
 
 export const cursorProvider: AgentProvider = {
   id: 'cursor',
@@ -23,7 +23,10 @@ export const cursorProvider: AgentProvider = {
    * `user_message` explains why.
    */
   getBlockResponse: (payload: unknown, message: string): ProviderHookResponse | undefined =>
-    hookRefusal(payload, CURSOR_PROMPT_SUBMIT_EVENTS, { continue: false, user_message: message })
+    hookRefusal(payload, CURSOR_PROMPT_SUBMIT_EVENTS, { continue: false, user_message: message }),
+  resolveCwd: cursorCwd,
+  shellCall: cursorShellCall,
+  workspaceRoots: cursorWorkspaceRoots
   // No nativeTelemetry: Cursor has no OTel export, so there is no llm.call
   // ledger source. Turn summaries stay usage_status=pending until Cursor
   // enriches its transcripts with usage (see cursor-transcript.ts).

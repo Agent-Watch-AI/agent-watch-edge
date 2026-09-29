@@ -1,12 +1,15 @@
 import type { AgentWatchEvent, CanonicalEventType, EventPatch } from '../../events/types/events.types.js';
 import { sha256Hex } from '../../events/event-id.js';
 import { baseEvent, promptPatch, responsePatch, toolPatch, withPatch } from '../shared/event-builder.js';
-import { classifyTool, toolCompleteType, toolStartType } from '../shared/tooling.js';
-import type { HookContext } from '../types/provider.types.js';
+import { asRecord } from '../../core/object.js';
+import { SHELL_COMMAND_KEY } from '../shared/constants/tooling.constants.js';
+import { classifyTool, shellCallOf, toolCompleteType, toolStartType } from '../shared/tooling.js';
+import type { HookContext, ShellCall } from '../types/provider.types.js';
 import {
   CODEX_DISPLAY_NAME,
   CODEX_EVENT_TYPE_MAP,
   CODEX_PROVIDER_ID,
+  CODEX_TOOL_START_EVENT,
   CODEX_TOOL_EVENTS,
   CODEX_UNKNOWN_EVENT
 } from './constants/codex.constants.js';
@@ -31,6 +34,27 @@ export function parseCodexHookEvent(rawPayload: unknown, context: HookContext): 
   const providerEventType = payload.hook_event_name ?? CODEX_UNKNOWN_EVENT;
 
   return [withPatch(codexBaseEvent(payload, providerEventType), hookPatch(payload, providerEventType, context))];
+}
+
+/**
+ * The command a `PreToolUse` for a shell call is about to run.
+ *
+ * Codex reports every shell call to hooks as `Bash` with `tool_input:
+ * {command}` (openai/codex `core/src/tools/hook_names.rs`,
+ * `handlers/unified_exec/exec_command.rs`, 2026-09). The model's own `workdir`
+ * argument is dropped before the hook, so there is no working directory to
+ * read: the call runs in the payload's `cwd` unless its command says otherwise.
+ * A command given as an argv array (the older `shell` tool) is read too.
+ *
+ * @param rawPayload - Raw JSON from the hook's stdin.
+ * @returns The command, or undefined for any other payload.
+ */
+export function codexShellCall(rawPayload: unknown): ShellCall | undefined {
+  const parsed = codexPayloadSchema.safeParse(rawPayload);
+
+  if (!parsed.success || parsed.data.hook_event_name !== CODEX_TOOL_START_EVENT || classifyTool(parsed.data.tool_name) !== 'shell') return undefined;
+
+  return shellCallOf(asRecord(parsed.data.tool_input)?.[SHELL_COMMAND_KEY], undefined);
 }
 
 /**

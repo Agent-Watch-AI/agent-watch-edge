@@ -1,10 +1,11 @@
+import path from 'node:path';
 import { asRecord, compact } from '../../core/object.js';
 import type { UnknownRecord } from '../../core/types/core.types.js';
 import type { AgentWatchEvent, CanonicalEventType, EventPatch } from '../../events/types/events.types.js';
 import { sha256Hex } from '../../events/event-id.js';
 import { baseEvent, filePathPatch, promptPatch, responsePatch, toolPatch, withPatch } from '../shared/event-builder.js';
-import { classifyTool, contentEvidence, parseMcpToolName, toolCompleteType, toolStartType } from '../shared/tooling.js';
-import type { HookContext, ToolKind, ToolStatus } from '../types/provider.types.js';
+import { classifyTool, contentEvidence, parseMcpToolName, shellCallOf, toolCompleteType, toolStartType } from '../shared/tooling.js';
+import type { HookContext, ShellCall, ToolKind, ToolStatus } from '../types/provider.types.js';
 import {
   ATTACHMENT_FILE_PATH_KEY,
   CURSOR_DEDICATED_COMPLETION_KINDS,
@@ -13,6 +14,7 @@ import {
   CURSOR_EVENT_TYPE_MAP,
   CURSOR_PROVIDER_ID,
   CURSOR_READ_TOOL_NAME,
+  CURSOR_SHELL_START_EVENT,
   CURSOR_SHELL_TOOL_NAME,
   CURSOR_TOOL_KINDS,
   CURSOR_UNKNOWN_EVENT
@@ -38,6 +40,49 @@ export function parseCursorHookEvent(rawPayload: unknown, context: HookContext):
   const providerEventType = payload.hook_event_name ?? CURSOR_UNKNOWN_EVENT;
 
   return [withPatch(cursorBaseEvent(payload, providerEventType), hookPatch(payload, providerEventType, context))];
+}
+
+/**
+ * The command `beforeShellExecution` is about to run, and the `cwd` it runs in.
+ *
+ * Only the dedicated shell hook: Cursor fires the generic `preToolUse` for the
+ * same call too, and reading both would count one call twice.
+ *
+ * @param rawPayload - Raw JSON from the hook's stdin.
+ * @returns The call, or undefined for any other payload.
+ */
+export function cursorShellCall(rawPayload: unknown): ShellCall | undefined {
+  const parsed = cursorPayloadSchema.safeParse(rawPayload);
+
+  if (!parsed.success || parsed.data.hook_event_name !== CURSOR_SHELL_START_EVENT) return undefined;
+
+  return shellCallOf(parsed.data.command, parsed.data.cwd);
+}
+
+/**
+ * The folders the Cursor window has open, absolute paths only.
+ *
+ * @param rawPayload - Raw JSON from the hook's stdin.
+ * @returns The roots; empty when the payload names none.
+ */
+export function cursorWorkspaceRoots(rawPayload: unknown): string[] {
+  const parsed = cursorPayloadSchema.safeParse(rawPayload);
+
+  return parsed.success ? (parsed.data.workspace_roots ?? []).filter((root) => path.isAbsolute(root)) : [];
+}
+
+/**
+ * Where a payload that reports no `cwd` happened: the first workspace root.
+ *
+ * Cursor puts `cwd` on its shell and tool hooks only; the prompt, file-edit and
+ * stop hooks would otherwise resolve against the directory the hook process
+ * started in, which Cursor does not promise is the workspace.
+ *
+ * @param rawPayload - Raw JSON from the hook's stdin.
+ * @returns The first workspace root, or undefined.
+ */
+export function cursorCwd(rawPayload: unknown): string | undefined {
+  return cursorWorkspaceRoots(rawPayload)[0];
 }
 
 /**

@@ -30,9 +30,13 @@ Tool input and tool output bodies are not collected by default. Default capture 
 ```
 
 To find which checkout a turn worked in, the hook inspects a shell command's text
-in memory for directory names and discards it. Only checkout roots confirmed on
-disk are kept, in local turn state, until the turn closes. The command is never
-stored, queued, logged or sent. This happens only while `capture.git` is on.
+in memory for directory names and discards it. This applies to the shell calls of
+every agent the edge supports: Claude Code, Codex, Cursor, Gemini CLI and
+Antigravity. The command's working directory is used as a candidate when the agent
+reports it (Cursor's shell `cwd`, Gemini's `dir_path`, Antigravity's `Cwd`), and so
+are the folders a Cursor window has open. Only checkout roots confirmed on disk
+are kept, in local turn state, until the turn closes. The command is never stored,
+queued, logged or sent. This happens only while `capture.git` is on.
 
 Configurations written by earlier releases may still carry `capture.prompts` or
 `capture.responses`. Those keys are ignored on load whatever their value, the next
@@ -174,7 +178,8 @@ can remain absolute, with the home prefix abbreviated.
 Each turn reports the checkout its work changed, wherever the session started.
 Agents often sit in one folder and work in a worktree beside it through shell
 commands. A tool hook names candidate checkouts — the one it runs in, a file
-tool's file's, and those a shell command names — and records each candidate's
+tool's file's, those a shell command names or runs in, and Cursor's open
+workspace folders — and records each candidate's
 root with a fingerprint of it (HEAD, branch, and the dirty paths' status letters,
 sizes and modification times). The turn's closing hook fingerprints them again and
 reports, in order: the checkout the turn changed most; else the session's last

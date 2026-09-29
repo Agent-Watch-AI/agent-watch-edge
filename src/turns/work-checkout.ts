@@ -242,7 +242,9 @@ async function hookCandidates(
   const all: { root: string | undefined; via: CheckoutVia }[] = [
     ...nominations.map((root) => ({ root, via: 'shell' as const })),
     { root: fileRoot, via: 'file' },
-    { root: cwdRoot, via: 'cwd' }
+    { root: cwdRoot, via: 'cwd' },
+    // The folders the agent has open say where it sits, as its cwd does.
+    ...(start ? (options.workspaceRoots ?? []) : []).map((root) => ({ root, via: 'cwd' as const }))
   ];
   const distinct = new Map<string, CheckoutVia>();
 

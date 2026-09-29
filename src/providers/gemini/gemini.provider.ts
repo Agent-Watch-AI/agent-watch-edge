@@ -3,7 +3,7 @@ import type { AgentProvider, HookContext, ProviderHookResponse } from '../provid
 import { GEMINI_PROMPT_EVENTS } from './constants/gemini.constants.js';
 import { detectGemini } from './gemini.detect.js';
 import { installGeminiHooks, uninstallGeminiHooks } from './gemini.hooks.js';
-import { parseGeminiHookEvent } from './gemini.adapter.js';
+import { geminiShellCall, parseGeminiHookEvent } from './gemini.adapter.js';
 import { GeminiOtelConfigurator } from './gemini.otel.js';
 
 export const geminiProvider: AgentProvider = {
@@ -21,5 +21,6 @@ export const geminiProvider: AgentProvider = {
    */
   getBlockResponse: (payload: unknown, message: string): ProviderHookResponse | undefined =>
     hookRefusal(payload, GEMINI_PROMPT_EVENTS, { decision: 'deny', reason: message }),
+  shellCall: geminiShellCall,
   nativeTelemetry: new GeminiOtelConfigurator()
 };

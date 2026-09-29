@@ -30,6 +30,8 @@ export interface TrackTurnOptions {
   readonly failOpenReason?: FailOpenReason;
   /** Real roots of the checkouts this payload's shell command named; roots only. */
   readonly nominations?: readonly string[];
+  /** Real roots of the folders the agent has open (Cursor's workspace roots); weak candidates, like the cwd. */
+  readonly workspaceRoots?: readonly string[];
 }
 
 /** What one hook payload did to its turn. */

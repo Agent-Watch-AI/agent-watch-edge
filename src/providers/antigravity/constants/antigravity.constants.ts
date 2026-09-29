@@ -1,6 +1,9 @@
 export const ANTIGRAVITY_PROVIDER_ID = 'antigravity';
 export const ANTIGRAVITY_DISPLAY_NAME = 'Google Antigravity';
 
+/** `run_command`'s working-directory argument, PascalCase like all of its arguments. */
+export const ANTIGRAVITY_CWD_KEY = 'Cwd';
+
 /** Antigravity shares Gemini's home; its own config lives one level down. */
 export const ANTIGRAVITY_ROOT_SEGMENTS = ['.gemini', 'config'] as const;
 export const ANTIGRAVITY_CLI_DIR_SEGMENTS = ['.gemini', 'antigravity-cli'] as const;

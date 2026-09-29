@@ -61,6 +61,8 @@ export interface HookPipelineState extends HookPipelineInput {
    * stage.
    */
   readonly nominations?: readonly string[];
+  /** The real roots of the folders the agent has open, when it reports them (Cursor). Roots only. */
+  readonly workspaceRoots?: readonly string[];
   /** Local root of the checkout the closed turn reported; where its snapshot is taken. Never sent. */
   readonly workRoot?: string;
   /** That checkout's own capture policy, re-applied to the summary and asked by the snapshot. */

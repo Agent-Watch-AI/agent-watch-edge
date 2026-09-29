@@ -1,34 +1,32 @@
 # Audit this package with your own coding agent
 
-Paste the prompt below into Claude Code, Codex, Cursor or Gemini CLI, run on a copy
-of this repository prepared as described below. It asks the agent to answer the questions a security
+Paste the prompt below into Claude Code, Codex, Cursor or Gemini CLI with this
+repository checked out. It asks the agent to answer the questions a security
 reviewer asks about a telemetry collector, to cite a file and line for every
 claim, and to list what it could not verify. Compare the report it produces
 against [DATA_HANDLING.md](DATA_HANDLING.md), which answers questions 1 to 10.
 Question 11 has no written answer beyond the release controls in
 [ENTERPRISE_DEPLOYMENT.md](ENTERPRISE_DEPLOYMENT.md) and the production
-dependency SBOM that `npm run release:artifacts` generates. The repository lockfile does not ship and does not bind an install, so
-audit what your own install resolved. If the report raises a question neither answers, tell us.
+dependency SBOM that `npm run release:artifacts` generates. The repository
+lockfile does not ship and does not bind an install, so audit what your own
+install resolved. If the report raises a question neither answers, tell us.
 
 Run it against the exact revision you intend to install. The findings are
 only as good as the checkout they were made on.
 
-The checkout is the thing under audit, so it must neither steer the auditor nor
-run. Coding agents treat project files as configuration: instructions (`AGENTS.md`,
-`CLAUDE.md` and their variants, nested copies), hooks that run when a session
-starts, and MCP servers. Some of it acts before your prompt is read, and no list of
-file names stays complete. So isolate by construction:
+## Scope
 
-1. Work in a disposable VM or container with no credentials in it.
-2. Export the revision as plain files, never a live checkout the agent opens first:
-   `git archive <revision> | tar -x -C audit/`.
-3. Before starting any agent there, set aside every dot-directory except `.github`
-   (`.claude`, `.codex`, `.cursor`, `.gemini`, `.agents`, `.vscode` and any other),
-   every dotfile except `.gitignore` and `.npmignore`, and every file whose name
-   contains `AGENTS`, `CLAUDE` or `GEMINI`, at any depth. Read what you set aside
-   yourself, as part of the audit.
-4. Start the agent with project configuration disabled where it offers that, and
-   run nothing from the export: no `npm install`, `npm pack` or scripts.
+This prompt checks whether our documentation matches our code. It does not make
+a coding agent safe to point at a hostile repository. Coding agents load project
+files as instructions, hooks and tool configuration, some of it before any prompt
+is read, and a checkout written to attack its auditor can steer or subvert the
+agent reading it. Nothing a prompt says prevents that.
+
+If your threat model includes this repository attacking your reviewer, run the
+audit in a disposable VM or container that holds no credentials, and treat the
+agent's report as advisory: a human reads the cited lines before relying on it.
+The prompt itself tells the agent to treat every file as data and to execute
+nothing, which is as far as a prompt can go.
 
 ---
 

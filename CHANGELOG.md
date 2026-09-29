@@ -14,6 +14,10 @@
 - To find it, the hook reads a shell command's text in memory for directory names
   and discards it; nothing of the command is stored, queued, logged or sent.
 - Every git call the edge makes passes `--no-optional-locks`.
+- From a session's second turn on, the budget gate asks about the checkout the
+  session last changed, not the folder the agent sits in. The first prompt, and a
+  session that has changed nothing, are asked about exactly as before; the prompt
+  hook still starts no git process.
 
 ### Behaviour change: developer prompts are never collected
 

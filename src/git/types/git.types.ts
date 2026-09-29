@@ -56,6 +56,12 @@ export interface GateCheckoutOptions {
   now?(): Date;
   /** Git runner override, injectable for tests. */
   readonly run?: GitRunner;
+  /**
+   * The repository already known for a checkout rooted exactly at `cwd`: no
+   * remote lookup, so no git process. A walk that finds no `.git` at `cwd`
+   * itself answers undefined rather than borrowing an enclosing repository's.
+   */
+  readonly repository?: string;
 }
 
 /** One dirty entry of a checkout, stamped so a later edit to it shows. */

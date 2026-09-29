@@ -1,7 +1,9 @@
 import type * as ChildProcess from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
+import process from 'node:process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runHook } from '../src/cli/hook.js';
 import { configSchema, defaultConfig } from '../src/config/config.js';
@@ -799,5 +801,151 @@ describe('an answer that must not be kept still tidies up after the ones that we
     });
 
     await expect(fs.access(file)).rejects.toThrow();
+  });
+});
+
+describe('the checkout the gate asks about, from a session’s second turn on (AWT-128)', () => {
+  // A session parked in a folder that is no repository (`code/`), whose turn
+  // changed a feature worktree beside it. Real git, every hook through the entry
+  // point Claude Code calls, and a local decision endpoint that records what it
+  // was asked.
+  let world: TempWorld;
+  let server: http.Server;
+  let endpoint: string;
+  let asked: { repository: string | null; branch: string | null; spawned: number }[];
+  let workspace: string;
+  let core: string;
+  let worktree: string;
+  let spawnsAtHook: number;
+
+  const git = (cwd: string, ...args: string[]): string =>
+    execFileSync('git', args, { cwd, stdio: 'pipe', env: { ...process.env, HOME: world.home } }).toString().trim();
+
+  beforeEach(async () => {
+    world = await makeTempEnv();
+    asked = [];
+    server = http.createServer((request, response) => {
+      if ((request.url ?? '').startsWith('/v1/enforcement/decision')) {
+        const url = new URL(request.url ?? '', 'http://x');
+
+        asked.push({ repository: url.searchParams.get('repository'), branch: url.searchParams.get('branch'), spawned: spawned.count - spawnsAtHook });
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ decision: 'allow', cache_ttl_ms: 0 }));
+
+        return;
+      }
+
+      response.writeHead(202, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ accepted: 1 }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    server.keepAliveTimeout = 1;
+
+    const address = server.address();
+
+    endpoint = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
+    workspace = path.join(await fs.realpath(world.home), 'code');
+    core = path.join(workspace, 'core');
+    worktree = path.join(workspace, '.worktrees', 'core-AWT-1');
+
+    await fs.mkdir(path.join(core, 'src'), { recursive: true });
+    await fs.writeFile(path.join(core, 'src', 'a.ts'), 'a\n');
+    git(core, 'init', '-q', '-b', 'main');
+    git(core, 'remote', 'add', 'origin', 'git@github.com:acme/core.git');
+    git(core, 'add', '.');
+    git(core, '-c', 'user.email=t@e.st', '-c', 'user.name=t', 'commit', '-qm', 'one');
+    git(core, 'worktree', 'add', '-q', '-b', 'AWT-1-x', worktree);
+    await configure();
+  });
+
+  afterEach(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await world.cleanup();
+  });
+
+  async function configure(extra: Partial<AgentWatchConfig> = {}): Promise<void> {
+    await saveConfig(resolvePaths(world.env), { ...defaultConfig(), endpoint, token: 'aw_edge_test', developerEmail: DEVELOPER, ...extra });
+  }
+
+  async function hook(payload: Record<string, unknown>, cwd: string): Promise<void> {
+    spawnsAtHook = spawned.count;
+    expect(await runHook('claude', { env: world.env, input: JSON.stringify({ session_id: 'gate-session', ...payload, cwd }), writeStdout: () => {} })).toBe(0);
+  }
+
+  const prompt = (id: string) => ({ hook_event_name: 'UserPromptSubmit', prompt_id: id, prompt: 'go' });
+
+  /** One turn that edits a file in the worktree, from wherever the agent sits. */
+  async function turnChangingWorktree(id: string, cwd: string): Promise<void> {
+    const target = path.join(worktree, 'src', 'a.ts');
+    const edit = (hookName: string) => ({ hook_event_name: hookName, prompt_id: id, tool_name: 'Edit', tool_use_id: `${id}-t`, tool_input: { file_path: target } });
+
+    await hook(prompt(id), cwd);
+    await hook(edit('PreToolUse'), cwd);
+    await fs.writeFile(target, `${id}\n`);
+    await hook(edit('PostToolUse'), cwd);
+    await hook({ hook_event_name: 'Stop', prompt_id: id }, cwd);
+  }
+
+  it('asks about the worktree the last turn changed, from a folder that is no repository, and starts no git process', async () => {
+    await turnChangingWorktree('p1', workspace);
+    await hook(prompt('p2'), workspace);
+
+    expect(asked).toHaveLength(2);
+    // Counted when the request landed: the cost of asking, from the prompt hook's start.
+    expect(asked[1]).toEqual({ repository: 'github.com/acme/core', branch: 'AWT-1-x', spawned: 0 });
+  });
+
+  it('asks a first prompt exactly what it asks today', async () => {
+    await hook(prompt('p1'), workspace);
+    await hook({ hook_event_name: 'Stop', prompt_id: 'p1' }, workspace);
+    await hook(prompt('p2'), core);
+
+    expect(asked[0]).toEqual(expect.objectContaining({ repository: null, branch: null }));
+    // A session that changed nothing yet is asked about the folder it sits in.
+    expect(asked[1]).toEqual(expect.objectContaining({ repository: 'github.com/acme/core', branch: 'main' }));
+  });
+
+  it('sees a branch switched since the last turn', async () => {
+    await turnChangingWorktree('p1', workspace);
+    git(worktree, 'checkout', '-q', '-b', 'AWT-2-y');
+    await hook(prompt('p2'), workspace);
+
+    expect(asked[1]).toMatchObject({ repository: 'github.com/acme/core', branch: 'AWT-2-y' });
+  });
+
+  it('falls back to today’s answer when the worktree is gone', async () => {
+    await turnChangingWorktree('p1', workspace);
+    git(core, 'worktree', 'remove', '--force', worktree);
+    await hook(prompt('p2'), workspace);
+
+    // Today's answer for a folder that is no repository, and still no git process.
+    expect(asked[1]).toEqual({ repository: null, branch: null, spawned: 0 });
+  });
+
+  it('falls back to today’s answer when the remembered checkout is corrupt', async () => {
+    await turnChangingWorktree('p1', workspace);
+
+    const turnsDir = resolvePaths(world.env).turnsDir;
+
+    const memos = (await fs.readdir(turnsDir, { recursive: true })).filter((file) => file.endsWith('work-checkout.json'));
+
+    expect(memos).toHaveLength(1);
+    await fs.writeFile(path.join(turnsDir, memos[0]!), '{"root":');
+
+    await hook(prompt('p2'), core);
+
+    expect(asked[1]).toMatchObject({ repository: 'github.com/acme/core', branch: 'main' });
+  });
+
+  it('never names a checkout another tenant’s root governs', async () => {
+    const other = path.join(workspace, 'other');
+
+    await fs.mkdir(other, { recursive: true });
+    await configure({ roots: { [workspace]: { token: 'aw_edge_test' }, [worktree]: { token: 'aw_edge_other' } } } as Partial<AgentWatchConfig>);
+    await new TurnStateStore(resolvePaths(world.env).turnsDir).rememberWorkCheckout('gate-session', { root: worktree, repository: 'github.com/acme/core', at: new Date().toISOString() });
+    await hook(prompt('p1'), other);
+
+    expect(asked[0]).toEqual(expect.objectContaining({ repository: null, branch: null }));
   });
 });

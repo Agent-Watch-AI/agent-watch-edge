@@ -302,8 +302,9 @@ So "enforced" is a property of a (provider, source) pair, not of the product. A
 missing ledger and a missing gate fail differently. Cursor IDE, and Codex or Gemini
 without consent, still ask and still refuse a developer the platform already knows
 is over cap; what they lack is the spend that would move them over it. Cursor CLI
-and Antigravity cannot refuse at all. Either way the failure is quiet: an over-cap
-developer keeps working.
+and Antigravity cannot refuse at all. Both failures are quiet: without a ledger,
+the spend that should cross the cap goes unmeasured, and without a gate, a developer
+already over it keeps working.
 
 Under multi-tenant `roots` the ledger follows the root only on Claude Code. The
 hook applies the root's token before it asks. Claude Code's exporter gets its bearer

@@ -1,7 +1,8 @@
 # AgentWatch Edge — Architecture
 
 Status: implementation blueprint (written before code, per project process).
-Date: 2026-08-07.
+Date: 2026-08-07. Sections 1–10 are that blueprint. Anything numbered above it is a
+dated addition written after the code it describes.
 
 Every provider-specific claim below is tagged:
 
@@ -50,6 +51,9 @@ Two telemetry sources, deliberately kept distinct:
   configuration so the agent exports per-request logs and multi-agent traces. The backend
   normalizes completed requests to `llm.call`, durably upserts them, and finalizes the token,
   cost and per-agent fields of `turn.summary`. Claude transcript totals are provisional only.
+
+Only Source A is synchronous — the agent waits for the hook process to exit — which
+makes it the only channel a turn can be refused on. See §11.
 
 Correlation happens downstream: both streams carry the provider session ID
 (Claude: hook `session_id` == OTel `session.id` **[docs]**; Codex: hook `thread_id`/`session_id` ==
@@ -231,3 +235,93 @@ total and degrades only to an agent-type or `unattributed` group. Calls are idem
    non-durable receiver lossless.
 7. Windows support: paths module isolates XDG/APPDATA decisions; hooks themselves are
    shell-command based and untested on Windows in this MVP (documented limitation).
+
+## 11. Enforcement **(added 2026-09-19, after the code)**
+
+Detailed design: `docs/superpowers/specs/2026-08-26-llm-block-enforcement-design.md`
+(status: implemented; counterpart in `agent-watch-core`). Configuration and behaviour:
+README, "Budget enforcement". Neither states what the two sources of §2 imply about
+enforcement, which is what this section is for.
+
+### Only one source can refuse anything
+
+The two telemetry sources are not interchangeable, and enforcement is where the
+difference becomes structural: **the agent waits on exactly one of them.**
+
+| | Source A — hooks | Source B — native OTel |
+|---|---|---|
+| Carries | lifecycle events, `turn.summary` | `llm.call` — the usage ledger |
+| Transport | stdin/stdout of one `agentwatch hook` process | the agent exports directly to the backend (§7) |
+| Agent blocks on it | yes, until the process exits | no, fire-and-forget |
+| Can refuse a turn | yes | never |
+
+A refusal can only travel back down a channel the agent is waiting on, so the hook
+path is the only enforcement point the Edge has. Source B cannot block by
+construction: by the time a request log exists, the request has been made and
+billed. This is FR-14's "passive telemetry collection must not claim to block AI
+traffic" as it lands in this codebase.
+
+### A cap depends on both sources
+
+The loop crosses them in opposite directions:
+
+1. Source B reports what was spent (`llm.call`, agent → backend).
+2. The backend resolves that against the policy and answers
+   `GET /v1/enforcement/decision`.
+3. Source A asks that question at prompt-submit, and refuses the turn.
+
+A cap is therefore only as good as the ledger feeding it — which is why
+`enforcement`, `delivery` and `otel` are whole blocks in `GLOBAL_ONLY_BLOCKS` and
+`emit.llmCalls`/`emit.turnSummaries` are in `GLOBAL_ONLY_EMIT_KEYS`. A committed
+`.agentwatch.json` that silenced the usage ledger would defeat every cap in the
+tenant as completely as one that turned the gate off, and far less visibly.
+
+The global off switch (`agentwatch off`) short-circuits before the pipeline, so it
+disables enforcement along with collection; `doctor` reports that as an explicit
+budget-enforcement warning rather than leaving it silent.
+
+### Gateability is per provider, and is not observability
+
+Whether a provider can be gated depends on its hook protocol documenting a
+refusal; whether its spend can be measured depends on it having an OTel exporter.
+The two are independent, and Antigravity currently has neither:
+
+| Provider | Gated (Source A) | Ledger (Source B) |
+|---|---|---|
+| Claude Code | yes — `UserPromptSubmit` **[docs]** | native OTel |
+| Codex | yes — `UserPromptSubmit` **[docs]** | native OTel |
+| Gemini CLI | yes — `BeforeAgent`/`UserPromptSubmit` **[docs]** | native OTel |
+| Cursor | yes — `beforeSubmitPrompt` **[docs]** | **none** — no OTel export; usage comes from transcripts and stays `usage_status=pending` until Cursor enriches them |
+| Antigravity | **no** — only `PreToolUse` carries a decision, and a mid-turn tool gate is what the design rejected | **none** — no OTLP exporter configuration exists |
+
+So "enforced" is a property of a (provider, source) pair, not of the product: a
+Cursor tenant can hold a `block` cap whose ledger is provisional, and an
+Antigravity tenant one that can be neither measured nor applied. Both degrade
+quietly — an over-cap developer keeps working and keeps producing alerts.
+
+### Cost on the critical path
+
+The gate sits between the developer's keystroke and the agent's first token, so
+every part of it is bounded: `enforcementWouldAsk` is consulted before anything is
+paid for (a machine with no cap never walks the working copy), identity, checkout
+and model resolve in one `Promise.all`, the decision request has a 300 ms ceiling,
+and a disk cache keyed on the whole question (endpoint, token, developer, checkout,
+model) means a flat cap costs at most one bounded request per TTL. Process-per-hook
+is why that cache exists on disk at all: there is no memory to hold "this developer
+is allowed" between prompts. The same reason puts the breaker on disk: a failed
+request is never cached as an answer, it opens a cooldown, and until it expires the
+turns after it fail open (`circuit_open`) without paying the timeout again.
+
+What travels on the question has grown past the spec's single `developer_id`:
+`repository` + `branch` when they can be resolved cheaply (both or neither — what
+lets a feature-scoped cap be judged), and `model` when one is known. A
+feature-scoped cap makes the platform answer `cache_ttl_ms: 0`, because the answer
+is a fact about one checkout while the cache is keyed on the developer.
+
+### Trust boundary
+
+Every mechanism here is a config file in the developer's home directory, honoured
+by an agent that chose to read it. It can be edited, and the Edge can be
+uninstalled. MDM (`examples/mdm/`) is the deployment answer for an organization
+that needs the registration to survive a non-admin; nothing here survives an
+adversary, and the spec says so at more length.

@@ -131,6 +131,10 @@ prompt evidence hashes the prompt as the agent reported it.
   every checkout, home-relative (`~/Documents/a.xlsx`); a path outside the home
   directory is sent as it is. `files_touched` and `files_read` stay repo-relative.
 
+Between the prompt hook and the turn's close, the scrubbed prompt text and tool
+inputs sit in local turn state (mode 0600), and only while their flag is on; the
+close consumes them, and a session's end or the 24-hour expiry deletes the rest.
+
 The public summary type additionally supports backend-derived `llm_calls`,
 `agent_usage`, `reasoning_output_tokens`, `total_tokens`, and `cost_usd`.
 `agent_usage` holds agent/parent/type identifiers, call count, token counts and

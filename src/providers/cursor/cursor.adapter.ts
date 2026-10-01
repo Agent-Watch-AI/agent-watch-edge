@@ -203,7 +203,7 @@ function hookPatch(payload: CursorPayload, providerEventType: string, context: H
  */
 function submitPromptPatch(payload: CursorPayload, context: HookContext): EventPatch {
   const capture = context.config.capture;
-  const patch = promptPatch(payload.prompt ?? '');
+  const patch = promptPatch(payload.prompt ?? '', capture);
   const attachments = payload.attachments ?? [];
 
   if (attachments.length === 0) return patch;

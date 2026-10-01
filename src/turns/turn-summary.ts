@@ -4,8 +4,8 @@ import type { FailOpenReason } from '../enforcement/types/enforcement.types.js';
 import { deriveEventId, sha256Hex } from '../events/event-id.js';
 import { EVENT_SCHEMA_VERSION } from '../events/constants/events.constants.js';
 import type { FeatureCandidate } from '../events/types/events.types.js';
-import { MAX_TURN_FILES, PROVIDER_LABELS, UNKNOWN_TOOL_NAME } from './constants/turns.constants.js';
-import type { PromptRecord, ToolRecord } from './types/turn-state.types.js';
+import { MAX_TURN_FILES, MAX_TURN_TOOL_INPUTS, PROVIDER_LABELS, UNKNOWN_TOOL_NAME } from './constants/turns.constants.js';
+import type { PromptRecord, ToolInputSummary, ToolRecord } from './types/turn-state.types.js';
 import type { BuildTurnSummaryInput, TouchedFiles, TurnSummaryEvent } from './types/turn-summary.types.js';
 
 export type {
@@ -65,7 +65,11 @@ export function buildTurnSummary(input: BuildTurnSummaryInput): TurnSummaryEvent
     work_evidence: input.git?.repository ? input.workEvidence : undefined,
     files_touched: files.filesTouched.length > 0 ? files.filesTouched : undefined,
     files_read: files.filesRead.length > 0 ? files.filesRead : undefined,
+    external_files_touched: files.externalTouched.length > 0 ? files.externalTouched : undefined,
+    external_files_read: files.externalRead.length > 0 ? files.externalRead : undefined,
     prompt_evidence: input.prompts[0]?.evidence,
+    prompt_text: input.prompts[0]?.text,
+    tool_inputs: files.toolInputs.length > 0 ? files.toolInputs : undefined,
     response_evidence: input.response,
     tool_calls: input.tools.length,
     tools_used: files.toolsUsed,
@@ -84,41 +88,51 @@ export function buildTurnSummary(input: BuildTurnSummaryInput): TurnSummaryEvent
 }
 
 /**
- * Tool call counts and the files the turn read versus modified.
+ * Tool call counts, the files the turn read versus modified, and its tool inputs.
  *
- * One pass over the records: tool counting and both file lists come from the
- * same iteration rather than three filter/map chains (STYLEGUIDE 3.3). Each
- * list stops growing at {@link MAX_TURN_FILES}, which is what keeps a
- * file-heavy turn a summary with a truncated list rather than a summary the
- * backend refuses whole.
+ * One pass over the records: tool counting, the file lists and the inputs come
+ * from the same iteration rather than chained filter/maps (STYLEGUIDE 3.3).
+ * Each list stops growing at its cap, which is what keeps a file-heavy turn a
+ * summary with a truncated list rather than a summary the backend refuses whole.
  *
  * @param tools - The turn's tool records.
- * @returns Per-tool counts and the two file lists.
+ * @returns Per-tool counts, the file lists and the inputs.
  */
 function collectToolUsage(tools: readonly ToolRecord[]): TouchedFiles {
   const toolsUsed: Record<string, number> = {};
   const filesTouched = new Set<string>();
   const filesRead = new Set<string>();
+  const externalTouched = new Set<string>();
+  const externalRead = new Set<string>();
+  const toolInputs: ToolInputSummary[] = [];
 
   for (const tool of tools) {
     const name = tool.tool ?? UNKNOWN_TOOL_NAME;
 
     toolsUsed[name] = (toolsUsed[name] ?? 0) + 1;
 
-    if (!tool.filePath) continue;
+    if (tool.input && toolInputs.length < MAX_TURN_TOOL_INPUTS) toolInputs.push(tool.input);
 
     // files_touched is documented as files the agent MODIFIED; pure reads get
     // their own list. Legacy records without an access marker stay in
     // files_touched (the historical behavior) rather than being dropped.
-    if (tool.access === 'read') {
-      addCapped(filesRead, tool.filePath);
-      continue;
-    }
+    const read = tool.access === 'read';
 
-    addCapped(filesTouched, tool.filePath);
+    // A file outside every checkout keeps its bare basename in files_touched, as
+    // it always has, and adds its home-relative path to the external list.
+    if (tool.externalPath) addCapped(read ? externalRead : externalTouched, tool.externalPath);
+
+    if (tool.filePath) addCapped(read ? filesRead : filesTouched, tool.filePath);
   }
 
-  return { toolsUsed, filesTouched: [...filesTouched], filesRead: [...filesRead] };
+  return {
+    toolsUsed,
+    filesTouched: [...filesTouched],
+    filesRead: [...filesRead],
+    externalTouched: [...externalTouched],
+    externalRead: [...externalRead],
+    toolInputs
+  };
 }
 
 /**

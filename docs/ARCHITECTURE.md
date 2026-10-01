@@ -27,9 +27,10 @@ OpenTelemetry traces/logs. Key ideas worth reusing **[ref]**:
   `"hook:" + sha256(canonical-JSON of stable fields)`, with an `event_id_source` marker.
 - **Dedup + correlation state.** Bounded per-session dedup ledger; PreToolUse/PostToolUse matched
   through a persisted `tool_invocations` record; subagent start/stop matched via agent IDs.
-- **Privacy: developer prompts never collected; tool content off by default.** Raw prompt/response
-  text is dropped at the adapter under every configuration — there is no flag for it — and replaced
-  by `length` + `sha256`; the HTTP boundary strips any text an older release queued. Git remotes emitted only as a SHA-256 of the normalized,
+- **Privacy: content off by default; response text never collected.** Prompt text is kept only
+  under `capture.promptText` with consent (harness blocks removed, scrubbed, then bounded); response
+  text is dropped at the adapter under every configuration and replaced by `length` + `sha256`; the
+  HTTP boundary re-applies the flags and strips any text an older release queued. Git remotes emitted only as a SHA-256 of the normalized,
   credential-free URL. Doctor sanitizes endpoints; delivery errors stored as hash+length.
 - **Diagnostics with a stable JSON schema.** `doctor --json` reports registrations, exporter
   health, state-dir writability; exit 1 on degraded.

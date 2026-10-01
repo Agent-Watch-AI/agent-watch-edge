@@ -115,7 +115,7 @@ function hookPatch(payload: ClaudePayload, providerEventType: string, context: H
 
   if (providerEventType === 'SessionEnd') return { metadata: { sessionEndReason: payload.reason } };
 
-  if (providerEventType === 'UserPromptSubmit') return promptPatch(payload.prompt ?? '');
+  if (providerEventType === 'UserPromptSubmit') return promptPatch(payload.prompt ?? '', context.config.capture);
 
   if (CLAUDE_TOOL_EVENTS.has(providerEventType)) return claudeToolPatch(payload, providerEventType, context);
 

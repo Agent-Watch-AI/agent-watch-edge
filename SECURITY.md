@@ -11,8 +11,10 @@ expect an acknowledgement within a few business days.
 AgentWatch Edge handles developer activity metadata, so the following are treated as security
 bugs of the highest priority:
 
-- developer prompt or response text leaving the machine, or reaching the queue or turn state, under
-  any configuration; tool content leaving the machine while its capture flags are off
+- response text leaving the machine, or reaching the queue or turn state, under any configuration;
+  prompt text or tool content leaving the machine while its capture flag or the global consent
+  marker is off; captured text leaving unscrubbed or beyond its bound; a path naming the home
+  directory
 - setup enabling any agent's native prompt or response logging
 - secrets (tokens, keys, credentials, URL-embedded credentials) surviving the sanitizer in
   events, logs, queue files, or diagnostics output

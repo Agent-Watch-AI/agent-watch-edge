@@ -11,6 +11,7 @@ import {
   HOME_PLACEHOLDER,
   HOME_PLACEHOLDER_PREFIX,
   EMPTY_REPOSITORIES,
+  EXTERNAL_PATH_METADATA_KEY,
   PATH_BOUNDARY_LOOKAHEAD,
   REPO_ROOT_PLACEHOLDER,
   REPOSITORY_PATH_METADATA_KEY,
@@ -189,7 +190,16 @@ function enrichMetadata(metadata: AgentWatchEvent['metadata'], context: EnrichCo
 function pathFields(filePath: string, context: EnrichContext): Record<string, string> {
   const checkout = context.repositories.get(filePath);
 
-  if (!checkout) return { [FILE_PATH_METADATA_KEY]: toSafePath(filePath, context.git.repositoryRoot) };
+  if (!checkout) {
+    // With git capture off no checkout was resolved, so in-repo files land here
+    // too and would ship the repository's layout. ponytail: such a machine sends
+    // no external paths at all; telling them apart would cost the git lookups the
+    // flag turned off.
+    const external = context.options.config.capture.git ? externalPath(filePath, context.git.repositoryRoot, context.options.home) : undefined;
+    const fields = { [FILE_PATH_METADATA_KEY]: toSafePath(filePath, context.git.repositoryRoot) };
+
+    return external ? { ...fields, [EXTERNAL_PATH_METADATA_KEY]: external } : fields;
+  }
 
   const { root, relative } = checkout;
 
@@ -317,6 +327,31 @@ function relativize(root: string, target: string): string {
   const relative = path.relative(root, target);
 
   return relative === '' ? REPO_ROOT_PLACEHOLDER : relative;
+}
+
+/**
+ * Where a file outside every checkout lies, without the home directory's name.
+ *
+ * A spreadsheet in `~/Documents` is the target of a session with no repository,
+ * so it is kept — but as `~/Documents/a.xlsx`: the home directory names the
+ * person. A path outside home is kept as it is; with no home to compare against
+ * nothing is kept, since the path could be the home itself.
+ *
+ * @param filePath - Path from a tool payload.
+ * @param repositoryRoot - The hook's repository root, when inside one.
+ * @param home - Developer home directory, when known.
+ * @returns The path to send, or undefined when the file is in the repository or unplaceable.
+ */
+function externalPath(filePath: string, repositoryRoot: string | undefined, home: string | undefined): string | undefined {
+  if (!home || !path.isAbsolute(filePath) || (repositoryRoot && isInside(repositoryRoot, filePath))) return undefined;
+
+  return isInside(home, filePath) ? HOME_PLACEHOLDER_PREFIX + path.relative(home, filePath) : filePath;
+}
+
+function isInside(root: string, filePath: string): boolean {
+  const relative = path.relative(root, filePath);
+
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
 /**

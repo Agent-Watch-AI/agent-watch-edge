@@ -188,7 +188,7 @@ function hookPatch(payload: AntigravityPayload, hook: AntigravityHookEvent, cont
     // invocations are model calls inside the same turn.
     if (!isFirstInvocation(payload.preInvocationHookArgs?.invocationNum)) return {};
 
-    return promptPatch(payload.common?.lastUserInput ?? '');
+    return promptPatch(payload.common?.lastUserInput ?? '', context.config.capture);
   }
 
   if (hook === 'PostInvocation') {

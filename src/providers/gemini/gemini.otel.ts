@@ -319,8 +319,8 @@ export class GeminiOtelConfigurator implements NativeTelemetryConfigurator {
 
 /**
  * Gemini logs always carry function arguments, so they need tool-content
- * consent. Detailed traces can carry prompts, and developer prompts are never
- * collected, so no configuration makes them safe.
+ * consent. Detailed traces can carry prompts unbounded and unscrubbed, outside
+ * the summary's `promptText` path, so no configuration makes them safe.
  * @param config - Global, consent-gated configuration.
  * @returns The signals safe to materialize in Gemini settings.
  */

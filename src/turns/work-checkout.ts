@@ -32,7 +32,10 @@ export interface WorkCheckout {
   /** The checkout's git fields as the summary sends them; absent when it names none. */
   readonly git?: EventGit;
   readonly featureCandidates?: readonly FeatureCandidate[];
-  /** The turn's tools with every path dropped that lies outside the reported checkout. */
+  /**
+   * The turn's tools with every repo-relative path dropped that lies outside the
+   * reported checkout. A file in no checkout keeps its home-relative `externalPath`.
+   */
   readonly tools: readonly ToolRecord[];
   readonly evidence?: WorkEvidence;
   /** Local root of the reported checkout. Never sent. */
@@ -442,8 +445,9 @@ async function reportCheckout(
   const capture = probed.vanished ? narrowedByBranch(loaded, await branchCapture(probed.closing)) : loaded;
   // Its own paths and nothing else: another checkout's are a wrong vote in the
   // placement corpus. The calls still count.
-  // capture.files: false withholds every path, bare basenames included.
-  const own = capture.files ? keepingPathsIn(tools, root) : tools.map((record) => (record.filePath === undefined ? record : { ...record, filePath: undefined }));
+  // capture.files: false withholds every path, bare basenames and paths outside
+  // any checkout included.
+  const own = capture.files ? keepingPathsIn(tools, root) : tools.map((record) => ({ ...record, filePath: undefined, externalPath: undefined }));
 
   if (!capture.git) return { tools: own, capture };
 

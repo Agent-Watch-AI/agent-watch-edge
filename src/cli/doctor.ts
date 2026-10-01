@@ -56,7 +56,7 @@ export async function runDoctor(env: Env, options: DoctorOptions = {}): Promise<
   const gated = await withheldNativeSignals(env, context.config);
   const checks: Check[] = [
     { name: 'AgentWatch operation', level: context.disabled ? 'warn' : 'ok', detail: context.disabled ? 'DISABLED; restart running agents to stop native exporters' : 'enabled' },
-    { name: 'content capture consent', level: 'ok', detail: context.config.contentCaptureConsent ? 'granted globally (tool content only; prompts and responses are never collected)' : 'absent — tool content disabled; prompts and responses are never collected' },
+    { name: 'content capture consent', level: 'ok', detail: context.config.contentCaptureConsent ? 'granted globally (prompt text and tool content, per capture flag; responses are never collected)' : 'absent — prompt text and tool content disabled; responses are never collected' },
     retiredCaptureCheck(await storedRetiredCapture(context.paths)),
     nativePrivacyCheck(gated),
     nodeVersionCheck(),
@@ -143,9 +143,10 @@ function nativePrivacyCheck(gated: readonly string[]): Check {
 /**
  * Name retired prompt/response flags still written in the global config.
  *
- * They collect nothing whatever their value — the schema strips them — but a
- * file that still says `prompts: true` reads as opted in to anyone auditing the
- * machine. The next `agentwatch setup` removes them.
+ * They collect nothing whatever their value — the schema strips them, and
+ * prompt text is `promptText` now — but a file that still says `prompts: true`
+ * reads as opted in to anyone auditing the machine. The next `agentwatch setup`
+ * removes them.
  *
  * @param retired - Retired keys present on disk.
  * @returns The check.
@@ -156,8 +157,8 @@ function retiredCaptureCheck(retired: readonly string[]): Check {
     level: retired.length > 0 ? 'warn' : 'ok',
     detail:
       retired.length > 0
-        ? `capture ${retired.join(', ')} still in the config but ignored — prompt and response text is never collected; run \`agentwatch setup\` to remove them`
-        : 'none; prompt and response text is never collected'
+        ? `capture ${retired.join(', ')} still in the config but ignored — prompt text is capture.promptText, response text is never collected; run \`agentwatch setup\` to remove them`
+        : 'none'
   };
 }
 

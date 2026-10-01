@@ -199,8 +199,8 @@ export function ensureInstallationId(config: AgentWatchConfig): AgentWatchConfig
 /**
  * Fail-safe runtime config for a missing or corrupt file.
  *
- * Hooks keep running, but tool content capture is OFF: an accidental config wipe
- * must not silently start collecting tool I/O. The schema defaults are already
+ * Hooks keep running, but content capture is OFF: an accidental config wipe
+ * must not silently start collecting prompts or tool I/O. The schema defaults are already
  * off, so this now only pins the guarantee — deliberately, so that a future
  * default cannot quietly widen what a *broken* config collects.
  *
@@ -211,7 +211,7 @@ function fallbackConfig(): AgentWatchConfig {
 
   return {
     ...config,
-    capture: { ...config.capture, toolInput: false, toolOutput: false }
+    capture: { ...config.capture, promptText: false, toolInput: false, toolOutput: false }
   };
 }
 

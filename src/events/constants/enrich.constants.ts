@@ -20,6 +20,12 @@ export const REPO_ROOT_PLACEHOLDER = '.';
 export const FILE_PATH_METADATA_KEY = 'filePath';
 
 /**
+ * A tool call's file outside every checkout, home-relative (`~/Documents/a.xlsx`).
+ * Its own key so `filePath` keeps meaning repo-relative.
+ */
+export const EXTERNAL_PATH_METADATA_KEY = 'externalPath';
+
+/**
  * Metadata key naming the repository a tool call's file belongs to, relative
  * to the cwd of the hook that resolved it.
  *

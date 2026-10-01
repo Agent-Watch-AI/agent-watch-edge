@@ -124,20 +124,23 @@ export const GLOBAL_ONLY_BLOCKS = ['delivery', 'otel', 'enforcement'] as const;
 export const GLOBAL_ONLY_EMIT_KEYS: ReadonlySet<string> = new Set(['llmCalls', 'turnSummaries']);
 
 /**
- * The capture flags that carry raw content off the machine: tool arguments and
- * results. Prompt and response text is not here because nothing can send it.
+ * The capture flags that carry raw content off the machine: the developer's
+ * prompt text, tool arguments and tool results. Response text is not here
+ * because nothing can send it.
  *
  * Named once because two rules key on exactly this set: the consent gate zeroes
  * them on load, and `saveConfig` preserves the user's own values rather than the
  * gated ones, so granting consent later restores a choice instead of finding it
  * erased.
  */
-export const CONTENT_CAPTURE_KEYS = ['toolInput', 'toolOutput'] as const;
+export const CONTENT_CAPTURE_KEYS = ['promptText', 'toolInput', 'toolOutput'] as const;
 
 /**
- * Capture flags earlier releases honoured and this one never will: developer
- * prompts and the agent's replies are not collected. Stripped on load; named so
- * `setup` can remove them from the file once and `doctor` can say they remain.
+ * Capture flags earlier releases honoured and this one ignores. Prompt text is
+ * `promptText` now, a new name on purpose: a config that still says
+ * `prompts: true` from before AWT-281 must not start sending on upgrade. The
+ * agent's replies are not collected at all. Stripped on load; named so `setup`
+ * can remove them from the file once and `doctor` can say they remain.
  */
 export const RETIRED_CAPTURE_KEYS = ['prompts', 'responses'] as const;
 

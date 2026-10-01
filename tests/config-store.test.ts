@@ -26,8 +26,9 @@ describe('config load fallback', () => {
   it('the shipped defaults capture metadata but no content', () => {
     const capture = defaultConfig().capture;
 
-    // No prompt or response flag exists: that text is never collected.
-    expect(Object.keys(capture).sort()).toEqual(['files', 'git', 'toolInput', 'toolOutput']);
+    // No response flag exists: that text is never collected. Prompt text is opt-in.
+    expect(Object.keys(capture).sort()).toEqual(['files', 'git', 'promptText', 'toolInput', 'toolOutput']);
+    expect(capture.promptText).toBe(false);
     expect(capture.toolInput).toBe(false);
     expect(capture.toolOutput).toBe(false);
     // Repo/branch/SHA and per-file paths are metadata, and are what feature

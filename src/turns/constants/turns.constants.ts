@@ -115,6 +115,19 @@ export const IDE_SURFACE = 'ide';
  */
 export const MAX_TURN_FILES = 500;
 
+/**
+ * Bounds on the content a summary carries under the content flags. Applied after
+ * the text was scrubbed whole, never before: a cut through a credential leaves
+ * a prefix no pattern matches.
+ *
+ * ponytail: fixed character cuts, sized so a request plus a pasted link or a
+ * sheet id fits. A turn of 200 shell calls sends its first 50; per-tenant
+ * bounds would come from the backend.
+ */
+export const MAX_PROMPT_TEXT_LENGTH = 4000;
+export const MAX_TOOL_INPUT_LENGTH = 2000;
+export const MAX_TURN_TOOL_INPUTS = 50;
+
 /** Fallback tool name for a call the provider did not name. */
 export const UNKNOWN_TOOL_NAME = 'unknown';
 
@@ -122,6 +135,8 @@ export const UNKNOWN_TOOL_NAME = 'unknown';
 export const PROMPT_EVIDENCE_KEY = 'prompt';
 export const RESPONSE_EVIDENCE_KEY = 'response';
 export const FILE_PATH_KEY = 'filePath';
+export const EXTERNAL_PATH_KEY = 'externalPath';
+export const PROMPT_TEXT_KEY = 'promptText';
 
 /** Length of the hashed session directory name. */
 export const SESSION_DIR_HASH_LENGTH = 32;

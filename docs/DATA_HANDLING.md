@@ -11,16 +11,18 @@ require root, proxy model requests, or enforce an administrator-proof policy.
 
 ## Defaults and upgrade consent
 
-**Developer prompts are never collected.** AgentWatch never sends prompt text or
-response text, under any configuration: there is no capture flag for either. A
-prompt or response is represented only by its length and SHA-256.
+**Prompt text and tool content are opt-in; response text is never collected.**
+By default a prompt or response is represented only by its length and SHA-256.
+There is no capture flag for response text.
 
-Tool input and tool output bodies are not collected by default. Default capture is:
+Prompt text, tool input and tool output bodies are not collected by default.
+Default capture is:
 
 ```json
 {
   "contentCaptureConsent": false,
   "capture": {
+    "promptText": false,
     "toolInput": false,
     "toolOutput": false,
     "git": true,
@@ -36,14 +38,17 @@ Antigravity. The command's working directory is used as a candidate when the age
 reports it (Cursor's shell `cwd`, Gemini's `dir_path`, Antigravity's `Cwd`), and so
 are the folders a Cursor window has open. Only checkout roots confirmed on disk
 are kept, in local turn state, until the turn closes. The command is never stored,
-queued, logged or sent. This happens only while `capture.git` is on.
+queued, logged or sent for that purpose. This happens only while `capture.git` is
+on. Separately, with `toolInput` on, the command text itself is sent on the turn
+summary (see `tool_inputs` below).
 
 Configurations written by earlier releases may still carry `capture.prompts` or
-`capture.responses`. Those keys are ignored on load whatever their value, the next
+`capture.responses`. Those keys are ignored on load whatever their value —
+`prompts: true` does not turn on `promptText`, a new name chosen for that reason — the next
 `agentwatch setup` removes them from the file and says so once, and `doctor`
 reports them while they remain.
 
-Old configurations with both tool flags explicitly `true` are interpreted as
+Old configurations with content flags explicitly `true` are interpreted as
 metadata-only unless the global `contentCaptureConsent` marker is exactly `true`.
 Neither loading nor `agentwatch setup` rewrites those flags: the gate is applied in
 memory on every read, so adding the marker later restores the values already on
@@ -51,9 +56,9 @@ disk rather than finding them erased. Missing, unreadable, invalid, and corrupt
 global configuration do not authorize content capture. Git and file-path capture
 remain enabled unless separately disabled.
 
-Intentional tool-content opt-in requires editing the **global**
+Intentional content opt-in requires editing the **global**
 `~/.agentwatch/config.json`: set `contentCaptureConsent` to `true` and explicitly
-set `toolInput` and/or `toolOutput` to `true`. The marker alone does not enable
+set `promptText`, `toolInput` and/or `toolOutput` to `true`. The marker alone does not enable
 fields that are false. Set the marker to `false` to revoke consent. `config`,
 `status`, and `doctor` report consent and capture state without printing captured
 content. Repository `.agentwatch.json` files cannot grant consent, increase any
@@ -63,7 +68,8 @@ fields.
 
 Current policy is reapplied to old turn state before queueing, and to every queued
 record before HTTP delivery: summaries always lose `prompt` and `response` text an
-older release may have written, and repository snapshots are dropped entirely once
+older release may have written, lose `prompt_text` and `tool_inputs` unless their
+flag is on with consent, lose every path list once `capture.files` is off, and repository snapshots are dropped entirely once
 `capture.git` is off. Old files are not erased by an upgrade; their original content
 may remain locally until consumed or expired, but it is never sent.
 
@@ -100,18 +106,30 @@ availability determines which identifiers and usage values exist.
 
 The hook-generated flat fields are `provider`, `surface`, `session_id`, `turn_id`,
 `developer_id`, `repository`, `branch`, `commit`, `jira_ids`, `work_evidence`,
-`files_changed`, `files_touched`, `files_read`, `prompt_evidence`, `response_evidence`,
+`files_changed`, `files_touched`, `files_read`, `external_files_touched`,
+`external_files_read`, `prompt_evidence`, `prompt_text`, `tool_inputs`, `response_evidence`,
 `tool_calls`, `tools_used`, `model`, `billing_mode`, `input_tokens`,
 `cached_input_tokens`, `cache_creation_input_tokens`, `output_tokens`,
 `usage_status`, `started_at`, and `ended_at`. The nested `session` contains `id`,
 `providerId`, and optionally `turnId`.
 
-No field carries prompt or response text. Evidence contains `length` and `sha256`
-of the text the developer typed and the agent answered; it is not raw text, but
-hashes and lengths can still reveal information about short or guessable text.
-Tool input/output capture affects internal adapter data; current summaries transmit
-tool names/counts and file paths, not tool bodies. Enabling tool flags does not add
-a tool event stream.
+No field carries response text. Evidence contains `length` and `sha256` of the
+text the developer typed and the agent answered; it is not raw text, but hashes
+and lengths can still reveal information about short or guessable text. The
+prompt evidence hashes the prompt as the agent reported it.
+
+- `prompt_text` (only under `promptText` with consent): the turn's first prompt,
+  with `<system-reminder>` blocks the agent's harness injected removed, secrets
+  scrubbed over the whole text, then cut at 4,000 characters.
+- `tool_inputs` (only under `toolInput` with consent): per shell or connector (MCP)
+  call, `{tool, command}` or `{tool, server, name, arguments}` with the arguments as
+  JSON text; sensitive argument keys are redacted before that, every string is cut
+  at 2,000 characters after scrubbing, and at most 50 calls are sent per turn.
+  Tool output bodies are not sent on the summary; enabling tool flags does not add
+  a tool event stream.
+- `external_files_touched` / `external_files_read` (under `files`): files outside
+  every checkout, home-relative (`~/Documents/a.xlsx`); a path outside the home
+  directory is sent as it is. `files_touched` and `files_read` stay repo-relative.
 
 The public summary type additionally supports backend-derived `llm_calls`,
 `agent_usage`, `reasoning_output_tokens`, `total_tokens`, and `cost_usd`.
@@ -173,7 +191,7 @@ are not hash-only:** current summaries and snapshots send the normalized
 repository identity, or the checkout basename when no remote is available.
 Branches, commit SHAs, ticket keys and file paths are metadata, not anonymous data.
 Paths are made repository-relative where possible; paths outside the repository
-can remain absolute, with the home prefix abbreviated.
+can remain absolute, with the home prefix abbreviated to `~`.
 
 Each turn reports the checkout its work changed, wherever the session started.
 Agents often sit in one folder and work in a worktree beside it through shell

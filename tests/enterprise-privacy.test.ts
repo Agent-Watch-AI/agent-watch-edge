@@ -10,7 +10,8 @@ import { runHook } from '../src/cli/hook.js';
 import { TurnStateStore } from '../src/turns/turn-state.js';
 import { CONTENT_CAPTURE_ON, makeTempEnv, queueEntryFiles, writeJson, type TempWorld } from './helpers.js';
 
-const allCapture = { ...CONTENT_CAPTURE_ON, git: true, files: true };
+// promptText stays false: a legacy `prompts: true` must never turn it on.
+const allCapture = { ...CONTENT_CAPTURE_ON, promptText: false, git: true, files: true };
 /** What an older release wrote when every content flag was on. */
 const legacyCapture = { ...allCapture, prompts: true, responses: true };
 

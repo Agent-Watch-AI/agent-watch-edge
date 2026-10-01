@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Behaviour change: prompt text, tool inputs and out-of-repo files, opt-in
+
+Reverses the prompt half of "developer prompts are never collected" below, on the
+founder's decision of 2026-10-01: sessions with no repository (finance in a
+spreadsheet, marketing in a deck) need the backend to see what they were about.
+
+- New `capture.promptText`, off by default and gated by `contentCaptureConsent`
+  like the tool flags. On, the turn summary carries `prompt_text`: the first prompt,
+  `<system-reminder>` blocks the harness injected removed, secrets scrubbed over the
+  whole text, then cut at 4,000 characters. A new key on purpose: an old config's
+  `capture.prompts: true` still turns nothing on.
+- Under `capture.toolInput`, the turn summary carries `tool_inputs`: per shell or
+  connector (MCP) call, the command, or the server, tool and arguments (JSON text).
+  At most 50 a turn, each string cut at 2,000 characters after scrubbing.
+- Under `capture.files` (on by default), a file outside every checkout is kept as
+  `external_files_touched` / `external_files_read`, home-relative
+  (`~/Documents/Sample Budget.xlsx`). `files_touched` / `files_read` keep their
+  repo-relative meaning.
+- Response text is still never collected.
+- With the flags off the summary is built and sent as before, without the fields.
+
 ### Behaviour change: every turn reports the checkout its work changed
 
 - A turn's `repository`, `branch`, `commit` and `jira_ids` now describe the checkout

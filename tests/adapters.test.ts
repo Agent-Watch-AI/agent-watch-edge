@@ -150,6 +150,13 @@ describe('Codex adapter', () => {
     expect(event!.session.turnId).toBe('turn-42');
   });
 
+  it('parses MCP tool names into server/tool, as the turn summary reads them', () => {
+    const [event] = parseCodexHookEvent({ ...codex.codexPostToolUseShell, tool_name: 'mcp__codex_app__load_workspace_dependencies', tool_input: {} }, context());
+
+    expect(event!.event.type).toBe('mcp.completed');
+    expect(event!.metadata?.['provider']).toMatchObject({ mcpServer: 'codex_app', mcpTool: 'load_workspace_dependencies' });
+  });
+
   it('classifies the shell tool and apply_patch', () => {
     const [pre] = parseCodexHookEvent(codex.codexPreToolUseShell, context());
 

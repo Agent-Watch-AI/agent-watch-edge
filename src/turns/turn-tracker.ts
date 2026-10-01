@@ -17,11 +17,15 @@ import { readCursorTurnUsage } from './cursor-transcript.js';
 import {
   CLAUDE_ENTRYPOINT_VAR,
   DEFAULT_SURFACE,
+  EXTERNAL_PATH_KEY,
   FILE_PATH_KEY,
   IDE_SURFACE,
   IDE_SURFACE_PROVIDERS,
   LOCK_KEY_HASH_LENGTH,
+  MAX_PROMPT_TEXT_LENGTH,
+  MAX_TOOL_INPUT_LENGTH,
   PROMPT_EVIDENCE_KEY,
+  PROMPT_TEXT_KEY,
   RESPONSE_EVIDENCE_KEY,
   TOOL_COMPLETION_TYPES,
   TRANSCRIPT_PATH_KEY,
@@ -32,7 +36,7 @@ import {
 } from './constants/turns.constants.js';
 import { TurnStateStore } from './turn-state.js';
 import { buildTurnSummary } from './turn-summary.js';
-import type { PromptRecord, ResponseRecord, ToolRecord, TurnRecord, TurnStateEntry } from './types/turn-state.types.js';
+import type { PromptRecord, ResponseRecord, ToolInputSummary, ToolRecord, TurnRecord, TurnStateEntry } from './types/turn-state.types.js';
 import type { TranscriptReader, TurnUsage } from './types/transcript.types.js';
 import type { TurnSummaryEvent } from './types/turn-summary.types.js';
 import type { TrackTurnOptions, TurnOutcome, TurnWindow } from './types/turn-tracker.types.js';
@@ -639,11 +643,15 @@ function withResolvedUsage(stopEvent: AgentWatchEvent, usage: TurnUsage | undefi
  * @returns The record.
  */
 function promptRecord(event: AgentWatchEvent, failOpenReason: FailOpenReason | undefined): PromptRecord {
+  const text = event.metadata?.[PROMPT_TEXT_KEY];
+
   return {
     kind: 'prompt',
     at: event.timestamp,
     turnId: event.session.turnId,
     evidence: asEvidence(event.metadata?.[PROMPT_EVIDENCE_KEY]),
+    // Enrichment already scrubbed the whole string; the bound comes after it.
+    text: typeof text === 'string' && text ? text.slice(0, MAX_PROMPT_TEXT_LENGTH) : undefined,
     failOpenReason
   };
 }
@@ -657,6 +665,7 @@ function promptRecord(event: AgentWatchEvent, failOpenReason: FailOpenReason | u
  */
 function toolRecord(event: AgentWatchEvent, cwd: string): ToolRecord {
   const filePath = event.metadata?.[FILE_PATH_KEY];
+  const externalPath = event.metadata?.[EXTERNAL_PATH_KEY];
   const repositoryPath = event.metadata?.[REPOSITORY_PATH_METADATA_KEY];
 
   return {
@@ -668,7 +677,42 @@ function toolRecord(event: AgentWatchEvent, cwd: string): ToolRecord {
     // Anchored here, to the cwd it was resolved against: a lasting `cd` moves
     // the cwd the next hook reports, so the Stop hook's is not this one's.
     repositoryRoot: typeof repositoryPath === 'string' && repositoryPath ? path.join(cwd, repositoryPath) : undefined,
-    access: accessFor(event.event.type)
+    access: accessFor(event.event.type),
+    externalPath: typeof externalPath === 'string' && externalPath ? externalPath : undefined,
+    input: toolInputOf(event)
+  };
+}
+
+/**
+ * The shell command or connector call a tool event carries, bounded.
+ *
+ * Reads only what the adapter already put on the event, and the adapter puts
+ * it there only under `capture.toolInput`; enrichment has scrubbed it, with its
+ * sensitive keys, before it is turned into text here.
+ *
+ * @param event - The tool event.
+ * @returns The input, or undefined when the call is neither or carried none.
+ */
+function toolInputOf(event: AgentWatchEvent): ToolInputSummary | undefined {
+  const tool = event.tool?.name;
+  const command = event.metadata?.['command'];
+  const provider = asRecord(event.metadata?.['provider']);
+  const server = provider?.['mcpServer'];
+  const args = event.metadata?.['toolInput'];
+
+  if (!tool) return undefined;
+
+  if (typeof command === 'string' && command) return { tool, command: command.slice(0, MAX_TOOL_INPUT_LENGTH) };
+
+  if (typeof server !== 'string' || args === undefined) return undefined;
+
+  const name = provider?.['mcpTool'];
+
+  return {
+    tool,
+    server: server.slice(0, MAX_TOOL_INPUT_LENGTH),
+    name: typeof name === 'string' ? name : undefined,
+    arguments: JSON.stringify(args).slice(0, MAX_TOOL_INPUT_LENGTH)
   };
 }
 

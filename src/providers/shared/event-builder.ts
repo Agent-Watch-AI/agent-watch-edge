@@ -3,6 +3,7 @@ import type { UnknownRecord } from '../../core/types/core.types.js';
 import { EVENT_SCHEMA_VERSION } from '../../events/constants/events.constants.js';
 import { deriveEventId } from '../../events/event-id.js';
 import type { AgentWatchEvent, EventPatch } from '../../events/types/events.types.js';
+import { RE_HARNESS_BLOCK } from './constants/tooling.constants.js';
 import { contentEvidence, extractCommand, extractFilePath } from './tooling.js';
 import type { BaseEventInput, CapturePolicy, ToolCallInput } from './types/adapter.types.js';
 
@@ -104,16 +105,24 @@ export function providerPatch(fields: UnknownRecord): EventPatch {
 }
 
 /**
- * Patch for a submitted prompt: its length and SHA-256, never the text.
+ * Patch for a submitted prompt: its length and SHA-256, and its text only when
+ * the effective config opted in to `promptText`.
  *
- * Takes no capture policy because there is nothing to decide: developer prompt
- * text is never collected, so the text stops here, before turn state or the queue.
+ * The evidence hashes the prompt as the agent reported it, harness blocks and
+ * all, so its meaning does not change with the flag. The text drops the blocks
+ * the harness injected: they are not what the person asked for. It is neither
+ * bounded nor scrubbed here — enrichment scrubs the whole string and the turn
+ * record bounds it, in that order, so a secret straddling the bound is never
+ * cut short of its pattern.
  *
  * @param prompt - The prompt text as the agent reported it.
+ * @param capture - What the effective config allows.
  * @returns The patch.
  */
-export function promptPatch(prompt: string): EventPatch {
-  return { metadata: { prompt: contentEvidence(prompt) } };
+export function promptPatch(prompt: string, capture: CapturePolicy): EventPatch {
+  const text = capture.promptText ? prompt.replace(RE_HARNESS_BLOCK, '').trim() : '';
+
+  return { metadata: compact({ prompt: contentEvidence(prompt), promptText: text || undefined }) };
 }
 
 /**

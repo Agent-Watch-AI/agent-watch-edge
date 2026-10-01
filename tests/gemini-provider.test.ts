@@ -29,7 +29,7 @@ describe('Gemini provider', () => {
     config.endpoint = 'https://backend.example.com';
     config.installationId = 'inst-1';
     config.contentCaptureConsent = true;
-    config.capture = { ...CONTENT_CAPTURE_ON, git: true, files: true };
+    config.capture = { ...CONTENT_CAPTURE_ON, promptText: false, git: true, files: true };
 
     return {
       env: world.env,

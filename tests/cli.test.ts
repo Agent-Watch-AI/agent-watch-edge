@@ -157,7 +157,7 @@ describe('CLI commands', () => {
       expect(config.installationId).toBeTruthy();
       // Setup never turns tool content capture on, and there is no prompt or
       // response flag to turn on at all.
-      expect(config.capture).toEqual({ toolInput: false, toolOutput: false, git: true, files: true });
+      expect(config.capture).toEqual({ promptText: false, toolInput: false, toolOutput: false, git: true, files: true });
 
       const claudeSettings = await readJson(path.join(world.home, '.claude', 'settings.json'));
 

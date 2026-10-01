@@ -32,3 +32,12 @@ export const COMMAND_KEYS = ['CommandLine', 'command'] as const;
 
 /** Where Codex and Gemini put the command in a shell call's `tool_input`. */
 export const SHELL_COMMAND_KEY = 'command';
+
+/**
+ * A block the agent's harness injected into the prompt, not something the
+ * developer typed. Claude Desktop prepends a `<system-reminder>` of ~2,000
+ * characters to a session's first prompt; sent as prompt text it would bury the
+ * person's words under the harness's. An unclosed block runs to the end, so a
+ * truncated one is dropped too. Linear: each match consumes up to its close.
+ */
+export const RE_HARNESS_BLOCK = /<system-reminder>[\s\S]*?(?:<\/system-reminder>|$)/g;

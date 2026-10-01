@@ -6,13 +6,16 @@ import { defaultConfig } from '../src/config/config.js';
 import { loadConfig } from '../src/config/config-store.js';
 import { resolvePaths } from '../src/storage/paths.js';
 import { HttpTransport } from '../src/transport/http-transport.js';
+import { MAX_PROMPT_TEXT_LENGTH, MAX_TOOL_INPUT_LENGTH } from '../src/turns/constants/turns.constants.js';
 import { ANTIGRAVITY_COMMON, antigravityPreInvocation, antigravityStop } from './fixtures/antigravity.js';
 import { CONTENT_CAPTURE_ON, makeTempEnv, readQueueEntries, writeJson, type TempWorld } from './helpers.js';
 
-// Developer prompts are never collected. This is the one test that fails if prompt
-// or response text can reach disk or the outbound payload by any hook path,
-// whatever the config says — so the config below turns on everything an older
-// release honoured.
+// Prompt text leaves the machine only under `capture.promptText` with consent;
+// response text never does. The first block fails if either can reach disk or
+// the outbound payload by any hook path without that flag — so its config turns
+// on everything an older release honoured, `prompts: true` included. The second
+// turns `promptText` and `toolInput` on and proves the trust boundary: harness
+// blocks dropped, secrets scrubbed, text bounded, the home directory unnamed.
 
 const PROMPT = 'PROMPT-CANARY-7f3a rotate the prod key';
 const RESPONSE = 'RESPONSE-CANARY-9c1e rotated it';
@@ -61,7 +64,7 @@ async function everythingOnDisk(dir: string): Promise<string> {
   return contents.join('\n');
 }
 
-describe('developer prompts are never collected', () => {
+describe('prompt text is not collected without promptText', () => {
   let world: TempWorld;
 
   beforeEach(async () => { world = await makeTempEnv(); });
@@ -103,5 +106,89 @@ describe('developer prompts are never collected', () => {
     expect(body).toContain('turn.summary');
     expect(body).not.toContain('PROMPT-CANARY');
     expect(body).not.toContain('RESPONSE-CANARY');
+  });
+});
+
+describe('prompt text and tool inputs under their opt-in flags', () => {
+  let world: TempWorld;
+
+  beforeEach(async () => { world = await makeTempEnv(); });
+  afterEach(async () => {
+    await world.cleanup();
+    vi.restoreAllMocks();
+  });
+
+  const SECRET = 'sk-ant-api03-SECRETSECRETSECRET1234';
+  const REMINDER = '<system-reminder>HARNESS-CANARY context the person never typed</system-reminder>';
+  const TYPED = `update the Q3 budget in https://docs.google.com/spreadsheets/d/1AbC/edit key ${SECRET} `;
+
+  /** One Claude turn with no repository: a prompt, a shell call, a connector call, a file in ~/Documents. */
+  async function claudeTurn(config: Record<string, unknown>): Promise<{ summary: Record<string, unknown>; body: string }> {
+    const paths = resolvePaths(world.env);
+    const cwd = world.home;
+    const base = { session_id: 's-1', prompt_id: 'p1', cwd };
+    const budget = path.join(world.home, 'Documents', 'Sample Budget.xlsx');
+    const payloads = [
+      { ...base, hook_event_name: 'UserPromptSubmit', prompt: REMINDER + TYPED + 'x'.repeat(10_000) },
+      { ...base, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'u1', tool_input: { command: `curl https://sheets.googleapis.com/v4/spreadsheets/1AbC ${'y'.repeat(5000)}` }, tool_response: {} },
+      { ...base, hook_event_name: 'PostToolUse', tool_name: 'mcp__gdrive__sheets_update', tool_use_id: 'u2', tool_input: { spreadsheetId: '1AbC', token: 'hunter2hunter2' }, tool_response: {} },
+      { ...base, hook_event_name: 'PostToolUse', tool_name: 'Write', tool_use_id: 'u3', tool_input: { file_path: budget, content: 'cells' }, tool_response: {} },
+      { ...base, hook_event_name: 'Stop', last_assistant_message: RESPONSE }
+    ];
+
+    await writeJson(paths.configFile, { ...defaultConfig(), developerEmail: 'dev@company.com', ...config });
+
+    for (const payload of payloads) {
+      expect(await runHook('claude', { env: world.env, input: JSON.stringify(payload), writeStdout: () => {} })).toBe(0);
+    }
+
+    expect(await everythingOnDisk(paths.dataDir)).not.toContain('RESPONSE-CANARY');
+
+    const events = (await readQueueEntries<{ event: Record<string, unknown> }>(paths.queueDir)).map((entry) => entry.event);
+    const summary = events.find((event) => (event['event'] as { type?: string }).type === 'turn.summary')!;
+    const fetchFn = vi.fn().mockResolvedValue({ ok: true, status: 202, json: async () => ({}) });
+    const transport = new HttpTransport({ eventsUrl: 'https://example.com/v1/events', timeoutMs: 1000, fetchFn, capture: (await loadConfig(paths)).config.capture });
+
+    await transport.send(events as never);
+
+    return { summary, body: String(fetchFn.mock.calls[0]![1].body) };
+  }
+
+  it('sends the typed prompt, the shell and connector inputs and the home-relative file, scrubbed and bounded', async () => {
+    const { summary, body } = await claudeTurn({ contentCaptureConsent: true, capture: { ...defaultConfig().capture, promptText: true, toolInput: true } });
+    const text = summary['prompt_text'] as string;
+    const inputs = summary['tool_inputs'] as Record<string, string>[];
+
+    expect(text.startsWith('update the Q3 budget in https://docs.google.com/spreadsheets/d/1AbC/edit')).toBe(true);
+    expect(text.length).toBe(MAX_PROMPT_TEXT_LENGTH);
+    // The evidence still describes what the agent reported, harness block and all.
+    expect(summary['prompt_evidence']).toMatchObject({ length: REMINDER.length + TYPED.length + 10_000 });
+    expect(inputs).toHaveLength(2);
+    expect(inputs[0]).toMatchObject({ tool: 'Bash' });
+    expect(inputs[0]!['command']!.startsWith('curl https://sheets.googleapis.com/v4/spreadsheets/1AbC')).toBe(true);
+    expect(inputs[0]!['command']!.length).toBe(MAX_TOOL_INPUT_LENGTH);
+    expect(inputs[1]).toMatchObject({ tool: 'mcp__gdrive__sheets_update', server: 'gdrive', name: 'sheets_update' });
+    expect(JSON.parse(inputs[1]!['arguments']!)).toMatchObject({ spreadsheetId: '1AbC', token: '[REDACTED]' });
+    expect(summary['external_files_touched']).toEqual(['~/Documents/Sample Budget.xlsx']);
+    // The repo-relative lists keep their meaning: nothing outside a checkout lands there.
+    expect(summary['files_touched']).toEqual(['Sample Budget.xlsx']);
+
+    for (const leak of ['HARNESS-CANARY', SECRET, 'hunter2', 'RESPONSE-CANARY', world.home]) expect(body).not.toContain(leak);
+  });
+
+  it.each([
+    ['without consent', { contentCaptureConsent: false, capture: { ...defaultConfig().capture, promptText: true, toolInput: true } }],
+    ['with the flags off', { contentCaptureConsent: true, capture: { ...defaultConfig().capture, files: false } }]
+  ])('still sends the summary %s, with the content fields absent', async (_name, config) => {
+    const { summary, body } = await claudeTurn(config);
+
+    expect(summary['tool_calls']).toBe(3);
+    expect(summary['prompt_text']).toBeUndefined();
+    expect(summary['tool_inputs']).toBeUndefined();
+    expect(body).toContain('turn.summary');
+
+    for (const leak of ['update the Q3 budget', 'sheets.googleapis.com', 'spreadsheetId']) expect(body).not.toContain(leak);
+
+    if (config.capture.files === false) expect(body).not.toContain('Sample Budget');
   });
 });

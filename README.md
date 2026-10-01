@@ -100,20 +100,18 @@ agentwatch otel-headers                                   # print OTel headers f
 
 One global file: `~/.agentwatch/config.json`, written by `agentwatch setup`.
 
-### Developer prompts are never collected
+### Content capture is opt-in
 
-Prompt and response text never leaves the machine, and no setting changes that. A prompt or
-response is recorded only as a length and a SHA-256, so turn counts and cost attribution work
-without the text.
-
-Tool inputs and tool outputs are off by default. Turning one on takes **two** things — the global
-`contentCaptureConsent` marker *and* the individual flag. The marker alone enables nothing; a flag
-alone collects nothing.
+Prompt text, tool inputs and tool outputs are off by default. Turning one on takes **two** things —
+the global `contentCaptureConsent` marker *and* the individual flag. The marker alone enables
+nothing; a flag alone collects nothing. With all of them off a prompt or response is recorded only
+as a length and a SHA-256, so turn counts and cost attribution work without the text.
 
 ```json
 {
   "contentCaptureConsent": true,
   "capture": {
+    "promptText": false,
     "toolInput": false,
     "toolOutput": false,
     "git": true,
@@ -122,11 +120,22 @@ alone collects nothing.
 }
 ```
 
+* `promptText` sends the turn's first prompt as `prompt_text`: blocks the agent's harness injected
+  (Claude Desktop's `<system-reminder>`) removed, secrets scrubbed over the whole text, then cut at
+  4,000 characters. It is what lets the backend tell what a session with no repository was about.
+* `toolInput` sends, per shell or connector (MCP) call, the command text or the server, tool and
+  arguments, as `tool_inputs`: at most 50 calls a turn, each string cut at 2,000 characters after
+  scrubbing.
+* The agent's response text has no flag: it never leaves the machine.
+
 `git` and `files` are on because they carry metadata, not content: remote, branch, SHA, and the
 *path* of a file the agent touched — which is what feature and project attribution is built from.
+A file outside every checkout (`~/Documents/Sample Budget.xlsx`) goes in its own
+`external_files_touched` / `external_files_read` lists, home-relative: the home directory's name
+is never sent.
 
 **Upgrading from an earlier release?** `capture.prompts` and `capture.responses` no longer exist. A
-config that still sets them collects nothing; the next `agentwatch setup` removes them and says so,
+config that still sets them collects nothing — `prompts: true` does not turn on `promptText`; the next `agentwatch setup` removes them and says so,
 and `agentwatch doctor` names them until it does. Summaries an older release queued with text in
 them are sent without it. The two tool flags without the consent marker read as `false`, are kept as
 written, and `setup` names the ones that are set but inert.
@@ -231,7 +240,7 @@ To try it locally: `BLOCK=1 npm run example` refuses every check.
 
 | Record | How | Contents |
 |---|---|---|
-| `turn.summary` | Edge hooks → `POST <backend>/v1/events` | One completed turn: prompt/response length and hash, tool counts, file paths, Git branch, ticket keys. Never prompt or response text. |
+| `turn.summary` | Edge hooks → `POST <backend>/v1/events` | One completed turn: prompt/response length and hash, tool counts, file paths (repo-relative, and home-relative outside a checkout), Git branch, ticket keys. Prompt text and shell/connector inputs only when opted in. Never response text. |
 | `llm.call` | The agent's own OTLP → `POST <backend>/v1/otlp/v1/logs` | Token usage, cost and latency per model request. The edge does not proxy this. |
 | `repo.snapshot` | Edge hooks, after a closed turn | Changed branch/commit metadata, including commit subjects, when Git capture is on. |
 

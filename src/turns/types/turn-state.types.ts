@@ -2,12 +2,14 @@ import type { FailOpenReason } from '../../enforcement/types/enforcement.types.j
 import type { ContentEvidence } from '../../events/types/events.types.js';
 import type { Fingerprint } from '../../git/types/git.types.js';
 
-/** A prompt the developer submitted: when, and its length and SHA-256 — never its text. */
+/** A prompt the developer submitted: when, its length and SHA-256, and its text when `promptText` is on. */
 export interface PromptRecord {
   readonly kind: 'prompt';
   readonly at: string;
   readonly turnId?: string;
   readonly evidence?: ContentEvidence;
+  /** Scrubbed and bounded; present only when `capture.promptText` was on at the prompt hook. */
+  readonly text?: string;
   /**
    * Why this prompt ran without an enforcement decision, when it did.
    *
@@ -41,6 +43,23 @@ export interface ToolRecord {
    * read must not appear in the summary's files_touched (modified) list.
    */
   readonly access?: 'read' | 'edit';
+  /** A file outside every checkout, home-relative; under `capture.files`. */
+  readonly externalPath?: string;
+  /** The shell command or connector call, bounded; under `capture.toolInput`. */
+  readonly input?: ToolInputSummary;
+}
+
+/** What went into one shell or connector (MCP) call, as the turn summary sends it. */
+export interface ToolInputSummary {
+  readonly tool: string;
+  /** Shell command text. */
+  readonly command?: string;
+  /** Connector server: its name, or for Cursor its url or launch command. */
+  readonly server?: string;
+  /** Connector tool name. */
+  readonly name?: string;
+  /** Connector arguments as JSON text, cut at the bound. */
+  readonly arguments?: string;
 }
 
 /** How a turn came to name a checkout. */

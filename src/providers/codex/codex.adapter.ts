@@ -3,7 +3,7 @@ import { sha256Hex } from '../../events/event-id.js';
 import { baseEvent, promptPatch, responsePatch, toolPatch, withPatch } from '../shared/event-builder.js';
 import { asRecord } from '../../core/object.js';
 import { SHELL_COMMAND_KEY } from '../shared/constants/tooling.constants.js';
-import { classifyTool, shellCallOf, toolCompleteType, toolStartType } from '../shared/tooling.js';
+import { classifyTool, parseMcpToolName, shellCallOf, toolCompleteType, toolStartType } from '../shared/tooling.js';
 import type { HookContext, ShellCall } from '../types/provider.types.js';
 import {
   CODEX_DISPLAY_NAME,
@@ -104,17 +104,21 @@ function hookPatch(payload: CodexPayload, providerEventType: string, context: Ho
 
   if (providerEventType === 'SessionEnd') return { metadata: { sessionEndReason: payload.reason } };
 
-  if (providerEventType === 'UserPromptSubmit') return promptPatch(payload.prompt ?? '');
+  if (providerEventType === 'UserPromptSubmit') return promptPatch(payload.prompt ?? '', capture);
 
   if (CODEX_TOOL_EVENTS.has(providerEventType)) {
+    const kind = classifyTool(payload.tool_name);
+    const mcp = kind === 'mcp' && payload.tool_name ? parseMcpToolName(payload.tool_name) : undefined;
+
     return toolPatch(
       {
         name: payload.tool_name,
         status: providerEventType === 'PostToolUse' ? 'completed' : 'started',
-        kind: classifyTool(payload.tool_name),
+        kind,
         toolUseId: payload.tool_use_id,
         input: payload.tool_input,
-        output: payload.tool_response
+        output: payload.tool_response,
+        providerFields: mcp ? { mcpServer: mcp.server, mcpTool: mcp.tool } : undefined
       },
       capture
     );

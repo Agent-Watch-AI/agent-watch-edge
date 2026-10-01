@@ -119,7 +119,7 @@ function hookPatch(payload: GeminiPayload, providerEventType: string, context: H
 
   if (providerEventType === 'SessionEnd') return { metadata: { sessionEndReason: payload.reason } };
 
-  if (GEMINI_PROMPT_EVENTS.has(providerEventType)) return promptPatch(payload.prompt ?? '');
+  if (GEMINI_PROMPT_EVENTS.has(providerEventType)) return promptPatch(payload.prompt ?? '', context.config.capture);
 
   if (GEMINI_TOOL_EVENTS.has(providerEventType)) return geminiToolPatch(payload, providerEventType, context);
 

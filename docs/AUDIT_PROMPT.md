@@ -76,7 +76,10 @@ show the path.
 Explain how content capture is enabled. Can a repository-level config file,
 an environment variable, a command-line flag, or a corrupt or missing global
 config enable it? Can a package upgrade re-enable capture that an older
-config had on? Show the code that decides.
+config had on — in particular, can an older `capture.prompts: true` turn on
+`capture.promptText`? Show the code that decides. With `promptText` and
+`toolInput` on, show where the text is scrubbed and where it is bounded, and in
+which order.
 
 ## 6. The sanitizer
 Describe what the secret sanitizer removes and where it runs. Identify any

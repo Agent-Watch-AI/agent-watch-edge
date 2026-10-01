@@ -1,6 +1,6 @@
 import type { FailOpenReason } from '../../enforcement/types/enforcement.types.js';
 import type { AgentWatchEvent, ContentEvidence, EventGit, FeatureCandidate, UsageBillingMode } from '../../events/types/events.types.js';
-import type { PromptRecord, ToolRecord } from './turn-state.types.js';
+import type { PromptRecord, ToolInputSummary, ToolRecord } from './turn-state.types.js';
 import type { TurnUsage } from './transcript.types.js';
 
 /**
@@ -42,8 +42,8 @@ export type WorkEvidence = 'changed' | 'carried' | 'referenced' | 'cwd';
  * (developer), where (repo/branch/commit/ticket), what (prompt and response
  * evidence, tools, files) and how much it cost.
  *
- * There is deliberately no prompt or response text field: developer prompts are
- * never collected.
+ * Prompt text and tool inputs ride along only under their opt-in content flags;
+ * there is no response text field: the agent's replies are never collected.
  *
  * The only product record the hook path emits; the backend finalizes its usage
  * from the atomic llm.call rows.
@@ -68,7 +68,15 @@ export interface TurnSummaryEvent extends AgentWatchEvent<'turn.summary'> {
   readonly files_touched?: readonly string[];
   /** Files the agent's tools only read during this turn (repo-relative). */
   readonly files_read?: readonly string[];
+  /** Files outside every checkout the turn's tools edited, home-relative (`~/Documents/a.xlsx`). */
+  readonly external_files_touched?: readonly string[];
+  /** Files outside every checkout the turn's tools only read, home-relative. */
+  readonly external_files_read?: readonly string[];
   readonly prompt_evidence?: ContentEvidence;
+  /** The turn's first prompt, harness blocks removed, scrubbed, bounded; under `capture.promptText`. */
+  readonly prompt_text?: string;
+  /** The turn's shell commands and connector calls, bounded; under `capture.toolInput`. */
+  readonly tool_inputs?: readonly ToolInputSummary[];
   readonly response_evidence?: ContentEvidence;
   readonly tool_calls: number;
   readonly tools_used: Readonly<Record<string, number>>;
@@ -121,9 +129,12 @@ export interface BuildTurnSummaryInput {
   readonly endedAt: string;
 }
 
-/** Files the turn's tools read versus modified. */
+/** Files the turn's tools read versus modified, inside and outside a checkout. */
 export interface TouchedFiles {
   readonly toolsUsed: Readonly<Record<string, number>>;
   readonly filesTouched: readonly string[];
   readonly filesRead: readonly string[];
+  readonly externalTouched: readonly string[];
+  readonly externalRead: readonly string[];
+  readonly toolInputs: readonly ToolInputSummary[];
 }

@@ -24,36 +24,39 @@ import {
  * (STYLEGUIDE 3.1).
  */
 const CONTENT_OFF: Readonly<Record<(typeof CONTENT_CAPTURE_KEYS)[number], false>> = {
+  promptText: false,
   toolInput: false,
   toolOutput: false
 };
 
 /**
- * Developer prompts are never collected; tool content is opt-IN; metadata stays on.
+ * Content is opt-IN; metadata stays on.
  *
- * There is no prompt or response flag, and that is the point: what the developer
- * typed and what the agent answered never leave the machine, under any
- * configuration. An older config's `prompts` / `responses` keys are stripped
- * here, and the next `setup` removes them from the file.
+ * `promptText` carries what the developer typed, bounded and scrubbed, so the
+ * backend can tell what a session with no repository was about. `toolInput` and
+ * `toolOutput` carry what went into and came out of a tool. All three are
+ * material an IT review will not wave through, so nothing ships them unless
+ * someone deliberately turned them on. The agent's response text has no flag:
+ * it never leaves the machine. An older config's `prompts` / `responses` keys
+ * are stripped here, and the next `setup` removes them from the file.
  *
- * `toolInput` and `toolOutput` carry what went into and came out of a tool —
- * material an IT review will not wave through, so nothing ships it unless
- * someone deliberately turned it on. `git` and `files` are a different kind of
- * thing: they gate the repo/branch/SHA and the per-file *path*, which is
- * metadata about where work happened, not the work itself — and it is what
- * feature and project attribution is made of, so it stays on by default.
+ * `git` and `files` are a different kind of thing: they gate the
+ * repo/branch/SHA and the per-file *path*, which is metadata about where work
+ * happened, not the work itself — and it is what feature and project
+ * attribution is made of, so it stays on by default.
  *
- * Independent of all four: `contentEvidence()` still records a length and a
- * SHA-256 of prompts and responses (never the text), and the sanitizer scrubs
- * secrets from whatever does get sent.
+ * Independent of all of them: `contentEvidence()` still records a length and a
+ * SHA-256 of prompts and responses, and the sanitizer scrubs secrets from
+ * whatever does get sent.
  *
- * The two tool flags are gated a second time by the global
- * `contentCaptureConsent` marker below: a config carrying `toolInput: true`
+ * The three content flags are gated a second time by the global
+ * `contentCaptureConsent` marker below: a config carrying `promptText: true`
  * without it collects nothing, which is what keeps an upgrade of an older
- * install from silently continuing to ship content.
+ * install from silently starting to ship content.
  */
 export const captureSchema = z
   .object({
+    promptText: z.boolean().default(false),
     toolInput: z.boolean().default(false),
     toolOutput: z.boolean().default(false),
     git: z.boolean().default(true),

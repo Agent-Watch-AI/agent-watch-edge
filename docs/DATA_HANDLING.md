@@ -130,7 +130,8 @@ prompt evidence hashes the prompt as the agent reported it.
 - `external_files_touched` / `external_files_read` (under `files`, and only while
   `git` is on, since that is what tells inside a checkout from outside): files outside
   every checkout, home-relative (`~/Documents/a.xlsx`); a path outside the home
-  directory is sent as it is. `files_touched` and `files_read` stay repo-relative.
+  directory is sent as it is. `files_touched` and `files_read` are unchanged:
+  repo-relative, or a bare basename for a file in no checkout, as before.
 
 Between the prompt hook and the turn's close, the scrubbed prompt text and tool
 inputs sit in local turn state (mode 0600), and only while their flag is on; the

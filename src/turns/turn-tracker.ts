@@ -702,16 +702,16 @@ function toolInputOf(event: AgentWatchEvent): ToolInputSummary | undefined {
 
   if (!tool) return undefined;
 
-  if (typeof command === 'string' && command) return { tool, command: command.slice(0, MAX_TOOL_INPUT_LENGTH) };
+  if (typeof command === 'string' && command) return { tool: tool.slice(0, MAX_TOOL_INPUT_LENGTH), command: command.slice(0, MAX_TOOL_INPUT_LENGTH) };
 
   if (typeof server !== 'string' || args === undefined) return undefined;
 
   const name = provider?.['mcpTool'];
 
   return {
-    tool,
+    tool: tool.slice(0, MAX_TOOL_INPUT_LENGTH),
     server: server.slice(0, MAX_TOOL_INPUT_LENGTH),
-    name: typeof name === 'string' ? name : undefined,
+    name: typeof name === 'string' ? name.slice(0, MAX_TOOL_INPUT_LENGTH) : undefined,
     arguments: JSON.stringify(args).slice(0, MAX_TOOL_INPUT_LENGTH)
   };
 }

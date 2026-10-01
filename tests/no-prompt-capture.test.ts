@@ -120,7 +120,7 @@ describe('prompt text and tool inputs under their opt-in flags', () => {
 
   const SECRET = 'sk-ant-api03-SECRETSECRETSECRET1234';
   const REMINDER = '<system-reminder>HARNESS-CANARY context the person never typed</system-reminder>';
-  const TYPED = `update the Q3 budget in https://docs.google.com/spreadsheets/d/1AbC/edit key ${SECRET} `;
+  const TYPED = `update the Q3 budget, pasted <system-reminder> stays, in https://docs.google.com/spreadsheets/d/1AbC/edit key ${SECRET} `;
 
   /** One Claude turn with no repository: a prompt, a shell call, a connector call, a file in ~/Documents. */
   async function claudeTurn(config: Record<string, unknown>): Promise<{ summary: Record<string, unknown>; body: string }> {
@@ -159,7 +159,7 @@ describe('prompt text and tool inputs under their opt-in flags', () => {
     const text = summary['prompt_text'] as string;
     const inputs = summary['tool_inputs'] as Record<string, string>[];
 
-    expect(text.startsWith('update the Q3 budget in https://docs.google.com/spreadsheets/d/1AbC/edit')).toBe(true);
+    expect(text.startsWith('update the Q3 budget, pasted <system-reminder> stays, in https://docs.google.com/spreadsheets/d/1AbC/edit')).toBe(true);
     expect(text.length).toBe(MAX_PROMPT_TEXT_LENGTH);
     // The evidence still describes what the agent reported, harness block and all.
     expect(summary['prompt_evidence']).toMatchObject({ length: REMINDER.length + TYPED.length + 10_000 });
@@ -170,7 +170,7 @@ describe('prompt text and tool inputs under their opt-in flags', () => {
     expect(inputs[1]).toMatchObject({ tool: 'mcp__gdrive__sheets_update', server: 'gdrive', name: 'sheets_update' });
     expect(JSON.parse(inputs[1]!['arguments']!)).toMatchObject({ spreadsheetId: '1AbC', token: '[REDACTED]' });
     expect(summary['external_files_touched']).toEqual(['~/Documents/Sample Budget.xlsx']);
-    // The repo-relative lists keep their meaning: nothing outside a checkout lands there.
+    // The bare basename a file in no checkout always had stays where it was.
     expect(summary['files_touched']).toEqual(['Sample Budget.xlsx']);
 
     for (const leak of ['HARNESS-CANARY', SECRET, 'hunter2', 'RESPONSE-CANARY', world.home]) expect(body).not.toContain(leak);

@@ -118,6 +118,8 @@ function collectToolUsage(tools: readonly ToolRecord[]): TouchedFiles {
     // files_touched (the historical behavior) rather than being dropped.
     const read = tool.access === 'read';
 
+    // A file outside every checkout keeps its bare basename in files_touched, as
+    // it always has, and adds its home-relative path to the external list.
     if (tool.externalPath) addCapped(read ? externalRead : externalTouched, tool.externalPath);
 
     if (tool.filePath) addCapped(read ? filesRead : filesTouched, tool.filePath);

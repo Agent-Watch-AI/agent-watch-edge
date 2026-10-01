@@ -18,10 +18,11 @@ spreadsheet, marketing in a deck) need the backend to see what they were about.
   At most 50 a turn, each string cut at 2,000 characters after scrubbing.
 - Under `capture.files` and `capture.git` (both on by default), a file outside every checkout is kept as
   `external_files_touched` / `external_files_read`, home-relative
-  (`~/Documents/Sample Budget.xlsx`). `files_touched` / `files_read` keep their
-  repo-relative meaning.
+  (`~/Documents/Sample Budget.xlsx`). `files_touched` / `files_read` are unchanged
+  (repo-relative, or a bare basename outside any checkout, as before).
 - Response text is still never collected.
-- With the flags off the summary is built and sent as before, without the fields.
+- With `promptText` and `toolInput` off the summary is built and sent as before, without
+  those fields. External file paths are on by default with `files` and `git`.
 
 ### Behaviour change: every turn reports the checkout its work changed
 

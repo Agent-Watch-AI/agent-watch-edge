@@ -37,7 +37,10 @@ export const SHELL_COMMAND_KEY = 'command';
  * A block the agent's harness injected into the prompt, not something the
  * developer typed. Claude Desktop prepends a `<system-reminder>` of ~2,000
  * characters to a session's first prompt; sent as prompt text it would bury the
- * person's words under the harness's. An unclosed block runs to the end, so a
- * truncated one is dropped too. Linear: each match consumes up to its close.
+ * person's words under the harness's. Only a closed block is a harness block:
+ * the text is stripped before any bound, so the harness's own are always whole,
+ * and an unclosed tag the person pasted keeps everything after it.
+ * ponytail: each unclosed tag scans to the end, quadratic only in a prompt
+ * stuffed with them; the agent bounds the prompt before the hook sees it.
  */
-export const RE_HARNESS_BLOCK = /<system-reminder>[\s\S]*?(?:<\/system-reminder>|$)/g;
+export const RE_HARNESS_BLOCK = /<system-reminder>[\s\S]*?<\/system-reminder>/g;

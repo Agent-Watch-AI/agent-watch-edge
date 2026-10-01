@@ -131,7 +131,7 @@ as a length and a SHA-256, so turn counts and cost attribution work without the 
 `git` and `files` are on because they carry metadata, not content: remote, branch, SHA, and the
 *path* of a file the agent touched — which is what feature and project attribution is built from.
 A file outside every checkout (`~/Documents/Sample Budget.xlsx`) goes in its own
-`external_files_touched` / `external_files_read` lists, home-relative: the home directory's name
+`external_files_touched` / `external_files_read` lists (while `git` is also on), home-relative: the home directory's name
 is never sent.
 
 **Upgrading from an earlier release?** `capture.prompts` and `capture.responses` no longer exist. A

@@ -16,7 +16,7 @@ spreadsheet, marketing in a deck) need the backend to see what they were about.
 - Under `capture.toolInput`, the turn summary carries `tool_inputs`: per shell or
   connector (MCP) call, the command, or the server, tool and arguments (JSON text).
   At most 50 a turn, each string cut at 2,000 characters after scrubbing.
-- Under `capture.files` (on by default), a file outside every checkout is kept as
+- Under `capture.files` and `capture.git` (both on by default), a file outside every checkout is kept as
   `external_files_touched` / `external_files_read`, home-relative
   (`~/Documents/Sample Budget.xlsx`). `files_touched` / `files_read` keep their
   repo-relative meaning.

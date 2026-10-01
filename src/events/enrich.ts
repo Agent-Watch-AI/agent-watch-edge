@@ -191,7 +191,11 @@ function pathFields(filePath: string, context: EnrichContext): Record<string, st
   const checkout = context.repositories.get(filePath);
 
   if (!checkout) {
-    const external = externalPath(filePath, context.git.repositoryRoot, context.options.home);
+    // With git capture off no checkout was resolved, so in-repo files land here
+    // too and would ship the repository's layout. ponytail: such a machine sends
+    // no external paths at all; telling them apart would cost the git lookups the
+    // flag turned off.
+    const external = context.options.config.capture.git ? externalPath(filePath, context.git.repositoryRoot, context.options.home) : undefined;
     const fields = { [FILE_PATH_METADATA_KEY]: toSafePath(filePath, context.git.repositoryRoot) };
 
     return external ? { ...fields, [EXTERNAL_PATH_METADATA_KEY]: external } : fields;

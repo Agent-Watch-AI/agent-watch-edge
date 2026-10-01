@@ -127,7 +127,8 @@ prompt evidence hashes the prompt as the agent reported it.
   at 2,000 characters after scrubbing, and at most 50 calls are sent per turn.
   Tool output bodies are not sent on the summary; enabling tool flags does not add
   a tool event stream.
-- `external_files_touched` / `external_files_read` (under `files`): files outside
+- `external_files_touched` / `external_files_read` (under `files`, and only while
+  `git` is on, since that is what tells inside a checkout from outside): files outside
   every checkout, home-relative (`~/Documents/a.xlsx`); a path outside the home
   directory is sent as it is. `files_touched` and `files_read` stay repo-relative.
 

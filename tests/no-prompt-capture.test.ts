@@ -191,4 +191,11 @@ describe('prompt text and tool inputs under their opt-in flags', () => {
 
     if (config.capture.files === false) expect(body).not.toContain('Sample Budget');
   });
+
+  it('sends no external path with git capture off: no checkout was resolved, so in-repo files would pass for external ones', async () => {
+    const { summary } = await claudeTurn({ capture: { ...defaultConfig().capture, git: false } });
+
+    expect(summary['tool_calls']).toBe(3);
+    expect(summary['external_files_touched']).toBeUndefined();
+  });
 });
